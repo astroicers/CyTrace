@@ -47,11 +47,11 @@
 
 | 等級 | token | 亮色 | 暗色 | 對比要求 |
 |------|-------|------|------|---------|
-| 嚴峻 Critical | `--sev-critical` | 深紅 | 亮紅 | AA |
+| 極高 Critical | `--sev-critical` | 深紅 | 亮紅 | AA |
 | 高 High | `--sev-high` | 橙 | 亮橙 | AA |
 | 中 Medium | `--sev-medium` | 琥珀 | 亮黃 | AA |
 | 低 Low | `--sev-low` | 藍 | 亮藍 | AA |
-| 輕微 Negligible | `--sev-negligible` | 灰 | 亮灰 | AA |
+| 極低 Negligible | `--sev-negligible` | 灰 | 亮灰 | AA |
 | 未知 Unknown | `--sev-unknown` | 中性 | 中性 | AA |
 
 > 色彩**不可作為唯一資訊載體**：每個嚴重度同時以文字標籤 + 圖示呈現（色盲友善）。

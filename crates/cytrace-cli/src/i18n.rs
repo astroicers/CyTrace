@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn nested_key_lookup_works() {
         let c = Catalog::load("zh-TW");
-        assert_eq!(c.t("severity.critical", &[]), "嚴峻");
+        assert_eq!(c.t("severity.critical", &[]), "極高");
         assert_eq!(c.t("report.notes.title", &[]), "附註");
     }
 

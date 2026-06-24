@@ -1,10 +1,10 @@
 {
   "severity": {
-    "critical": "嚴峻",
+    "critical": "極高",
     "high": "高",
     "medium": "中",
     "low": "低",
-    "negligible": "輕微",
+    "negligible": "極低",
     "unknown": "未知"
   },
   "cli": {
