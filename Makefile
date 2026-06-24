@@ -7,7 +7,7 @@
 
 -include $(HOME)/.claude/asp/Makefile.inc
 
-.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check
+.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check package
 
 info:
 	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace + 報表前端）"
@@ -43,7 +43,8 @@ clippy:
 # ASP standard 閘的 lint＝格式 + clippy（NFR：穩定、零 warning）。
 # 需有 recipe 才能覆寫 Makefile.inc 的通用 lint（否則只是追加前置相依）。
 lint: fmt-check clippy
-	@echo "✓ lint passed（fmt + clippy，零 warning）"
+	python3 scripts/i18n-check.py
+	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:
@@ -56,3 +57,7 @@ coverage:
 
 clean-rs:
 	cargo clean
+
+# ── M4 離線安裝包（ADR-007 / DELIVERY_SOP）──
+package:
+	bash scripts/package.sh
