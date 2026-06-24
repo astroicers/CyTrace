@@ -461,7 +461,7 @@ milestones:
   - id: M7
     title: "雙平台發布（Windows + Linux GitHub Release）"
     target_date: 2026-09-30
-    status: in_progress
+    status: completed
     tasks:
       - id: T701
         title: "GitHub Release CI：matrix build Windows(.exe)+Linux + SHA256SUMS"
@@ -489,7 +489,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T701, T402]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""

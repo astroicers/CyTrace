@@ -52,3 +52,20 @@ jobs:
           else
             echo "✓ 報表零外部資源"
           fi
+
+  windows-package:
+    name: Windows 安裝包冒煙（package.ps1 -SkipDb）
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 組裝安裝包（跳過 1.7G DB）
+        shell: pwsh
+        run: pwsh scripts/package.ps1 -SkipDb
+      - name: 驗證產物結構 + cytrace.exe 可跑
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json")
+          foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
+          & (Join-Path $b.FullName "bin\cytrace.exe") --version
+          Write-Host "OK package: $($b.Name)"
