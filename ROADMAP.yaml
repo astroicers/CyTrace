@@ -92,7 +92,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -111,7 +111,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T001]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -129,7 +129,7 @@ milestones:
         spec: null
         srs_ref: FR-007
         depends_on: [T001]
-        status: pending
+        status: in_progress
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -172,7 +172,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T001]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: ""
@@ -190,7 +190,7 @@ milestones:
         spec: null
         srs_ref: FR-001
         depends_on: [T101]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -208,7 +208,7 @@ milestones:
         spec: null
         srs_ref: FR-002
         depends_on: [T101]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -232,7 +232,7 @@ milestones:
         spec: null
         srs_ref: FR-003
         depends_on: [T102, T103]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -250,7 +250,7 @@ milestones:
         spec: null
         srs_ref: FR-004
         depends_on: [T201]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: ""
@@ -268,7 +268,7 @@ milestones:
         spec: null
         srs_ref: FR-005
         depends_on: [T202]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: ""
