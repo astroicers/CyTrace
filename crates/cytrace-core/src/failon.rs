@@ -5,7 +5,7 @@ use cytrace_types::{Severity, Vulnerability};
 /// 當任一弱點的嚴重度 **≥ 門檻** 時觸發（CI 據此以退出碼 2 結束）。
 ///
 /// 注意 `Severity` 的 `Ord`：`Unknown` 最低，故 `--fail-on unknown` 會對任何弱點觸發，
-/// `--fail-on critical` 只對嚴峻觸發。
+/// `--fail-on critical` 只對極高觸發。
 pub fn triggered(findings: &[Vulnerability], threshold: Severity) -> bool {
     findings.iter().any(|v| v.severity >= threshold)
 }

@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)",
-      "Bash(ASP_SHIP_OK=1 git commit -F /tmp/claude-1000/-home-ubuntu-CyTrace/b954368d-d24a-4055-94de-575db7fca8dd/scratchpad/fixts.txt)"
+      "Bash(*)"
     ],
     "deny": [
       "Bash(gh pr merge *)",
