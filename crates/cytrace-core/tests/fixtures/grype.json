@@ -1,0 +1,24 @@
+{
+  "matches": [
+    {
+      "vulnerability": {
+        "id": "CVE-2024-1111",
+        "severity": "Critical",
+        "dataSource": "https://nvd.nist.gov/vuln/detail/CVE-2024-1111",
+        "fix": { "versions": ["3.0.2"], "state": "fixed" },
+        "cvss": [ { "metrics": { "baseScore": 9.8 } } ]
+      },
+      "artifact": { "name": "libfoo", "version": "3.0.1", "type": "deb" }
+    },
+    {
+      "vulnerability": {
+        "id": "CVE-2024-2222",
+        "severity": "Medium",
+        "dataSource": "ghsa",
+        "cvss": [ { "metrics": { "baseScore": 5.4 } } ]
+      },
+      "artifact": { "name": "barlib", "version": "1.4.0", "type": "deb" }
+    }
+  ],
+  "descriptor": { "name": "grype", "version": "0.114.0" }
+}

@@ -82,7 +82,7 @@ milestones:
   - id: M0
     title: "治理與骨架奠基（Governance & Foundations）"
     target_date: 2026-07-15
-    status: pending
+    status: completed
     tasks:
       - id: T001
         title: "Cargo workspace 骨架 + 4 crate stub（types/core/report/cli）"
@@ -162,7 +162,7 @@ milestones:
   - id: M1
     title: "掃描管線（Scan Pipeline）"
     target_date: 2026-07-29
-    status: pending
+    status: completed
     tasks:
       - id: T101
         title: "cytrace CLI 骨架（clap run/scan/report 子命令）"
@@ -222,7 +222,7 @@ milestones:
   - id: M2
     title: "解析與風險評級（Parse & Severity）"
     target_date: 2026-08-05
-    status: pending
+    status: completed
     tasks:
       - id: T201
         title: "解析器：grype + CycloneDX → 統一資料模型"
@@ -282,7 +282,7 @@ milestones:
   - id: M3
     title: "雙語離線報表（Bilingual Offline Report）"
     target_date: 2026-08-19
-    status: pending
+    status: completed
     tasks:
       - id: T301
         title: "React 報表檢視器（五區塊 + 嚴重度色票 + a11y）"
@@ -344,7 +344,7 @@ milestones:
   - id: M4
     title: "離線封裝交付（Offline Packaging & Delivery）"
     target_date: 2026-09-02
-    status: pending
+    status: in_progress
     tasks:
       - id: T401
         title: "musl 靜態 build + 釘選引擎/DB 快照打包"
@@ -403,7 +403,7 @@ milestones:
   - id: M5
     title: "批次與 CI／穩定硬化（Batch, CI & Hardening）"
     target_date: 2026-09-16
-    status: pending
+    status: completed
     tasks:
       - id: T501
         title: "多目標批次掃描"
@@ -413,7 +413,7 @@ milestones:
         spec: null
         srs_ref: FR-010
         depends_on: [T203]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -430,7 +430,7 @@ milestones:
         spec: null
         srs_ref: FR-010
         depends_on: [T203, T402]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: ""
@@ -447,7 +447,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T303, T402]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""

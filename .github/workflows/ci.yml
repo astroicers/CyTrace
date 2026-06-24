@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'asp/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust（fmt / clippy / test / golden）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain（釘選於 rust-toolchain.toml）
+        run: rustup show
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy（-D warnings）
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: test（含 golden baseline）
+        run: cargo test --workspace
+      - name: i18n 鍵一致（NFR-06）
+        run: python3 scripts/i18n-check.py
+
+  frontend:
+    name: 前端（typecheck + 單檔 build）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: install
+        run: cd frontend && pnpm install --frozen-lockfile
+      - name: typecheck
+        run: cd frontend && pnpm typecheck
+      - name: build（單檔內聯）
+        run: cd frontend && pnpm build
+      - name: 零外連自檢（報表不得有外部 http(s) 資源）
+        run: |
+          if grep -nE 'src="https?://|href="https?://' frontend/dist/index.html; then
+            echo "✗ 報表含外部資源（違反 air-gapped）"; exit 1
+          else
+            echo "✓ 報表零外部資源"
+          fi

@@ -41,6 +41,16 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
+    /// 多目標批次掃描（FR-010）：逐一出報表；任一目標達 --fail-on 即整體退出碼 2。
+    Batch {
+        /// 一或多個掃描目標。
+        targets: Vec<String>,
+        #[arg(long)]
+        fail_on: Option<String>,
+        /// 報表輸出目錄（預設目前目錄）。
+        #[arg(long, short)]
+        out_dir: Option<PathBuf>,
+    },
     /// 只產 sbom.cdx.json 與 grype.json。
     Scan {
         target: String,
@@ -100,50 +110,70 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             target,
             fail_on,
             out,
+        } => run_one(target, fail_on.as_deref(), out.clone(), cat),
+        Command::Batch {
+            targets,
+            fail_on,
+            out_dir,
         } => {
-            println!("{}", cat.t("cli.scanning", &[("target", target)]));
-            let sbom = engine::sbom(target)?;
-            let grype = engine::vuln(&sbom)?;
-            let components = parse::parse_cyclonedx(&sbom)?;
-            let findings = parse::parse_grype(&grype)?;
-            let result = assemble(meta_for(target), components, findings);
-            let html = cytrace_report::render(&result)?;
-            let path = out
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
-            std::fs::write(&path, html)?;
-            let risk = result.summary.overall_risk;
-            println!(
-                "{}",
-                cat.t(
-                    "cli.done",
-                    &[
-                        ("count", &result.findings.len().to_string()),
-                        ("risk", cat.t(risk.i18n_key(), &[]).as_str())
-                    ]
-                )
-            );
-            println!(
-                "{}",
-                cat.t(
-                    "cli.report_written",
-                    &[("path", &path.display().to_string())]
-                )
-            );
-
-            if let Some(threshold) = fail_on {
-                let th = Severity::from_grype_str(threshold);
-                if failon::triggered(&result.findings, th) {
-                    eprintln!(
-                        "{}",
-                        cat.t("cli.fail_on_triggered", &[("threshold", threshold)])
-                    );
-                    return Ok(EXIT_FAILON);
+            let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+            let mut worst = EXIT_OK;
+            for target in targets {
+                let out = Some(dir.join(format!("{}.report.html", sanitize(target))));
+                if run_one(target, fail_on.as_deref(), out, cat)? == EXIT_FAILON {
+                    worst = EXIT_FAILON;
                 }
             }
-            Ok(EXIT_OK)
+            Ok(worst)
         }
     }
+}
+
+/// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。
+fn run_one(
+    target: &str,
+    fail_on: Option<&str>,
+    out: Option<PathBuf>,
+    cat: &Catalog,
+) -> anyhow::Result<u8> {
+    println!("{}", cat.t("cli.scanning", &[("target", target)]));
+    let sbom = engine::sbom(target)?;
+    let grype = engine::vuln(&sbom)?;
+    let components = parse::parse_cyclonedx(&sbom)?;
+    let findings = parse::parse_grype(&grype)?;
+    let result = assemble(meta_for(target), components, findings);
+    let html = cytrace_report::render(&result)?;
+    let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
+    std::fs::write(&path, html)?;
+    let risk = result.summary.overall_risk;
+    println!(
+        "{}",
+        cat.t(
+            "cli.done",
+            &[
+                ("count", &result.findings.len().to_string()),
+                ("risk", cat.t(risk.i18n_key(), &[]).as_str()),
+            ],
+        )
+    );
+    println!(
+        "{}",
+        cat.t(
+            "cli.report_written",
+            &[("path", &path.display().to_string())]
+        )
+    );
+    if let Some(threshold) = fail_on {
+        let th = Severity::from_grype_str(threshold);
+        if failon::triggered(&result.findings, th) {
+            eprintln!(
+                "{}",
+                cat.t("cli.fail_on_triggered", &[("threshold", threshold)])
+            );
+            return Ok(EXIT_FAILON);
+        }
+    }
+    Ok(EXIT_OK)
 }
 
 fn meta_for(target: &str) -> Meta {
@@ -221,5 +251,21 @@ mod tests {
             default_report_path(Path::new("a/b/scan.json")),
             PathBuf::from("scan.report.html")
         );
+    }
+
+    #[test]
+    fn parses_batch_multiple_targets() {
+        let cli =
+            Cli::try_parse_from(["cytrace", "batch", "dir:/a", "dir:/b", "--fail-on", "high"])
+                .unwrap();
+        match cli.command {
+            Command::Batch {
+                targets, fail_on, ..
+            } => {
+                assert_eq!(targets, vec!["dir:/a", "dir:/b"]);
+                assert_eq!(fail_on.as_deref(), Some("high"));
+            }
+            _ => panic!("expected batch"),
+        }
     }
 }
