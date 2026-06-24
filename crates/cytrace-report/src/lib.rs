@@ -1,26 +1,16 @@
 //! 報表產生：把 [`ScanResult`] 依**資料注入契約**（ADR-009）注入內嵌單檔 HTML 樣板。
 //!
-//! M3 會以 `rust-embed` 內嵌真正的 Vite 單檔 React bundle；本階段先用最小內建樣板，
-//! 但**注入契約與跳脫規則已是最終版**（可測），M3 只換樣板、不改契約。
+//! 樣板＝M3 的 Vite 單檔 React bundle（`frontend/dist/index.html` → `assets/`），於編譯期以
+//! `include_str!` 內嵌；產生時把 `<!--CYTRACE_DATA-->` 換成 `<script id="cytrace-data">` 資料 tag。
 
 use cytrace_core::{CytraceError, Result};
 use cytrace_types::ScanResult;
 
-/// 注入點 sentinel（ADR-009）。M3 的 Vite 樣板 head 也放同一個。
+/// 注入點 sentinel（ADR-009）。Vite 樣板 head 內放同一個。
 const DATA_SENTINEL: &str = "<!--CYTRACE_DATA-->";
 
-/// 最小內建樣板（M3 由 rust-embed 內嵌的 React 單檔取代）。
-const MINIMAL_TEMPLATE: &str = r#"<!doctype html>
-<html lang="zh-TW">
-<head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-<title>CyTrace 依賴風險報表</title>
-<!--CYTRACE_DATA-->
-</head>
-<body><main id="app">報表檢視器將於 M3 載入（資料已內嵌於 #cytrace-data）。</main></body>
-</html>
-"#;
+/// 內嵌報表樣板（M3 單檔 build 產物）。以 `make frontend` 重產 frontend/dist/index.html → 複製到 assets/。
+const EMBEDDED_TEMPLATE: &str = include_str!("../assets/report-template.html");
 
 /// 把 JSON 字串轉為可安全置入 HTML `<script>` 區塊的形式（ADR-009 跳脫規則）。
 ///
@@ -32,9 +22,9 @@ fn escape_for_script(json: &str) -> String {
         .replace('\u{2029}', "\\u2029")
 }
 
-/// 依注入契約把 [`ScanResult`] 注入樣板，回傳自包含單檔 HTML 字串。
+/// 依注入契約把 [`ScanResult`] 注入內嵌樣板，回傳自包含單檔 HTML 字串。
 pub fn render(result: &ScanResult) -> Result<String> {
-    render_with_template(result, MINIMAL_TEMPLATE)
+    render_with_template(result, EMBEDDED_TEMPLATE)
 }
 
 /// 同 [`render`]，但可指定樣板（供測試與 M3 內嵌樣板共用）。樣板須含 [`DATA_SENTINEL`]。

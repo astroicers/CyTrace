@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "target": "dir:/srv/app",
+    "tool_versions": { "syft": "1.45.1", "grype": "0.114.0" },
+    "db_snapshot": { "version": "v6.1.7", "built": "2026-06-19" },
+    "generated_at": "2026-06-24T00:00:00Z"
+  },
+  "components": [
+    { "name": "openssl", "version": "1.1.1k", "type": "library", "licenses": ["Apache-2.0"] },
+    { "name": "zlib", "version": "1.2.11", "type": "library", "licenses": ["Zlib"] },
+    { "name": "serde", "version": "1.0.228", "type": "rust-crate", "licenses": ["MIT", "Apache-2.0"] }
+  ],
+  "findings": [
+    { "id": "CVE-2024-0001", "severity": "Critical", "cvss": 9.8, "component": "openssl", "fixed_version": "1.1.1w", "source": "nvd" },
+    { "id": "CVE-2024-0002", "severity": "High", "cvss": 7.5, "component": "openssl", "fixed_version": "1.1.1w", "source": "nvd" },
+    { "id": "CVE-2024-0003", "severity": "Medium", "cvss": 5.3, "component": "zlib", "fixed_version": "1.2.12", "source": "ghsa" },
+    { "id": "CVE-2024-0004", "severity": "Low", "cvss": 3.1, "component": "zlib", "source": "ghsa" }
+  ],
+  "summary": {
+    "counts_by_severity": { "Critical": 1, "High": 1, "Medium": 1, "Low": 1, "Negligible": 0, "Unknown": 0 },
+    "overall_risk": "Critical"
+  }
+}

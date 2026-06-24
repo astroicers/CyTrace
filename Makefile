@@ -7,13 +7,24 @@
 
 -include $(HOME)/.claude/asp/Makefile.inc
 
-.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs
+.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check
 
 info:
-	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace）"
-	@echo "ASP 指令見 'make help'；產品指令：build / test / lint / coverage"
+	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace + 報表前端）"
+	@echo "ASP 指令見 'make help'；產品指令：frontend / build / test / lint / coverage"
 
-# ── 產品（Rust workspace；前端目標於 M3 加入）──
+# ── 前端報表（M3）：build 單檔 → 複製成 cytrace-report 內嵌資產 ──
+# 注意：crates/cytrace-report/assets/report-template.html 為產物但已 commit，
+# 使 cargo build 免前端步驟即可（include_str!）。改前端後跑 make frontend 重產。
+frontend:
+	cd frontend && pnpm install --frozen-lockfile && pnpm build
+	cp frontend/dist/index.html crates/cytrace-report/assets/report-template.html
+	@echo "✓ 報表樣板已更新（assets/report-template.html）"
+
+frontend-check:
+	cd frontend && pnpm typecheck
+
+# ── 產品（Rust workspace）──
 build:
 	cargo build --workspace
 
