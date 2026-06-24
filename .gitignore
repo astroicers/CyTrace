@@ -1,0 +1,33 @@
+# ── ASP 執行時檔案（session 暫存，不 commit）──
+.asp-session-briefing.json
+.asp-audit-baseline.json
+.asp-bypass-log.ndjson
+.asp-telemetry.jsonl
+.asp-fact-check.md
+.asp-review-calibration.jsonl
+.asp-orch-state.json
+.asp-compiled-profile.md
+.asp-autopilot-state.json
+.asp-gate-state.json
+.asp-test-result.json
+
+# ── Rust ──
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# ── Node / 前端（報表檢視器）──
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# ── 離線交付產物（不入庫；由 release 流程產生）──
+/delivery/*.bin
+/delivery/*.sig
+/delivery/*.sha256
+*.report.html
+
+# ── 作業系統 ──
+.DS_Store
+Thumbs.db

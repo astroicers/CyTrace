@@ -1,0 +1,14 @@
+type: system
+level: standard          # v5 三級制：穩定優先；啟用 coding_style + pipeline 閘門 G1–G6
+mode: auto
+workflow: standard
+hitl: standard
+rag: disabled
+autonomous: disabled
+orchestrator: disabled
+design: enabled          # 載入 design_dev（報表檢視器 UI/UX）
+frontend_quality: enabled # ★強制 i18n 不可硬編碼、a11y、設計 token 把關（對應「強制 i18n」要求）
+coding_style: enabled
+openapi: disabled
+autopilot: enabled        # ★讓 /asp-autopilot 能讀 ROADMAP.yaml（ADR 仍 Draft 時實作任務會被 blocked）
+name: CyTrace

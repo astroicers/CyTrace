@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/asp/hooks/clean-allow-list.sh"
+          },
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/asp/hooks/session-audit.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${HOME}/.claude/asp/hooks/pretooluse-ship-gate.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(*)"
+    ],
+    "deny": [
+      "Bash(gh pr merge *)",
+      "Bash(gh pr merge)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push origin main *)",
+      "Bash(git push origin main)",
+      "Bash(git rebase *)",
+      "Bash(git rebase)",
+      "Bash(rm -rf *)",
+      "Bash(rm -r *)",
+      "Bash(docker push *)",
+      "Bash(docker deploy *)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git push)"
+    ]
+  }
+}

@@ -1,0 +1,465 @@
+# ROADMAP.yaml — CyTrace Autopilot 任務清單
+# 使用方式：人類 /asp:approve-adr 升 ADR 為 Accepted → /asp-autopilot 逐任務執行
+# Autopilot 依 stack/requires 自動載入 profile 並動態探測前置文件（SRS/SDS/UIUX_SPEC）。
+# 注意：ADR 仍為 Draft 時，依賴該 ADR 的實作任務會被 autopilot 標記 blocked（鐵則：Draft 禁止實作）。
+
+version: "1.0"
+project: CyTrace
+last_updated: 2026-06-24
+
+# ═══ 專案元資料 ═══
+
+stack:
+  frontend: react          # 報表檢視器（visual-web-stack DOM/UI 子集）
+  backend: rust            # CLI 核心（Cargo workspace）
+  database: none
+  infra: none              # air-gapped 單包交付，無 k8s/serverless
+
+requires:
+  uiux: true               # → 載入 design_dev + frontend_quality，要求 docs/UIUX_SPEC.md
+  api: false
+  multi_agent: false
+  rag: false
+  coding_style: true
+
+conventions:
+  language: zh-TW
+  naming: snake_case
+  error_handling: result_type    # Rust：anyhow + thiserror
+  commit_format: conventional
+  branch_strategy: github-flow
+
+architecture:
+  style: monolith
+  api_style: none
+  auth: none
+  message_queue: none
+  cache: none
+  search: none
+
+integrations: []
+
+quality:
+  test_coverage_target: 80%
+  e2e_required: false
+  performance_budget: false
+  accessibility: WCAG-2.1-AA     # 報表檢視器
+
+security:
+  compliance: []                 # 參考 NTIA SBOM Minimum Elements；軍規 SBOM（SRS §5）
+  auth_requirements:             # n/a：CyTrace 為無使用者帳號的離線 CLI（architecture.auth: none）
+    mfa: false
+    session_timeout: none
+    password_policy: none
+
+observability:
+  logging: structured
+  metrics: none
+  tracing: none
+  alerting: none
+
+documents:
+  srs: docs/SRS.md
+  sds: docs/SDS.md
+  uiux_spec: docs/UIUX_SPEC.md
+
+# ── NFR → 任務 追溯（文件用；autopilot 只讀 srs_ref/FR，此表供稽核對照）──
+nfr_traceability:
+  NFR-01-zero-network: [T303, T301]        # 報表零外連 / CSP
+  NFR-02-stability:    [T002, T503]        # 釘選 + golden baseline（ADR-008）
+  NFR-03-auditable:    [T402]              # SHA256SUMS + 簽章驗章
+  NFR-04-portable:     [T303, T401]        # 單檔報表 / musl 單一 binary
+  NFR-05-clean-supply: [T403]              # NOTICE + 自產 SBOM、禁中國來源
+  NFR-06-i18n:         [T003]              # 遞迴鍵集合一致檢查
+  NFR-07-coverage:     [T202, T203, T503]  # 單元 + 整合 + 回歸（ADR-008）
+  NFR-08-a11y:         [T301]              # WCAG-2.1-AA
+  NFR-09-trust-bound:  [T102, T103]        # 目標/原始碼不離開目標機
+  NFR-10-disclaimer:   [T301, T302]        # 報表非滲透測試免責定位
+
+# ═══ Milestones & Tasks ═══
+
+milestones:
+  - id: M0
+    title: "治理與骨架奠基（Governance & Foundations）"
+    target_date: 2026-07-15
+    status: pending
+    tasks:
+      - id: T001
+        title: "Cargo workspace 骨架 + 4 crate stub（types/core/report/cli）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-001
+        spec: null
+        srs_ref: null
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          建立 Rust Cargo workspace（resolver=2）與四個 crate stub：cytrace-types、
+          cytrace-core、cytrace-report、cytrace-cli（依 SDS §2 切分）。釘選 rust-toolchain.toml。
+          模組邊界鐵律：業務規則只在 core、型別只在 types、CLI 不含業務邏輯。
+      - id: T002
+        title: "離線可重現 build 設定 + Makefile（test/lint/coverage）+ 引擎版本釘選"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-007
+        spec: null
+        srs_ref: null
+        depends_on: [T001]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          設定 x86_64-unknown-linux-musl 靜態 build；釘選 Cargo.lock、Syft/Grype 版本；
+          Makefile 提供 build/test/lint/coverage；確保離線可建、可重現（NFR-02）。
+      - id: T003
+        title: "i18n 骨架：locales zh-TW/en-US + Rust catalog 載入器 + 鍵一致性檢查"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: FR-007
+        depends_on: [T001]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          建立共用 locales/{zh-TW,en-US}.json（命名空間分區）與 Rust 端輕量 catalog 載入器（共用值契約：
+          僅 {{var}} 插值、禁複數/context/nesting，見 ADR-004）。CI 做「遞迴葉鍵集合 diff（巢狀）+ 值特性 lint」，
+          不可只用 ASP 內建 make i18n-check（只比頂層鍵數量，守不住巢狀無缺鍵）。禁止硬編碼使用者可見字串。
+      - id: T004
+        title: "前端 scaffold（visual-web-stack DOM 子集）+ Vite 單檔 build 設定"
+        type: NEW_FEATURE
+        priority: 3
+        adr: ADR-005
+        spec: null
+        srs_ref: FR-007
+        depends_on: [T001, T003]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          React 19 + Vite + Tailwind + Radix + Motion + next-themes + Zustand + react-i18next；
+          設定 Vite 單檔內聯 build（內聯 JS/CSS/字型）。不含 3D/R3F/Lenis/GSAP。字型本地子集化。
+
+  - id: M1
+    title: "掃描管線（Scan Pipeline）"
+    target_date: 2026-07-29
+    status: pending
+    tasks:
+      - id: T101
+        title: "cytrace CLI 骨架（clap run/scan/report 子命令）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-001
+        spec: null
+        srs_ref: null
+        depends_on: [T001]
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          以 clap 建立 run/scan/report 三子命令骨架與全域旗標（--lang、--fail-on）；
+          串接 i18n catalog；定義退出碼語意（0 正常 / 2 fail-on / 其他錯誤）。
+      - id: T102
+        title: "Syft 整合：產 SBOM（CycloneDX 主 / SPDX 備）"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-002
+        spec: null
+        srs_ref: FR-001
+        depends_on: [T101]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          以子程序呼叫釘選版 Syft，對目標（目錄/容器映像/檔案系統）產 sbom.cdx.json（CycloneDX）；
+          提供 SPDX 備用輸出。子程序錯誤以領域錯誤分類處理。
+      - id: T103
+        title: "Grype 整合（離線 DB 快照）：產 grype.json"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-003
+        spec: null
+        srs_ref: FR-002
+        depends_on: [T101]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          以子程序呼叫釘選版 Grype，GRYPE_DB_AUTO_UPDATE=false、指向本地 DB 快照路徑，
+          對 SBOM 比對 CVE 產 grype.json。斷網環境須能完整比對。
+
+  - id: M2
+    title: "解析與風險評級（Parse & Severity）"
+    target_date: 2026-08-05
+    status: pending
+    tasks:
+      - id: T201
+        title: "解析器：grype + CycloneDX → 統一資料模型"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-001
+        spec: null
+        srs_ref: FR-003
+        depends_on: [T102, T103]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          以 serde 解析 grype.json 與 CycloneDX 元件清單，彙整為 SDS §4 的 ScanResult 統一模型
+          （components → 軟體產品文件表；findings → 弱點）。
+      - id: T202
+        title: "嚴重度雙語分級 + 風險總評"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-006
+        spec: null
+        srs_ref: FR-004
+        depends_on: [T201]
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          將 Grype 嚴重度對映為六級（severity.* i18n 鍵）；風險總評＝最高出現等級。
+          單元測試覆蓋六級與總評邏輯。
+      - id: T203
+        title: "--fail-on 閘門 + 退出碼"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-006
+        spec: null
+        srs_ref: FR-005
+        depends_on: [T202]
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          實作 --fail-on <severity>：出現 ≥ 指定等級弱點時以退出碼 2 結束，正常為 0。
+          整合測試斷言退出碼（供 CI/批次）。
+
+  - id: M3
+    title: "雙語離線報表（Bilingual Offline Report）"
+    target_date: 2026-08-19
+    status: pending
+    tasks:
+      - id: T301
+        title: "React 報表檢視器（五區塊 + 嚴重度色票 + a11y）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-005
+        spec: null
+        srs_ref: FR-006
+        depends_on: [T004, T202]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          依 UIUX_SPEC 實作五區塊（封面/機關識別、風險總評、弱點明細、軟體產品文件表、附註）；
+          嚴重度色票 token（色非唯一資訊載體）；WCAG-2.1-AA；嚴重度篩選與展開細節。
+          附註區必含「非滲透測試」免責句（NFR-10，鍵 report.notes.disclaimer_not_pentest）。
+      - id: T302
+        title: "報表 react-i18next 雙語（zh-TW/en-US）即時切換"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: FR-007
+        depends_on: [T301, T003]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          報表所有使用者可見字串走 i18n 鍵（含 report.notes.disclaimer_not_pentest 免責句，NFR-10）；
+          右上語言切換即時生效並持久化；嚴重度標籤鍵與 ADR-006 對齊；更新 <html lang>。
+      - id: T303
+        title: "單檔內聯 build + Rust rust-embed 內嵌 + report 注入產出"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-005
+        spec: null
+        srs_ref: FR-006
+        depends_on: [T301, T203]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          Vite 單檔內聯 build → cytrace-report 以 rust-embed 內嵌樣板 → report 子命令依**資料注入契約**
+          （ADR-009：sentinel <!--CYTRACE_DATA--> → JSON script tag + 跳脫）注入 ScanResult 產出 *.report.html。
+          報表零外連（CSP 具體值見 ADR-005）、字型本地內嵌。
+
+  - id: M4
+    title: "離線封裝交付（Offline Packaging & Delivery）"
+    target_date: 2026-09-02
+    status: pending
+    tasks:
+      - id: T401
+        title: "musl 靜態 build + 釘選引擎/DB 快照打包"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T103, T303]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          產出 x86_64-unknown-linux-musl 靜態 binary（零 runtime 依賴）；打包釘選版 Syft/Grype
+          與 grype DB 離線快照成單一安裝包。
+      - id: T402
+        title: "SHA256SUMS + 簽章 + 離線安裝包（不隨裝軟體標）"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T401]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          產生 SHA256SUMS 與簽章；組成可離線安裝、可驗證完整性的安裝包。走離線安裝包路線，
+          不走第三方資安檢測（隨裝軟體標）。
+      - id: T403
+        title: "dogfooding 自產 SBOM 隨附 + 離線 DB 更新 SOP"
+        type: NEW_FEATURE
+        priority: 3
+        adr: ADR-003
+        spec: null
+        srs_ref: FR-009
+        depends_on: [T401]
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          以 CyTrace 對自身產出 SBOM 並隨安裝包附上（含 NOTICE）；撰寫離線 DB 快照打包/匯入 SOP。
+
+  - id: M5
+    title: "批次與 CI／穩定硬化（Batch, CI & Hardening）"
+    target_date: 2026-09-16
+    status: pending
+    tasks:
+      - id: T501
+        title: "多目標批次掃描"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-006
+        spec: null
+        srs_ref: FR-010
+        depends_on: [T203]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          支援多目標批次掃描與彙整輸出，沿用 --fail-on 閘門語意。
+      - id: T502
+        title: "CI 閘門範例（離線）"
+        type: GENERAL
+        priority: 3
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-010
+        depends_on: [T203, T402]
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          提供離線可跑的 CI 閘門範例（以退出碼決定通過與否），文件化整合方式。
+      - id: T503
+        title: "golden baseline 回歸測試（釘選引擎版本）"
+        type: GENERAL
+        priority: 2
+        adr: ADR-008
+        spec: null
+        srs_ref: null
+        depends_on: [T303, T402]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          建立 golden baseline（策略見 ADR-008）：釘選引擎版本下對基準目標的輸出快照；升級引擎才更新 baseline，
+          以偵測上游變動造成的回歸（NFR-02 穩定優先）。比對前**正規化/排除 meta.generated_at 等時間欄位**，避免假性 diff。
+
+  - id: M6
+    title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
+    target_date: 2027-01-01
+    status: blocked
+    tasks: []
