@@ -1,0 +1,107 @@
+name: Release
+
+# 雙平台發布（ADR-010）：Windows(.exe, msvc 靜態 CRT) + Linux(musl 靜態)。
+# 觸發：push tag v*（正式發布）或手動 workflow_dispatch（指定 tag）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release 版本標籤（例：v0.1.0）'
+        required: true
+
+permissions:
+  contents: write   # 建立 Release 需要
+
+jobs:
+  build:
+    name: build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            bin: cytrace
+            asset: cytrace-x86_64-linux
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: cytrace.exe
+            asset: cytrace-x86_64-windows.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build（靜態：musl / msvc crt-static）
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --locked --target ${{ matrix.target }} -p cytrace-cli
+
+      - name: 冒煙測試（--version）
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/${{ matrix.bin }} --version
+
+      - name: 整理產物
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: 建立 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 蒐集執行檔 + 產 SHA256SUMS
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release
+          sha256sum * > SHA256SUMS
+          echo "── Release 內容 ──"; ls -la; echo; cat SHA256SUMS
+
+      - name: 解析版本標籤
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 發布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: CyTrace ${{ steps.tag.outputs.tag }}
+          files: release/*
+          generate_release_notes: true
+          body: |
+            CyTrace ${{ steps.tag.outputs.tag }} — 雙平台執行檔（ADR-010）
+
+            | 檔案 | 平台 | 說明 |
+            |------|------|------|
+            | `cytrace-x86_64-linux` | Linux x86_64 | musl 靜態 binary，零 runtime 依賴 |
+            | `cytrace-x86_64-windows.exe` | Windows x86_64 | msvc 靜態 CRT，免 VC++ 可轉散發套件 |
+            | `SHA256SUMS` | — | 完整性校驗（`sha256sum -c SHA256SUMS`） |
+
+            > 本 Release 僅含**執行檔**。完整 air-gapped 安裝包（含釘選 syft/grype 引擎 + grype DB 離線快照）
+            > 由交付端逐平台以 `make package` 產生（見 docs/DELIVERY_SOP.md）。

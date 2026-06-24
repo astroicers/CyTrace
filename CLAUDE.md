@@ -17,7 +17,7 @@
 - **報表**：自包含**離線單檔 HTML**，由 Rust 核心 `rust-embed` 內嵌前端 bundle、產生時注入掃描資料
 - **交付**：靜態 binary ＋ 釘選版 Syft/Grype ＋ grype DB 離線快照（單包）
 - **架構文件**：`docs/SRS.md`、`docs/SDS.md`、`docs/UIUX_SPEC.md`
-- **ADR**：`docs/adr/ADR-001 ～ ADR-009`（狀態見各檔檔頭）
+- **ADR**：`docs/adr/ADR-001 ～ ADR-010`（狀態見各檔檔頭）
 - **ROADMAP**：`ROADMAP.yaml` 為**唯一 live 狀態權威**；autopilot 依此逐任務執行
 <!-- ASP-AUTO-PROJECT-DESCRIPTION:END -->
 

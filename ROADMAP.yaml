@@ -458,6 +458,65 @@ milestones:
           建立 golden baseline（策略見 ADR-008）：釘選引擎版本下對基準目標的輸出快照；升級引擎才更新 baseline，
           以偵測上游變動造成的回歸（NFR-02 穩定優先）。比對前**正規化/排除 meta.generated_at 等時間欄位**，避免假性 diff。
 
+  - id: M7
+    title: "雙平台發布（Windows + Linux GitHub Release）"
+    target_date: 2026-09-30
+    status: in_progress
+    tasks:
+      - id: T701
+        title: "GitHub Release CI：matrix build Windows(.exe)+Linux + SHA256SUMS"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-010
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T401]
+        status: completed
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          .github/workflows/release.yml：matrix（windows-latest msvc 靜態 CRT / ubuntu-latest musl 靜態）
+          build cytrace.exe 與 cytrace → 產 SHA256SUMS → 建 GitHub Release 上傳。tag v* 觸發 + workflow_dispatch。
+      - id: T702
+        title: "Windows 完整離線安裝包（.ps1 安裝 + wrapper + syft.exe/grype.exe）"
+        type: NEW_FEATURE
+        priority: 3
+        adr: ADR-010
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T701, T402]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          package.sh 的 Windows 變體：PowerShell 安裝包 + .bat/.ps1 離線 wrapper，內含 syft.exe/grype.exe
+          與 grype DB 快照（跨平台通用）。對應 air-gapped Windows 目標機。
+      - id: T703
+        title: "ADR-007 平台假設收斂（指向 ADR-010）"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-010
+        spec: null
+        srs_ref: null
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          ADR-007 的「目標平台未定」開放項由 ADR-010 收斂（Windows 主 + Linux）；於 ADR-007 加交叉註記。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01
