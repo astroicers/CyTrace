@@ -1,0 +1,6 @@
+# 釘選 toolchain（NFR-02 穩定優先、可重現建置）
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]
+# M4 封裝（ADR-007）時加入 musl 靜態 target：
+# targets = ["x86_64-unknown-linux-musl"]

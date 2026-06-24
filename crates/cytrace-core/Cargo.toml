@@ -1,0 +1,13 @@
+[package]
+name = "cytrace-core"
+description = "CyTrace 核心：子程序編排、解析、嚴重度分級、fail-on（SDS §2-5）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cytrace-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

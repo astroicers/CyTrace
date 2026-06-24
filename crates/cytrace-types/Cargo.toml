@@ -1,0 +1,10 @@
+[package]
+name = "cytrace-types"
+description = "CyTrace 共用領域型別（零業務邏輯，SDS §2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }

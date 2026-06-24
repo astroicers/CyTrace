@@ -1,0 +1,54 @@
+//! Syft / Grype 子程序編排（SDS §3 / ADR-002/003）。
+//!
+//! 引擎為釘選版 Go binary，以子程序呼叫。Grype 強制離線：`GRYPE_DB_AUTO_UPDATE=false`、
+//! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。
+//!
+//! 注意：本模組需安裝包內的引擎執行檔；無引擎時回 [`CytraceError::Engine`]，
+//! 由 CLI 對映為非 2 的錯誤退出碼（與 fail-on 的 2 區隔）。
+
+use cytrace_core::{CytraceError, Result};
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+/// 以 Syft 對目標產生 CycloneDX JSON SBOM。
+pub fn sbom(target: &str) -> Result<String> {
+    let out = Command::new("syft")
+        .args(["scan", target, "-o", "cyclonedx-json", "-q"])
+        .output()
+        .map_err(|e| CytraceError::Engine(format!("syft: {e}")))?;
+    check(out, "syft")
+}
+
+/// 以 Grype 對 SBOM（CycloneDX JSON，經 stdin）比對 CVE，回傳 grype JSON。離線設定已內建。
+pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
+    let mut child = Command::new("grype")
+        .args(["sbom:-", "-o", "json", "-q"])
+        .env("GRYPE_DB_AUTO_UPDATE", "false")
+        .env("GRYPE_DB_VALIDATE_AGE", "false")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| CytraceError::Engine(format!("grype: {e}")))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| CytraceError::Engine("grype stdin 不可用".into()))?
+        .write_all(sbom_cyclonedx_json.as_bytes())?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| CytraceError::Engine(format!("grype: {e}")))?;
+    check(out, "grype")
+}
+
+fn check(out: std::process::Output, name: &str) -> Result<String> {
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(CytraceError::Engine(format!(
+            "{name} 失敗（exit {:?}）：{}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
+}
