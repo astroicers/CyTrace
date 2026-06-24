@@ -1,0 +1,18 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "components": [
+    {
+      "type": "library",
+      "name": "libfoo",
+      "version": "3.0.1",
+      "licenses": [ { "license": { "id": "Apache-2.0" } } ]
+    },
+    {
+      "type": "library",
+      "name": "barlib",
+      "version": "1.4.0",
+      "licenses": [ { "expression": "MIT" } ]
+    }
+  ]
+}

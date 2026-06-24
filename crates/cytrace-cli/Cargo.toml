@@ -1,0 +1,19 @@
+[package]
+name = "cytrace-cli"
+description = "CyTrace CLI（clap run/scan/report；SDS §2）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cytrace"
+path = "src/main.rs"
+
+[dependencies]
+cytrace-types = { workspace = true }
+cytrace-core = { workspace = true }
+cytrace-report = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }

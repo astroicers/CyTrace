@@ -1,0 +1,35 @@
+# CyTrace — Cargo workspace（ADR-001：Rust 核心）
+[workspace]
+resolver = "2"
+members = [
+    "crates/cytrace-types",
+    "crates/cytrace-core",
+    "crates/cytrace-report",
+    "crates/cytrace-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/astroicers/CyTrace"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# 內部 crate（模組邊界鐵律見 SDS §2）
+cytrace-types = { path = "crates/cytrace-types" }
+cytrace-core = { path = "crates/cytrace-core" }
+cytrace-report = { path = "crates/cytrace-report" }
+
+# 穩定優先（NFR-02）：release 以體積/可重現為先
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

@@ -1,0 +1,28 @@
+{
+  "severity": {
+    "critical": "嚴峻",
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "negligible": "輕微",
+    "unknown": "未知"
+  },
+  "cli": {
+    "scanning": "掃描中：{{target}}",
+    "done": "完成：{{count}} 個弱點，風險總評 {{risk}}",
+    "fail_on_triggered": "已達 --fail-on 門檻（{{threshold}}），以退出碼 2 結束",
+    "engine_missing": "找不到引擎執行檔：{{engine}}（請確認安裝包內路徑）",
+    "report_written": "報表已輸出：{{path}}"
+  },
+  "report": {
+    "title": "依賴風險報表",
+    "cover": "機關識別",
+    "summary": "風險總評",
+    "findings": "弱點明細",
+    "sbom": "軟體產品文件表",
+    "notes": {
+      "title": "附註",
+      "disclaimer_not_pentest": "本報表為產出/核發之依賴風險報表，非滲透測試或資安檢測，不得作為滲透測試結論引用。"
+    }
+  }
+}

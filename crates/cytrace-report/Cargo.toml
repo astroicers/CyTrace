@@ -1,0 +1,12 @@
+[package]
+name = "cytrace-report"
+description = "CyTrace 報表：內嵌單檔 HTML + 資料注入契約（ADR-005/009）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cytrace-types = { workspace = true }
+cytrace-core = { workspace = true }
+serde_json = { workspace = true }

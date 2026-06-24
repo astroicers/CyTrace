@@ -22,10 +22,8 @@ dist/
 .vite/
 *.tsbuildinfo
 
-# ── 離線交付產物（不入庫；由 release 流程產生）──
-/delivery/*.bin
-/delivery/*.sig
-/delivery/*.sha256
+# ── 離線交付產物（不入庫；由 release 流程產生，內含 ~1.7G grype DB）──
+/delivery/
 *.report.html
 
 # ── 作業系統 ──

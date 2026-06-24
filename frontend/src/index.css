@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+
+/* next-themes 以 class 切換深色 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* 嚴重度色票（ADR-006 / UIUX_SPEC §3）。色彩非唯一資訊載體：另以文字標籤呈現。 */
+@theme {
+  --color-sev-critical: #b91c1c;
+  --color-sev-high: #c2410c;
+  --color-sev-medium: #a16207;
+  --color-sev-low: #1d4ed8;
+  --color-sev-negligible: #4b5563;
+  --color-sev-unknown: #6b7280;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html {
+  /* 系統字型堆疊（零外部字型請求，air-gapped）；拉丁在前、CJK 在後 */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+}
