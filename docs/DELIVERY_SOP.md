@@ -23,6 +23,10 @@ cytrace-<版本>/
 ```bash
 make package            # 或 scripts/package.sh <輸出目錄>
 ```
+**Windows 版**（在 Windows build 機，先 `grype db update`）：
+```powershell
+pwsh scripts/package.ps1            # 產 delivery\cytrace-<版本>-windows\
+```
 腳本會：build musl 靜態 binary → 收集釘選引擎與 grype DB 快照 → 產自產 SBOM →
 寫 NOTICE → 算 SHA256SUMS →（若有金鑰）minisign 簽章。
 
@@ -39,6 +43,15 @@ make package            # 或 scripts/package.sh <輸出目錄>
   ```
 
 ## 4. 目標機安裝與執行（無網路）
+
+**Windows 目標機**（解開安裝包後，全部走 wrapper）：
+```powershell
+.\cytrace-offline.ps1 run dir:C:\path\to\target --fail-on high
+```
+wrapper 等效設定 `Path=<bundle>\bin`、`GRYPE_DB_CACHE_DIR=<bundle>\db`、
+`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`（ADR-003）。
+
+**Linux 目標機**：
 
 ```bash
 # 解開安裝包後，全部走 wrapper（已內建離線設定）
