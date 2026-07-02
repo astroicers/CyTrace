@@ -36,6 +36,10 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 argon2 = "0.5"
 getrandom = "0.2"
 rpassword = "7"
+sha2 = "0.10"
+# TLS：自帶 PEM 憑證（ADR-011；ring provider——musl/msvc 皆可建、免 cmake）
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 # 測試用（oneshot router 測試，不開真實 socket）
 tower = { version = "0.5", default-features = false, features = ["util"] }
 http-body-util = "0.1"

@@ -69,7 +69,7 @@ impl<S: Send + Sync> FromRequestParts<S> for Lang {
     }
 }
 
-/// 錯誤類別（CytraceError 5 類 + server 專屬類；隨 T803–T805 增補）。
+/// 錯誤類別（CytraceError 5 類 + server 專屬類；隨 T804–T805 增補）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     Engine,
@@ -79,6 +79,10 @@ pub enum ErrorKind {
     DbMissing,
     NotFound,
     Internal,
+    Auth,
+    Csrf,
+    RateLimited,
+    Validation,
 }
 
 impl ErrorKind {
@@ -91,6 +95,10 @@ impl ErrorKind {
             ErrorKind::DbMissing => "db_missing",
             ErrorKind::NotFound => "not_found",
             ErrorKind::Internal => "internal",
+            ErrorKind::Auth => "auth",
+            ErrorKind::Csrf => "csrf",
+            ErrorKind::RateLimited => "rate_limited",
+            ErrorKind::Validation => "validation",
         }
     }
 
@@ -98,6 +106,10 @@ impl ErrorKind {
         match self {
             ErrorKind::NotFound => StatusCode::NOT_FOUND,
             ErrorKind::DbMissing => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorKind::Auth => StatusCode::UNAUTHORIZED,
+            ErrorKind::Csrf => StatusCode::FORBIDDEN,
+            ErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            ErrorKind::Validation => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -113,6 +125,8 @@ pub struct ApiError {
     pub lang: Lang,
     pub kind: ErrorKind,
     pub detail: Option<String>,
+    /// 429 時的 `Retry-After` 秒數。
+    pub retry_after: Option<u64>,
 }
 
 impl ApiError {
@@ -121,11 +135,17 @@ impl ApiError {
             lang,
             kind,
             detail: None,
+            retry_after: None,
         }
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn with_retry_after(mut self, secs: u64) -> Self {
+        self.retry_after = Some(secs);
         self
     }
 
@@ -154,7 +174,14 @@ impl IntoResponse for ApiError {
                 "detail": self.detail,
             }
         });
-        (self.kind.status(), Json(body)).into_response()
+        let mut resp = (self.kind.status(), Json(body)).into_response();
+        if let Some(secs) = self.retry_after {
+            if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
+                resp.headers_mut()
+                    .insert(axum::http::header::RETRY_AFTER, v);
+            }
+        }
+        resp
     }
 }
 

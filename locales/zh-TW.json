@@ -28,6 +28,7 @@
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",
     "shutdown": "收到中止訊號，正在關閉…",
+    "plaintext_warning": "⚠️ 未設定 TLS——以 HTTP 明文提供服務（建議設定 CYTRACE_TLS_CERT/KEY 啟用 HTTPS）",
     "err": {
       "engine": "引擎子程序錯誤",
       "parse": "解析錯誤",
@@ -35,7 +36,11 @@
       "config": "設定錯誤",
       "db_missing": "漏洞資料庫快照缺失，無法掃描",
       "not_found": "找不到資源",
-      "internal": "伺服器內部錯誤"
+      "internal": "伺服器內部錯誤",
+      "auth": "未登入或憑證錯誤",
+      "csrf": "缺少必要的請求標頭（CSRF 防護）",
+      "rate_limited": "登入嘗試過於頻繁，請稍後再試",
+      "validation": "請求格式錯誤"
     }
   },
   "report": {

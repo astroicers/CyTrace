@@ -72,6 +72,12 @@ enum Command {
         /// 資料目錄（job 與報表產物；預設 /data；亦可用 CYTRACE_DATA_DIR）。
         #[arg(long)]
         data_dir: Option<PathBuf>,
+        /// TLS 憑證 PEM（與 --tls-key 成對；亦可用 CYTRACE_TLS_CERT）。
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        /// TLS 金鑰 PEM（與 --tls-cert 成對；亦可用 CYTRACE_TLS_KEY）。
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
     },
     /// 離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）。
     #[cfg(feature = "server")]
@@ -144,10 +150,19 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             Ok(worst)
         }
         #[cfg(feature = "server")]
-        Command::Serve { bind, data_dir } => {
+        Command::Serve {
+            bind,
+            data_dir,
+            tls_cert,
+            tls_key,
+        } => {
             let cfg = cytrace_server::config::ServerConfig::resolve(
-                bind.clone(),
-                data_dir.clone(),
+                cytrace_server::config::CliFlags {
+                    bind: bind.clone(),
+                    data_dir: data_dir.clone(),
+                    tls_cert: tls_cert.clone(),
+                    tls_key: tls_key.clone(),
+                },
                 std::env::vars().collect(),
             )?;
             cytrace_server::serve(cfg, &cli.lang)?;
@@ -157,14 +172,16 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
         Command::HashPassword => hash_password_interactive(cat),
         #[cfg(feature = "server")]
         Command::Health { bind } => {
-            let cfg = cytrace_server::config::ServerConfig::resolve(
-                bind.clone(),
-                None,
-                std::env::vars().collect(),
-            )?;
-            let addr = cfg.bind.to_string();
-            match std::net::TcpStream::connect_timeout(&cfg.bind, std::time::Duration::from_secs(3))
-            {
+            // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
+            let bind_raw = bind
+                .clone()
+                .or_else(|| std::env::var("CYTRACE_BIND").ok())
+                .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string());
+            let target: std::net::SocketAddr = bind_raw
+                .parse()
+                .map_err(|_| anyhow::anyhow!("位址不合法 / invalid address: {bind_raw}"))?;
+            let addr = target.to_string();
+            match std::net::TcpStream::connect_timeout(&target, std::time::Duration::from_secs(3)) {
                 Ok(_) => {
                     println!("{}", cat.t("cli.health.ok", &[("addr", &addr)]));
                     Ok(EXIT_OK)
