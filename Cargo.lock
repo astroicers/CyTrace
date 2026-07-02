@@ -111,6 +111,7 @@ dependencies = [
  "anyhow",
  "clap",
  "cytrace-core",
+ "cytrace-i18n",
  "cytrace-report",
  "cytrace-types",
  "serde_json",
@@ -124,6 +125,13 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "cytrace-i18n"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

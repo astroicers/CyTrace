@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 cytrace-types = { workspace = true }
 cytrace-core = { workspace = true }
+cytrace-i18n = { workspace = true }
 cytrace-report = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/cytrace-types",
     "crates/cytrace-core",
+    "crates/cytrace-i18n",
     "crates/cytrace-report",
     "crates/cytrace-cli",
 ]
@@ -24,6 +25,7 @@ clap = { version = "4", features = ["derive"] }
 # 內部 crate（模組邊界鐵律見 SDS §2）
 cytrace-types = { path = "crates/cytrace-types" }
 cytrace-core = { path = "crates/cytrace-core" }
+cytrace-i18n = { path = "crates/cytrace-i18n" }
 cytrace-report = { path = "crates/cytrace-report" }
 
 # 穩定優先（NFR-02）：release 以體積/可重現為先

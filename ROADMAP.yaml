@@ -520,7 +520,7 @@ milestones:
   - id: M8
     title: "Web 控制台與容器化交付（Web Console & Container Delivery）"
     target_date: 2026-11-30
-    status: pending
+    status: in_progress
     tasks:
       - id: T801
         title: "前置重構：engine→core（+ScanEngine trait）、i18n→cytrace-i18n、timefmt→core"
@@ -530,7 +530,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
