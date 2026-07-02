@@ -2,12 +2,17 @@
 
 | 欄位 | 內容 |
 |------|------|
-| **狀態** | `Draft` |
-| **接受日期** | — |
+| **狀態** | `Accepted` |
+| **接受日期** | 2026-07-02（使用者確認直升，跳過 FIRM POC——Dockerfile 未實際 build 之風險已明示，由 T808 實作即時回驗） |
 | **日期** | 2026-07-02 |
 | **決策者** | CyTrace Team |
 
 > **狀態說明：** `Draft`（初稿，禁止實作）→ `FIRM`（POC 驗證，允許 commit，需附驗證證據）→ `Accepted`（人類審核通過）
+
+> ⬆️ 由 `Draft` 升 `Accepted`：使用者 2026-07-02 透過 `/asp:approve-adr ADR-012` 呼叫、看完指令摘要
+> （決策重點、無 Verification Evidence 章節之事實、Draft 直升跳過 FIRM POC 的風險提示）與升級當下
+> 既有佐證（G1 gate 審查 `.asp-gate-log/20260702T054341Z-G1-ADR-012.md` PASS，含現況陳述逐項查核屬實）
+> 後回覆「確認直升」明確同意（人類顯式授權，非 AI 自行升級，符合 ADR 狀態變更鐵則）。
 
 ---
 
