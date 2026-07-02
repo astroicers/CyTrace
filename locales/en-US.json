@@ -28,6 +28,7 @@
   "server": {
     "listening": "CyTrace server listening on {{addr}}",
     "shutdown": "Shutdown signal received, stopping…",
+    "plaintext_warning": "⚠️ TLS not configured — serving plaintext HTTP (set CYTRACE_TLS_CERT/KEY to enable HTTPS)",
     "err": {
       "engine": "Engine subprocess error",
       "parse": "Parse error",
@@ -35,7 +36,11 @@
       "config": "Configuration error",
       "db_missing": "Vulnerability DB snapshot missing; scanning unavailable",
       "not_found": "Resource not found",
-      "internal": "Internal server error"
+      "internal": "Internal server error",
+      "auth": "Not signed in or invalid credentials",
+      "csrf": "Missing required request header (CSRF protection)",
+      "rate_limited": "Too many login attempts; try again later",
+      "validation": "Invalid request"
     }
   },
   "report": {

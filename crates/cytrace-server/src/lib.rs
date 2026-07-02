@@ -6,39 +6,73 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod api;
 pub mod auth;
 pub mod config;
 pub mod error;
 pub mod router;
+pub mod session;
 pub mod state;
+pub mod tls;
 
 use config::ServerConfig;
 use cytrace_i18n::Catalog;
+use std::net::SocketAddr;
+use std::time::Duration;
 
-/// 啟動 HTTP 服務（阻塞直到收到中止訊號）。`lang` 決定啟動訊息語言（沿用 CLI `--lang`）。
+/// 啟動 HTTP/HTTPS 服務（阻塞直到收到中止訊號）。`lang` 決定啟動訊息語言（沿用 CLI `--lang`）。
 pub fn serve(cfg: ServerConfig, lang: &str) -> anyhow::Result<()> {
     let cat = Catalog::load(lang);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     rt.block_on(async {
-        let listener = tokio::net::TcpListener::bind(cfg.bind).await?;
-        let addr = listener.local_addr()?;
-        println!(
-            "{}",
-            cat.t("server.listening", &[("addr", &addr.to_string())])
-        );
-        let app = router::build_router(cfg);
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal(cat))
-            .await?;
+        let app =
+            router::build_router(cfg.clone()).into_make_service_with_connect_info::<SocketAddr>();
+        let handle = axum_server::Handle::new();
+
+        // ctrl_c → graceful shutdown（10s 寬限）
+        tokio::spawn({
+            let handle = handle.clone();
+            let msg = cat.t("server.shutdown", &[]);
+            async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    println!("{msg}");
+                    handle.graceful_shutdown(Some(Duration::from_secs(10)));
+                }
+            }
+        });
+
+        // 監聽位址確定後印出（含 :0 隨機 port 的實際值）
+        tokio::spawn({
+            let handle = handle.clone();
+            let cat = Catalog::load(lang);
+            async move {
+                if let Some(addr) = handle.listening().await {
+                    println!(
+                        "{}",
+                        cat.t("server.listening", &[("addr", &addr.to_string())])
+                    );
+                }
+            }
+        });
+
+        match &cfg.tls {
+            Some(paths) => {
+                let rustls_cfg = tls::rustls_config(paths).await?;
+                axum_server::bind_rustls(cfg.bind, rustls_cfg)
+                    .handle(handle)
+                    .serve(app)
+                    .await?;
+            }
+            None => {
+                println!("{}", cat.t("server.plaintext_warning", &[]));
+                axum_server::bind(cfg.bind)
+                    .handle(handle)
+                    .serve(app)
+                    .await?;
+            }
+        }
         Ok(())
     })
-}
-
-async fn shutdown_signal(cat: Catalog) {
-    // ctrl_c 失敗（極罕見的 signal handler 註冊錯誤）時不掛服務，改為永不觸發 graceful path。
-    if tokio::signal::ctrl_c().await.is_ok() {
-        println!("{}", cat.t("server.shutdown", &[]));
-    }
 }
