@@ -12,7 +12,31 @@
     "done": "Done: {{count}} vulnerabilities, overall risk {{risk}}",
     "fail_on_triggered": "Reached --fail-on threshold ({{threshold}}), exiting with code 2",
     "engine_missing": "Engine binary not found: {{engine}} (check the bundled path)",
-    "report_written": "Report written: {{path}}"
+    "report_written": "Report written: {{path}}",
+    "hashpw": {
+      "prompt": "Enter password (min {{min}} characters): ",
+      "confirm": "Confirm password: ",
+      "mismatch": "Passwords do not match",
+      "too_short": "Password must be at least {{min}} characters",
+      "done": "argon2id PHC string (set as CYTRACE_ADMIN_PASSWORD_HASH):"
+    },
+    "health": {
+      "ok": "Service alive: {{addr}}",
+      "fail": "Cannot connect: {{addr}}"
+    }
+  },
+  "server": {
+    "listening": "CyTrace server listening on {{addr}}",
+    "shutdown": "Shutdown signal received, stopping…",
+    "err": {
+      "engine": "Engine subprocess error",
+      "parse": "Parse error",
+      "io": "I/O error",
+      "config": "Configuration error",
+      "db_missing": "Vulnerability DB snapshot missing; scanning unavailable",
+      "not_found": "Resource not found",
+      "internal": "Internal server error"
+    }
   },
   "report": {
     "title": "Dependency Risk Report",

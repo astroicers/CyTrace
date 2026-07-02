@@ -12,7 +12,31 @@
     "done": "完成：{{count}} 個弱點，風險總評 {{risk}}",
     "fail_on_triggered": "已達 --fail-on 門檻（{{threshold}}），以退出碼 2 結束",
     "engine_missing": "找不到引擎執行檔：{{engine}}（請確認安裝包內路徑）",
-    "report_written": "報表已輸出：{{path}}"
+    "report_written": "報表已輸出：{{path}}",
+    "hashpw": {
+      "prompt": "輸入密碼（至少 {{min}} 字元）：",
+      "confirm": "再次輸入密碼：",
+      "mismatch": "兩次輸入不一致",
+      "too_short": "密碼至少需 {{min}} 字元",
+      "done": "argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）："
+    },
+    "health": {
+      "ok": "服務存活：{{addr}}",
+      "fail": "無法連線：{{addr}}"
+    }
+  },
+  "server": {
+    "listening": "CyTrace 服務已啟動：{{addr}}",
+    "shutdown": "收到中止訊號，正在關閉…",
+    "err": {
+      "engine": "引擎子程序錯誤",
+      "parse": "解析錯誤",
+      "io": "I/O 錯誤",
+      "config": "設定錯誤",
+      "db_missing": "漏洞資料庫快照缺失，無法掃描",
+      "not_found": "找不到資源",
+      "internal": "伺服器內部錯誤"
+    }
   },
   "report": {
     "title": "依賴風險報表",

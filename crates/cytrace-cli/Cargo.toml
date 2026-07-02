@@ -10,11 +10,19 @@ license.workspace = true
 name = "cytrace"
 path = "src/main.rs"
 
+[features]
+# server（ADR-011）：serve/hash-password/health 子命令。
+# `cargo build --no-default-features` 可退回零 tokio 純 CLI（CLI 零迴歸的結構保證）。
+default = ["server"]
+server = ["dep:cytrace-server", "dep:rpassword"]
+
 [dependencies]
 cytrace-types = { workspace = true }
 cytrace-core = { workspace = true }
 cytrace-i18n = { workspace = true }
 cytrace-report = { workspace = true }
+cytrace-server = { workspace = true, optional = true }
+rpassword = { workspace = true, optional = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

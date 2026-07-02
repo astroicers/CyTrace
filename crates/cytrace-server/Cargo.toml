@@ -1,0 +1,25 @@
+[package]
+name = "cytrace-server"
+description = "CyTrace Web 服務模式（ADR-011）：axum HTTP 服務、認證、job 管理"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cytrace-types = { workspace = true }
+cytrace-core = { workspace = true }
+cytrace-i18n = { workspace = true }
+cytrace-report = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+argon2 = { workspace = true }
+getrandom = { workspace = true }
+
+[dev-dependencies]
+tower = { workspace = true }
+http-body-util = { workspace = true }

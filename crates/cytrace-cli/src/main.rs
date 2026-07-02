@@ -63,6 +63,26 @@ enum Command {
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
+    /// 啟動 Web 服務模式（ADR-011）：登入控制台 + 掃描/報表 API。
+    #[cfg(feature = "server")]
+    Serve {
+        /// 監聽位址（預設 127.0.0.1:8443；亦可用 CYTRACE_BIND）。
+        #[arg(long)]
+        bind: Option<String>,
+        /// 資料目錄（job 與報表產物；預設 /data；亦可用 CYTRACE_DATA_DIR）。
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+    },
+    /// 離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）。
+    #[cfg(feature = "server")]
+    HashPassword,
+    /// 服務存活檢查（TCP connect；容器 HEALTHCHECK 用，distroless 無 shell）。
+    #[cfg(feature = "server")]
+    Health {
+        /// 檢查位址（預設同 serve 解析順序：--bind > CYTRACE_BIND > 127.0.0.1:8443）。
+        #[arg(long)]
+        bind: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -123,7 +143,59 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             }
             Ok(worst)
         }
+        #[cfg(feature = "server")]
+        Command::Serve { bind, data_dir } => {
+            let cfg = cytrace_server::config::ServerConfig::resolve(
+                bind.clone(),
+                data_dir.clone(),
+                std::env::vars().collect(),
+            )?;
+            cytrace_server::serve(cfg, &cli.lang)?;
+            Ok(EXIT_OK)
+        }
+        #[cfg(feature = "server")]
+        Command::HashPassword => hash_password_interactive(cat),
+        #[cfg(feature = "server")]
+        Command::Health { bind } => {
+            let cfg = cytrace_server::config::ServerConfig::resolve(
+                bind.clone(),
+                None,
+                std::env::vars().collect(),
+            )?;
+            let addr = cfg.bind.to_string();
+            match std::net::TcpStream::connect_timeout(&cfg.bind, std::time::Duration::from_secs(3))
+            {
+                Ok(_) => {
+                    println!("{}", cat.t("cli.health.ok", &[("addr", &addr)]));
+                    Ok(EXIT_OK)
+                }
+                Err(_) => {
+                    eprintln!("{}", cat.t("cli.health.fail", &[("addr", &addr)]));
+                    Ok(EXIT_ERR)
+                }
+            }
+        }
     }
+}
+
+/// 互動式讀密碼兩次（隱藏輸入）→ 輸出 argon2id PHC 字串。
+#[cfg(feature = "server")]
+fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
+    use cytrace_server::auth::{hash_password, MIN_PASSWORD_LEN};
+    let min = MIN_PASSWORD_LEN.to_string();
+    let pw = rpassword::prompt_password(cat.t("cli.hashpw.prompt", &[("min", &min)]))?;
+    if pw.chars().count() < MIN_PASSWORD_LEN {
+        eprintln!("{}", cat.t("cli.hashpw.too_short", &[("min", &min)]));
+        return Ok(EXIT_ERR);
+    }
+    let confirm = rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[]))?;
+    if pw != confirm {
+        eprintln!("{}", cat.t("cli.hashpw.mismatch", &[]));
+        return Ok(EXIT_ERR);
+    }
+    println!("{}", cat.t("cli.hashpw.done", &[]));
+    println!("{}", hash_password(&pw)?);
+    Ok(EXIT_OK)
 }
 
 /// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。

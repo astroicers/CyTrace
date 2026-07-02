@@ -6,6 +6,7 @@ members = [
     "crates/cytrace-core",
     "crates/cytrace-i18n",
     "crates/cytrace-report",
+    "crates/cytrace-server",
     "crates/cytrace-cli",
 ]
 
@@ -27,6 +28,17 @@ cytrace-types = { path = "crates/cytrace-types" }
 cytrace-core = { path = "crates/cytrace-core" }
 cytrace-i18n = { path = "crates/cytrace-i18n" }
 cytrace-report = { path = "crates/cytrace-report" }
+cytrace-server = { path = "crates/cytrace-server" }
+
+# Web 服務模式（ADR-011；features 最小化、禁任何 HTTP client）
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+argon2 = "0.5"
+getrandom = "0.2"
+rpassword = "7"
+# 測試用（oneshot router 測試，不開真實 socket）
+tower = { version = "0.5", default-features = false, features = ["util"] }
+http-body-util = "0.1"
 
 # 穩定優先（NFR-02）：release 以體積/可重現為先
 [profile.release]
