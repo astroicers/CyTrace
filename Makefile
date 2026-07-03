@@ -7,7 +7,7 @@
 
 -include $(HOME)/.claude/asp/Makefile.inc
 
-.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check package
+.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check frontend-console package docker-build docker-smoke docker-save
 
 info:
 	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace + 報表前端）"
@@ -70,3 +70,21 @@ clean-rs:
 # ── M4 離線安裝包（ADR-007 / DELIVERY_SOP）──
 package:
 	bash scripts/package.sh
+
+# ── M8 容器（ADR-012）；本機驗證用，不含 push（push 只由 CI docker.yml 執行）──
+DOCKER_IMAGE ?= ghcr.io/astroicers/cytrace:dev
+docker-build:
+	. scripts/versions.env && docker build \
+	  --build-arg SYFT_VERSION=$$SYFT_VERSION \
+	  --build-arg GRYPE_VERSION=$$GRYPE_VERSION \
+	  --build-arg SYFT_LINUX_AMD64_SHA256=$$SYFT_LINUX_AMD64_SHA256 \
+	  --build-arg GRYPE_LINUX_AMD64_SHA256=$$GRYPE_LINUX_AMD64_SHA256 \
+	  -t $(DOCKER_IMAGE) .
+
+docker-smoke:
+	docker run --rm $(DOCKER_IMAGE) --version
+
+docker-save:
+	docker save $(DOCKER_IMAGE) -o cytrace-image.tar
+	sha256sum cytrace-image.tar > SHA256SUMS
+	@echo "✓ cytrace-image.tar + SHA256SUMS（交付工作站以 minisign 簽章，見 DELIVERY_SOP §7）"

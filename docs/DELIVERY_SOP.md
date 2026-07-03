@@ -73,3 +73,34 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 
 預設目標 = `x86_64-unknown-linux-musl`。若驗收環境為 Windows / arm64 / 國產 Linux，
 須 cross-compile cytrace **與**重建對應平台的 syft/grype，並重檢 musl 價值主張（musl 限 Linux）。
+
+## 7. 容器交付（docker save/load；ADR-012）
+
+容器是**新增交付形態**（跑 `cytrace serve` Web 服務），不取代裸機包。映像不含 grype DB
+（slim + `/db` volume），故交付含兩件 artifact：**映像 tar** ＋ **DB 快照**（同 §5 那份）。
+
+### 7.1 取得與封存（有網段交付工作站）
+1. `docker pull ghcr.io/astroicers/cytrace:vX.Y.Z`（需 GHCR 私有 read PAT）。
+2. 核對 digest：`docker buildx imagetools inspect ... --format '{{.Manifest.Digest}}'`
+   對 GitHub Release 的 `IMAGE_DIGEST.txt`。
+3. 取 Release 附的 `cytrace-vX.Y.Z-image.tar`（CI 產物即權威）或本機 `docker save`。
+4. `sha256sum -c SHA256SUMS`。
+5. **minisign 簽 tar**（交付工作站私鑰，同 ADR-007 信任錨；私鑰不進 CI）：
+   `minisign -Sm cytrace-vX.Y.Z-image.tar`。
+
+### 7.2 攜入與載入（場域）
+1. 光碟 / 單向匣攜入 → `minisign -Vm cytrace-vX.Y.Z-image.tar`（帶外預置公鑰）＋ `sha256sum -c`。
+2. `docker load -i cytrace-vX.Y.Z-image.tar`。
+3. 核對載入結果：`docker images --digests`。
+   > 注意：`docker load` **不還原 RepoDigest**（registry digest）。核對的是 image ID /
+   > config digest，與 §7.1 的 registry manifest digest 是不同概念——文件與驗收單須寫清楚。
+
+### 7.3 啟動
+依 DOCKER.md（run / compose 範例）。`/db` 掛入 §5 攜入的 DB 快照。
+起站前以 `docker run --rm <image> hash-password` 產管理密碼 hash。
+
+### 7.4 DB 更新
+**同 §5，只換 `/db` volume 內容並重啟容器；不需更新 image。**（slim 方案的紅利。）
+
+### 7.5 映像更新
+新版本走 7.1–7.3；舊映像保留一版作回滾窗口，確認新版無誤後 `docker rmi` 舊版。

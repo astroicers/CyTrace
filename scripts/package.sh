@@ -66,6 +66,9 @@ export PATH="$HERE/bin:$PATH"
 export GRYPE_DB_CACHE_DIR="$HERE/db"
 export GRYPE_DB_AUTO_UPDATE=false
 export GRYPE_DB_VALIDATE_AGE=false
+# 關閉 syft/grype 的 app update-check outbound（零外連；與容器 ENV 一致，ADR-012）
+export GRYPE_CHECK_FOR_APP_UPDATE=false
+export SYFT_CHECK_FOR_APP_UPDATE=false
 exec "$HERE/bin/cytrace" "$@"
 WRAP
 chmod +x "$BUNDLE/cytrace-offline" "$BUNDLE/bin/cytrace"

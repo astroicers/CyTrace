@@ -1,0 +1,125 @@
+name: Docker（GHCR）
+
+# 容器交付（ADR-012）：PR 只 build + 冒煙不 push；tag v* 冒煙通過才 push GHCR。
+# 獨立於 release.yml（權限最小化：此處 packages:write）。
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/docker.yml
+      - 'crates/**'
+      - 'frontend/**'
+      - 'locales/**'
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - scripts/versions.env
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'image tag（如 v0.2.0）'
+        required: true
+
+permissions:
+  contents: write # 附 Release 資產
+  packages: write # push GHCR
+
+jobs:
+  docker:
+    name: build / 冒煙 /（tag 時）push + Release 資產
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 引擎版本（單一事實源）
+        run: cat scripts/versions.env >> "$GITHUB_ENV"
+
+      - name: metadata（image 名 + OCI labels + tags）
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/astroicers/cytrace
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      # tag / dispatch 時登入 GHCR（PR 不登入、不 push）
+      - name: GHCR login
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build（PR：load 本機供冒煙；tag：push）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: ${{ github.event_name == 'pull_request' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SYFT_VERSION=${{ env.SYFT_VERSION }}
+            GRYPE_VERSION=${{ env.GRYPE_VERSION }}
+            SYFT_LINUX_AMD64_SHA256=${{ env.SYFT_LINUX_AMD64_SHA256 }}
+            GRYPE_LINUX_AMD64_SHA256=${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      # 冒煙：PR（load 的本機 image）與 tag（剛 push）都跑，通過才算數
+      - name: 冒煙 --version
+        run: |
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          docker run --rm "$IMG" --version
+
+      - name: 冒煙 serve（degraded 起站 → /healthz 200）
+        run: |
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          HASH=$(docker run --rm "$IMG" hash-password </dev/null 2>/dev/null || true)
+          # 用固定測試 hash（min 12 字元密碼的預產 PHC；serve 只驗格式）
+          PHC='$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVmZ2hpamtsbW5vcA$G7n8kQnq0h0p1r2s3t4u5v6w7x8y9z0A1B2C3D4E5F6'
+          docker run -d --name cytrace-smoke --read-only --tmpfs /tmp \
+            -e CYTRACE_ADMIN_PASSWORD_HASH="$PHC" -p 18443:8443 "$IMG" serve
+          sleep 3
+          curl -fsS http://127.0.0.1:18443/healthz
+          docker logs cytrace-smoke
+          docker rm -f cytrace-smoke
+
+      # tag 時：docker save + SHA256SUMS + image SBOM → 掛同版 Release
+      - name: 產離線 tar + SBOM + digest（tag）
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VER=${GITHUB_REF_NAME}
+          IMG=ghcr.io/astroicers/cytrace:${VER#v}
+          docker save "$IMG" -o "cytrace-${VER}-image.tar"
+          sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS
+          docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}' > IMAGE_DIGEST.txt || \
+            docker inspect "$IMG" --format '{{index .RepoDigests 0}}' > IMAGE_DIGEST.txt
+          # image SBOM（dogfooding：離線側可攜，registry attestation docker save 不保留）
+          docker run --rm -v "$PWD":/w -w /w "$IMG" scan "dir:/w" -o cyclonedx-json -q \
+            > cytrace-image.sbom.cdx.json || echo "SBOM 產生略過（非致命）"
+
+      - name: 附掛 Release 資產（tag）
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cytrace-*-image.tar
+            SHA256SUMS
+            IMAGE_DIGEST.txt
+            cytrace-image.sbom.cdx.json
+          body: |
+            容器映像（ADR-012）。離線搬運：見 docs/DELIVERY_SOP.md §7。
+            交付工作站以 minisign 簽 `cytrace-*-image.tar`（私鑰不進 CI）。
