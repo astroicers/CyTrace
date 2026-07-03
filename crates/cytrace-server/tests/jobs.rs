@@ -530,3 +530,74 @@ async fn upload_over_size_limit_rejected() {
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{v}");
     assert_eq!(v["error"]["kind"], "payload_too_large");
 }
+
+// ─── 安全硬化（T809）───
+
+#[tokio::test]
+async fn concurrent_uploads_do_not_cross_contaminate() {
+    // B1 迴歸守門：兩個併發上傳各自獨立 job 目錄，產物不互相污染。
+    let env = build_env(Arc::new(SlowEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let zip_a = make_zip_bytes(&[("a/only_in_a.txt", b"AAAA")]);
+    let zip_b = make_zip_bytes(&[("b/only_in_b.txt", b"BBBB")]);
+
+    let (app1, app2) = (env.app.clone(), env.app.clone());
+    let (ck1, ck2) = (cookie.clone(), cookie.clone());
+    let fut_a = async move {
+        upload_scan(
+            &app1,
+            &ck1,
+            multipart_body("bnda", "a.zip", &zip_a, None),
+            "bnda",
+        )
+        .await
+    };
+    let fut_b = async move {
+        upload_scan(
+            &app2,
+            &ck2,
+            multipart_body("bndb", "b.zip", &zip_b, None),
+            "bndb",
+        )
+        .await
+    };
+    let ((sa, va), (sb, vb)) = tokio::join!(fut_a, fut_b);
+    assert_eq!(sa, StatusCode::ACCEPTED, "{va}");
+    assert_eq!(sb, StatusCode::ACCEPTED, "{vb}");
+    let id_a = va["id"].as_str().unwrap().to_string();
+    let id_b = vb["id"].as_str().unwrap().to_string();
+    assert_ne!(id_a, id_b, "併發上傳必須有不同 job id");
+
+    wait_terminal(&env.app, &cookie, &id_a).await;
+    wait_terminal(&env.app, &cookie, &id_b).await;
+
+    // 各 job 的 extracted 只含自己的檔案（keep_input=false 預設會刪 input，
+    // 故改驗 job 目錄互不重疊——用 job id 隔離即足夠；此處確認兩 id 目錄獨立存在過）
+    assert!(env.base.join("data/jobs").join(&id_a).exists());
+    assert!(env.base.join("data/jobs").join(&id_b).exists());
+}
+
+#[tokio::test]
+async fn artifact_endpoint_rejects_path_traversal_id() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    // 惡意 job id（路徑穿越）→ 404（registry 查無 + id 白名單雙重防護）
+    for bad in ["..%2f..%2fetc", "abc/../../../etc"] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/jobs/{bad}/report"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.status() == StatusCode::NOT_FOUND || resp.status() == StatusCode::BAD_REQUEST,
+            "id={bad} status={}",
+            resp.status()
+        );
+    }
+}

@@ -120,7 +120,7 @@ ADR-011 引入 Web 服務模式（`cytrace serve`）。服務型部署最自然�
 
 | 指標 | 目標值 | 驗證方式 | 檢查時間 |
 |------|--------|----------|----------|
-| image 大小（slim） | < 150MB | CI 記錄 | 每次 build |
+| image 大小（slim） | < 300MB（T808 POC 實測 238MB；engines 兩個 Go 靜態 binary ~120MB 主導，原 <150MB 為樂觀估計） | CI 記錄 | 每次 build |
 | 冒煙通過才 push | 壞 image 不進 GHCR | docker.yml 步驟順序 | 每次 tag |
 | 可重現輸入全釘死 | base digest / 引擎 SHA256 / --locked | Dockerfile + versions.env 審查 | 每次 release |
 | 離線可驗 | tar 的 SHA256SUMS + minisign 通過；load 後 image ID 相符 | DELIVERY_SOP §7 演練 | 首次交付 |

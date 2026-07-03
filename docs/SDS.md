@@ -107,3 +107,15 @@ ScanResult {
 - 回歸：golden baseline（釘選引擎版本下輸出快照比對；升級才更新 baseline）——策略由 **ADR-008** 擁有。
 - **非決定性欄位**：比對 baseline 前正規化或排除 `ScanResult.meta.generated_at` 等時間/易變欄位，否則同輸入每次跑都會因時間戳造成假性 diff（ADR-008/ADR-009）。
 - 覆蓋率目標 ≥ 80%（NFR-07）。
+- **Web 服務（`cytrace-server`）**：`tower::ServiceExt::oneshot` 整合測試（不開真實 socket、注入 `FakeEngine` 免引擎 binary）——認證生命週期、節流、CSRF、上傳惡意壓縮包（zip-slip/symlink/bomb）、path traversal、job 狀態機與重啟恢復、console 服務與 CSP。
+
+## 10. Web 服務模式（`serve`；ADR-011）
+
+- **crate**：`cytrace-server`（lib，axum/tokio）+ cli feature `server`（default on，`--no-default-features` 可退零 tokio 純 CLI）。`engine`/`i18n`/`timefmt` 已由 cli 前置重構搬至 `cytrace-core`/`cytrace-i18n`（SDS §2 歸位）。
+- **執行模型**：`serve` 自建 tokio runtime（`main()` 保持同步）；掃描管線同步、經 `spawn_blocking` 隔離；`Semaphore` 限併發；請求路徑禁 panic（`panic=abort` crash-only，clippy `unwrap_used` deny）。
+- **認證**：單一管理帳號（argon2id PHC、`CYTRACE_ADMIN_PASSWORD_HASH` 缺失拒啟動）；in-memory session（token SHA-256 存端、cookie HttpOnly/SameSite=Strict/TLS 時 Secure、TTL 12h）；登入節流 + CSRF（自訂標頭 + 無 CORS）。TLS 自帶 PEM（rustls/ring）。
+- **Job 模型**：無資料庫，`{data_dir}/jobs/<id>/` 檔案系統為狀態真相（job.json 原子落盤）；重啟非終態→`interrupted`。
+- **輸入**：上傳（multipart 串流 + zip/tar/tar.gz 三道解壓防護）+ 掛載目錄白名單（語彙檢查 + canonicalize 前綴驗證）。
+- **API**：`/api/v1`（session/targets/jobs/upload/report/result/artifacts/version）+ `/healthz`；錯誤格式 `{error:{kind,i18n_key,message,detail}}` 沿用 `CytraceError` 分類；訊息走 locales（`server.*`）。
+- **前端 console**：雙 Vite config（與報表樣板分離）、hash routing、rust-embed 內嵌服務；CSP header 硬化（report 端點自帶較寬 CSP 不被覆蓋）。
+- **交付**：容器（ADR-012）為主要交付形態；見 docs/DOCKER.md、DELIVERY_SOP §7。

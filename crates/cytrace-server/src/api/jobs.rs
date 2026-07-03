@@ -85,45 +85,77 @@ pub async fn create(
 }
 
 /// `POST /api/v1/jobs/upload`：multipart 一步式（file + fail_on?）。串流落盤→安全解壓→建 job。
+///
+/// 每個請求先建**唯一 job 目錄**（unique id），直接串流進該 job 的 `input/original/`——
+/// 不共用 staging，避免併發上傳交叉污染（安全審查 B1）。失敗時整個 job 目錄移除。
 pub async fn upload(
     State(app): State<AppState>,
     lang: Lang,
     mut multipart: Multipart,
 ) -> Result<Response, ApiError> {
-    // 先建 job 目錄結構（需要 job id；但 precheck 在拿到 fail_on 後才能完整跑）
-    // 策略：先落盤到暫存 input dir，欄位齊全後 precheck，再 submit。
-    let staging = app.cfg.data_dir.join("uploads-staging");
-    std::fs::create_dir_all(staging.join("original"))
+    // 先建唯一 job 記錄與目錄（尚不 insert registry；失敗即刪目錄，不留 queued job）。
+    let mut record = JobRecord::new("upload:".into(), None)
+        .map_err(|e| ApiError::new(lang, ErrorKind::Internal).with_detail(e.to_string()))?;
+    let job_dir = app.jobs.job_dir(&record.id);
+    let input_dir = job_dir.join("input");
+    std::fs::create_dir_all(input_dir.join("original"))
         .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
+
+    // 失敗時清整個 job 目錄的 helper。
+    let cleanup = |dir: &std::path::Path| {
+        let _ = std::fs::remove_dir_all(dir);
+    };
 
     let mut saved: Option<(std::path::PathBuf, String)> = None;
     let mut fail_on: Option<String> = None;
     let limit = app.cfg.max_upload_bytes;
 
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| ApiError::new(lang, ErrorKind::Validation).with_detail(e.to_string()))?
-    {
+    loop {
+        let field_res = multipart.next_field().await;
+        let Some(mut field) = (match field_res {
+            Ok(f) => f,
+            Err(e) => {
+                cleanup(&job_dir);
+                return Err(ApiError::new(lang, ErrorKind::Validation).with_detail(e.to_string()));
+            }
+        }) else {
+            break;
+        };
         match field.name() {
             Some("file") => {
                 let fname = field.file_name().unwrap_or("upload").to_string();
-                let dest = upload::original_path(&staging, &fname);
-                let mut out = std::fs::File::create(&dest)
-                    .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
-                let mut written: u64 = 0;
-                while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    ApiError::new(lang, ErrorKind::Validation).with_detail(e.to_string())
-                })? {
-                    written += chunk.len() as u64;
-                    if written > limit {
-                        let _ = std::fs::remove_file(&dest);
-                        return Err(ApiError::new(lang, ErrorKind::PayloadTooLarge)
-                            .with_detail(format!("上傳超過 {limit} bytes")));
+                let dest = upload::original_path(&input_dir, &fname);
+                let mut out = match std::fs::File::create(&dest) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        cleanup(&job_dir);
+                        return Err(ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()));
                     }
-                    out.write_all(&chunk).map_err(|e| {
-                        ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string())
-                    })?;
+                };
+                let mut written: u64 = 0;
+                loop {
+                    match field.chunk().await {
+                        Ok(Some(chunk)) => {
+                            written += chunk.len() as u64;
+                            if written > limit {
+                                cleanup(&job_dir);
+                                return Err(ApiError::new(lang, ErrorKind::PayloadTooLarge)
+                                    .with_detail(format!("上傳超過 {limit} bytes")));
+                            }
+                            if let Err(e) = out.write_all(&chunk) {
+                                cleanup(&job_dir);
+                                return Err(
+                                    ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string())
+                                );
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            cleanup(&job_dir);
+                            return Err(ApiError::new(lang, ErrorKind::Validation)
+                                .with_detail(e.to_string()));
+                        }
+                    }
                 }
                 saved = Some((dest, upload::sanitize_filename(&fname)));
             }
@@ -139,30 +171,31 @@ pub async fn upload(
         }
     }
 
-    let (saved_path, original_name) = saved
-        .ok_or_else(|| ApiError::new(lang, ErrorKind::Validation).with_detail("缺少 file 欄位"))?;
+    let Some((saved_path, original_name)) = saved else {
+        cleanup(&job_dir);
+        return Err(ApiError::new(lang, ErrorKind::Validation).with_detail("缺少 file 欄位"));
+    };
 
     // 欄位齊全 → precheck（DB/fail_on/佇列）
     if let Err(e) = precheck(&app, lang, fail_on.as_deref()) {
-        let _ = std::fs::remove_dir_all(&staging);
+        cleanup(&job_dir);
         return Err(e);
     }
 
-    // 安全解壓（spawn_blocking：解壓可能吃 CPU/IO）
-    let staging_c = staging.clone();
+    // 安全解壓（spawn_blocking：解壓可能吃 CPU/IO）；產物落此 job 的 input/extracted/。
+    let input_c = input_dir.clone();
     let saved_c = saved_path.clone();
     let name_c = original_name.clone();
     let max_extract = app.cfg.max_extract_bytes;
     let prep = tokio::task::spawn_blocking(move || {
-        upload::prepare(&saved_c, &name_c, &staging_c, max_extract)
+        upload::prepare(&saved_c, &name_c, &input_c, max_extract)
     })
-    .await
-    .map_err(|e| ApiError::new(lang, ErrorKind::Internal).with_detail(e.to_string()))?;
+    .await;
 
     let prep = match prep {
-        Ok(p) => p,
-        Err(ae) => {
-            let _ = std::fs::remove_dir_all(&staging);
+        Ok(Ok(p)) => p,
+        Ok(Err(ae)) => {
+            cleanup(&job_dir);
             let kind = match ae.kind() {
                 "forbidden_path" => ErrorKind::ForbiddenPath,
                 "extract_too_large" => ErrorKind::PayloadTooLarge,
@@ -170,30 +203,22 @@ pub async fn upload(
             };
             return Err(ApiError::new(lang, kind).with_detail(ae.detail().to_string()));
         }
+        Err(e) => {
+            cleanup(&job_dir);
+            return Err(ApiError::new(lang, ErrorKind::Internal).with_detail(e.to_string()));
+        }
     };
 
-    // 建 job 記錄 → 把 staging 內容搬進 job 的 input/（原子 rename）
-    let record = JobRecord::new(format!("upload:{original_name}"), fail_on.clone())
-        .map_err(|e| ApiError::new(lang, ErrorKind::Internal).with_detail(e.to_string()))?;
-    let job_dir = app.jobs.job_dir(&record.id);
-    std::fs::create_dir_all(&job_dir)
-        .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
-    let input_dir = job_dir.join("input");
-    std::fs::rename(&staging, &input_dir)
-        .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
-    // scan_target 路徑前綴 staging → input
-    let scan_target = prep.scan_target.replace(
-        &staging.display().to_string(),
-        &input_dir.display().to_string(),
-    );
-
+    // 補齊 record（target 描述 + fail_on）並 insert registry。
+    record.target = format!("upload:{original_name}");
+    record.fail_on = fail_on;
     app.jobs
         .insert(record.clone())
         .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
     runner::spawn_with_cleanup(
         app.clone(),
         record.id.clone(),
-        scan_target,
+        prep.scan_target,
         !app.cfg.keep_input,
     );
     Ok((StatusCode::ACCEPTED, Json(record)).into_response())

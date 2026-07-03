@@ -13,8 +13,16 @@ pub struct DownloadQuery {
     download: Option<u8>,
 }
 
-/// 讀 job 目錄下的產物檔（路徑固定、不吃使用者輸入 → 無穿越風險）。
+/// job id 僅允許 `<epoch>-<hex>` 字元集（防禦縱深：即使繞過 registry 檢查也不能路徑穿越）。
+fn id_is_safe(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// 讀 job 目錄下的產物檔（檔名固定；id 先過白名單字元集 → 無穿越風險）。
 fn read_artifact(app: &AppState, id: &str, file: &str) -> Option<Vec<u8>> {
+    if !id_is_safe(id) {
+        return None;
+    }
     let path: PathBuf = app.jobs.job_dir(id).join(file);
     std::fs::read(path).ok()
 }
