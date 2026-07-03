@@ -5,7 +5,7 @@
 
 version: "1.0"
 project: CyTrace
-last_updated: 2026-06-24
+last_updated: 2026-07-02
 
 # ═══ 專案元資料 ═══
 
@@ -17,7 +17,7 @@ stack:
 
 requires:
   uiux: true               # → 載入 design_dev + frontend_quality，要求 docs/UIUX_SPEC.md
-  api: false
+  api: true                # M8：serve REST API（/api/v1；契約文件化於 SDS server 章，無對外 OpenAPI 交付）
   multi_agent: false
   rag: false
   coding_style: true
@@ -31,8 +31,8 @@ conventions:
 
 architecture:
   style: monolith
-  api_style: none
-  auth: none
+  api_style: rest               # M8：serve 子命令 /api/v1（ADR-011）；CLI 模式不受影響
+  auth: session                 # M8：單一管理帳號 argon2 + session cookie（ADR-011）；CLI 模式無帳號
   message_queue: none
   cache: none
   search: none
@@ -47,10 +47,10 @@ quality:
 
 security:
   compliance: []                 # 參考 NTIA SBOM Minimum Elements；軍規 SBOM（SRS §5）
-  auth_requirements:             # n/a：CyTrace 為無使用者帳號的離線 CLI（architecture.auth: none）
-    mfa: false
-    session_timeout: none
-    password_policy: none
+  auth_requirements:             # M8 serve 模式（ADR-011）；CLI 模式仍無帳號
+    mfa: false                   # 封閉網路單一管理帳號，無外部 IdP（使用者確認）
+    session_timeout: 12h         # 絕對過期，不 sliding
+    password_policy: "min_length 12（argon2id PHC；cytrace hash-password 離線產生）"
 
 observability:
   logging: structured
@@ -516,6 +516,191 @@ milestones:
         imported_at: ""
         description: |
           ADR-007 的「目標平台未定」開放項由 ADR-010 收斂（Windows 主 + Linux）；於 ADR-007 加交叉註記。
+
+  - id: M8
+    title: "Web 控制台與容器化交付（Web Console & Container Delivery）"
+    target_date: 2026-11-30
+    status: pending
+    tasks:
+      - id: T801
+        title: "前置重構：engine→core（+ScanEngine trait）、i18n→cytrace-i18n、timefmt→core"
+        type: MODIFICATION
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: null
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          零行為變更重構（獨立 PR）：engine.rs 由 cytrace-cli 搬至 cytrace-core（SDS §2 歸位）並引入
+          ScanEngine trait 測試縫；i18n Catalog 搬至新 crate cytrace-i18n（cli/server 共用）；
+          epoch_to_iso 搬至 core::timefmt。驗收：cargo test --workspace 全綠、golden 不變。
+      - id: T802
+        title: "cytrace-server 骨架 + deny.toml + serve/hash-password/health 子命令（feature gate）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: null
+        depends_on: [T801]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          引入 tokio/axum 等依賴（Cargo.lock 釘死）+ deny.toml（license/來源白名單）；
+          cytrace-server lib crate 骨架（config/state/error/router/healthz/version）；
+          cli feature "server"（default on）掛 serve/hash-password/health 子命令；
+          --no-default-features 可退零 tokio 純 CLI。
+      - id: T803
+        title: "認證（argon2 + session + 節流 + CSRF）+ TLS（自帶 PEM 憑證）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T802]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          單一管理帳號：CYTRACE_ADMIN_PASSWORD_HASH（argon2id PHC，缺失拒啟動）；
+          session cookie（HttpOnly/SameSite=Strict/TLS 時 Secure，TTL 12h，in-memory）；
+          登入節流 per-IP+全域；CSRF＝SameSite+自訂標頭+無 CORS；
+          rustls（ring）載入 PEM 雙模監聽，未設 TLS 以 i18n 鍵警告明文模式。
+      - id: T804
+        title: "Job 核心（狀態機/持久化/Semaphore/spawn_blocking）+ 掛載目錄白名單 + jobs API"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T803]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          無資料庫 job 模型：/data/jobs/<id>/ 檔案系統持久化（job.json 原子落盤）、
+          queued→running→done/failed（+canceled/interrupted）、Semaphore 併發 2、重啟重建索引；
+          CYTRACE_SCAN_ROOTS 白名單 + 語彙檢查 + canonicalize 前綴驗證（symlink 逃逸防護）；
+          /api/v1/jobs CRUD。failon_triggered 為狀態非錯誤（≙ CLI exit 2）。
+      - id: T805
+        title: "上傳（multipart 串流 + 壓縮包安全解壓）+ 報表/產物端點 + locales server.*"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T804]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          multipart 串流落盤（預設 512MB 上限）；zip/tar/tar.gz 三道防護（zip-slip 整包拒收、
+          symlink/hardlink 跳過、zip-bomb 三重上限）；掃後 input 預設刪除（CYTRACE_KEEP_INPUT=false）；
+          /jobs/{id}/report|result|artifacts 端點；locales 新增 server.* 命名空間（雙語成對）。
+      - id: T806
+        title: "前端 console：雙 Vite config + hash routing + 6 頁面 + rust-embed 服務"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-011
+        spec: null
+        srs_ref: FR-007
+        depends_on: [T803]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          vite.console.config.ts（不動既有 vite.config.ts/report 樣板）；自寫 hash routing；
+          登入/儀表板/新掃描（上傳+路徑）/job 詳情/報表列表/系統資訊 6 頁；
+          零新 runtime 依賴（fetch wrapper+輪詢+XHR 上傳進度）；locales console.*；
+          產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）；
+          console CSP 由 axum header 下發（connect-src 'self'）。
+      - id: T807
+        title: "CI 擴充：console build + report sentinel 自檢 + console 零外連 + cargo deny"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-011
+        spec: null
+        srs_ref: null
+        depends_on: [T805, T806]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          ci.yml frontend job 加 build:console、report sentinel 自檢（<!--CYTRACE_DATA--> 仍在）、
+          scripts/console-egress-check.sh 零外連檢查；rust job 加 cargo deny check licenses sources
+          與 cargo tree 零 HTTP client 檢查。
+      - id: T808
+        title: "容器化：Dockerfile（distroless）+ docker.yml（GHCR 私有 amd64）+ 交付文件"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-012
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T805, T806]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          scripts/versions.env（引擎版本+SHA256 單一事實源）；四階段 Dockerfile
+          （node→rust musl→engines 驗 SHA256→distroless static nonroot）；離線 env 烤死
+          （含 SYFT/GRYPE_CHECK_FOR_APP_UPDATE=false，並回補裸機 wrapper/engine.rs）；
+          docker.yml：PR build+冒煙、tag 冒煙通過才 push ghcr.io/astroicers/cytrace + save tar
+          + SHA256SUMS + image SBOM 掛 Release；docs/DOCKER.md、DELIVERY_SOP §7、
+          docker-compose.yml、Makefile docker-* targets（不含 push）。
+      - id: T809
+        title: "測試硬化 + SRS NFR-09/SDS 定稿 + NOTICE 更新 + tag 演練"
+        type: MODIFICATION
+        priority: 3
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T807, T808]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          安全測試全套（惡意壓縮包/path traversal/CSRF/節流）；SRS NFR-09 修訂落稿（依 ADR-011 文字）、
+          SDS 新增 server 章；NOTICE 更新（ring 授權標註）；workflow_dispatch tag 演練驗 GHCR 全鏈路
+          （push→Release 資產→docker load 核對）。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
