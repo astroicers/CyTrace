@@ -37,8 +37,21 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: 引擎版本（單一事實源）
-        run: cat scripts/versions.env >> "$GITHUB_ENV"
+      - name: 引擎版本（單一事實源；只取 KEY=VALUE，濾掉註解與空行）
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+
+      - name: 決定 release tag（tag push 或 workflow_dispatch 皆算 release）
+        id: rel
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: metadata（image 名 + OCI labels + tags）
         id: meta
@@ -87,9 +100,8 @@ jobs:
       - name: 冒煙 serve（degraded 起站 → /healthz 200）
         run: |
           IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
-          HASH=$(docker run --rm "$IMG" hash-password </dev/null 2>/dev/null || true)
-          # 用固定測試 hash（min 12 字元密碼的預產 PHC；serve 只驗格式）
-          PHC='$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVmZ2hpamtsbW5vcA$G7n8kQnq0h0p1r2s3t4u5v6w7x8y9z0A1B2C3D4E5F6'
+          # 合法 argon2id PHC（serve 啟動驗格式；此容器即拋棄、密碼無意義）
+          PHC='$argon2id$v=19$m=19456,t=2,p=1$bzvUjuXne+hdTJnsojWpbg$qz0SOdij/7ypT71lOiVcDJ66kHf0emAojQA0hzTE3IY'
           docker run -d --name cytrace-smoke --read-only --tmpfs /tmp \
             -e CYTRACE_ADMIN_PASSWORD_HASH="$PHC" -p 18443:8443 "$IMG" serve
           sleep 3
@@ -97,11 +109,11 @@ jobs:
           docker logs cytrace-smoke
           docker rm -f cytrace-smoke
 
-      # tag 時：docker save + SHA256SUMS + image SBOM → 掛同版 Release
-      - name: 產離線 tar + SBOM + digest（tag）
-        if: startsWith(github.ref, 'refs/tags/')
+      # release（tag push 或 workflow_dispatch）：docker save + SHA256SUMS + image SBOM → 掛 Release
+      - name: 產離線 tar + SBOM + digest
+        if: steps.rel.outputs.is_release == 'true'
         run: |
-          VER=${GITHUB_REF_NAME}
+          VER=${{ steps.rel.outputs.tag }}
           IMG=ghcr.io/astroicers/cytrace:${VER#v}
           docker save "$IMG" -o "cytrace-${VER}-image.tar"
           sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS
@@ -111,10 +123,11 @@ jobs:
           docker run --rm -v "$PWD":/w -w /w "$IMG" scan "dir:/w" -o cyclonedx-json -q \
             > cytrace-image.sbom.cdx.json || echo "SBOM 產生略過（非致命）"
 
-      - name: 附掛 Release 資產（tag）
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: 附掛 Release 資產
+        if: steps.rel.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.rel.outputs.tag }}
           files: |
             cytrace-*-image.tar
             SHA256SUMS
