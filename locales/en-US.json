@@ -40,7 +40,13 @@
       "auth": "Not signed in or invalid credentials",
       "csrf": "Missing required request header (CSRF protection)",
       "rate_limited": "Too many login attempts; try again later",
-      "validation": "Invalid request"
+      "validation": "Invalid request",
+      "forbidden_path": "Scan path not allowed",
+      "conflict": "Job is running; cancel or wait before deleting",
+      "queue_full": "Scan queue is full; try again later"
+    },
+    "job": {
+      "interrupted": "Interrupted by server restart; please re-submit the scan"
     }
   },
   "report": {

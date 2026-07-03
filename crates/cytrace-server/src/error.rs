@@ -83,6 +83,9 @@ pub enum ErrorKind {
     Csrf,
     RateLimited,
     Validation,
+    ForbiddenPath,
+    Conflict,
+    QueueFull,
 }
 
 impl ErrorKind {
@@ -99,6 +102,9 @@ impl ErrorKind {
             ErrorKind::Csrf => "csrf",
             ErrorKind::RateLimited => "rate_limited",
             ErrorKind::Validation => "validation",
+            ErrorKind::ForbiddenPath => "forbidden_path",
+            ErrorKind::Conflict => "conflict",
+            ErrorKind::QueueFull => "queue_full",
         }
     }
 
@@ -110,6 +116,9 @@ impl ErrorKind {
             ErrorKind::Csrf => StatusCode::FORBIDDEN,
             ErrorKind::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             ErrorKind::Validation => StatusCode::BAD_REQUEST,
+            ErrorKind::ForbiddenPath => StatusCode::FORBIDDEN,
+            ErrorKind::Conflict => StatusCode::CONFLICT,
+            ErrorKind::QueueFull => StatusCode::TOO_MANY_REQUESTS,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

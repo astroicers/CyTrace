@@ -16,15 +16,23 @@ use tower::util::ServiceExt;
 const TEST_PASSWORD: &str = "test-password-123";
 static TEST_PHC: LazyLock<String> = LazyLock::new(|| hash_password(TEST_PASSWORD).unwrap());
 
+static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn test_config_with(extra_env: &[(&str, &str)]) -> ServerConfig {
     let mut env: HashMap<String, String> = extra_env
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
     env.insert("CYTRACE_ADMIN_PASSWORD_HASH".into(), TEST_PHC.clone());
+    let data_dir = std::env::temp_dir().join(format!(
+        "cytrace-api-test-{}-{}",
+        std::process::id(),
+        DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     ServerConfig::resolve(
         CliFlags {
             bind: Some("127.0.0.1:0".into()),
+            data_dir: Some(data_dir),
             ..Default::default()
         },
         env,
@@ -33,7 +41,7 @@ fn test_config_with(extra_env: &[(&str, &str)]) -> ServerConfig {
 }
 
 fn app() -> Router {
-    build_router(test_config_with(&[]))
+    build_router(test_config_with(&[])).expect("router 應可建")
 }
 
 fn peer(n: u8) -> ConnectInfo<SocketAddr> {
@@ -215,7 +223,7 @@ async fn whoami_and_logout_lifecycle() {
 
 #[tokio::test]
 async fn session_ttl_zero_expires_immediately() {
-    let app = build_router(test_config_with(&[("CYTRACE_SESSION_TTL_HOURS", "0")]));
+    let app = build_router(test_config_with(&[("CYTRACE_SESSION_TTL_HOURS", "0")])).unwrap();
     let cookie = {
         let resp = app
             .clone()

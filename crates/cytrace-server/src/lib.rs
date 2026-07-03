@@ -10,9 +10,11 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod jobs;
 pub mod router;
 pub mod session;
 pub mod state;
+pub mod targets;
 pub mod tls;
 
 use config::ServerConfig;
@@ -28,7 +30,7 @@ pub fn serve(cfg: ServerConfig, lang: &str) -> anyhow::Result<()> {
         .build()?;
     rt.block_on(async {
         let app =
-            router::build_router(cfg.clone()).into_make_service_with_connect_info::<SocketAddr>();
+            router::build_router(cfg.clone())?.into_make_service_with_connect_info::<SocketAddr>();
         let handle = axum_server::Handle::new();
 
         // ctrl_c → graceful shutdown（10s 寬限）

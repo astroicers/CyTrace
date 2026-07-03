@@ -15,8 +15,8 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 
 /// 組出完整 Router（供 `serve` 與 oneshot 整合測試共用）。
-pub fn build_router(cfg: ServerConfig) -> Router {
-    build_router_with_state(AppState::new(cfg))
+pub fn build_router(cfg: ServerConfig) -> anyhow::Result<Router> {
+    Ok(build_router_with_state(AppState::new(cfg)?))
 }
 
 /// 以既有 state 組 Router（測試可注入自訂 throttle/sessions）。
@@ -26,12 +26,18 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/v1/session", axum::routing::post(api::session::login));
 
-    // 受保護：一切業務 API（jobs/reports 隨 T804–T805 增補）
+    // 受保護：一切業務 API（reports 隨 T805 增補）
     let protected = Router::new()
         .route("/api/v1/version", get(version))
         .route(
             "/api/v1/session",
             get(api::session::whoami).delete(api::session::logout),
+        )
+        .route("/api/v1/targets", get(api::jobs::targets_list))
+        .route("/api/v1/jobs", get(api::jobs::list).post(api::jobs::create))
+        .route(
+            "/api/v1/jobs/{id}",
+            get(api::jobs::get).delete(api::jobs::delete),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

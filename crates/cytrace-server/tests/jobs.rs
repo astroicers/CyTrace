@@ -1,0 +1,334 @@
+//! Job 生命週期整合測試——FakeEngine 注入（不需 syft/grype binary，air-gapped CI 可跑）。
+
+use axum::body::Body;
+use axum::extract::ConnectInfo;
+use axum::http::{header, Request, StatusCode};
+use axum::Router;
+use cytrace_core::engine::ScanEngine;
+use cytrace_core::error::Result as CoreResult;
+use cytrace_server::auth::{hash_password, CSRF_HEADER};
+use cytrace_server::config::{CliFlags, ServerConfig};
+use cytrace_server::router::build_router_with_state;
+use cytrace_server::state::AppState;
+use http_body_util::BodyExt;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
+use tower::util::ServiceExt;
+
+// 直接重用 core 的 golden fixtures（2 元件、Critical+Medium 兩弱點）
+const CYCLONEDX: &str = include_str!("../../cytrace-core/tests/fixtures/cyclonedx.json");
+const GRYPE: &str = include_str!("../../cytrace-core/tests/fixtures/grype.json");
+
+const TEST_PASSWORD: &str = "test-password-123";
+static TEST_PHC: LazyLock<String> = LazyLock::new(|| hash_password(TEST_PASSWORD).unwrap());
+static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+struct FakeEngine;
+impl ScanEngine for FakeEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        Ok(CYCLONEDX.into())
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+}
+
+/// 慢引擎：卡住 sbom 讓 job 停在 running / 佇列（取消與 409 測試用）。
+struct SlowEngine;
+impl ScanEngine for SlowEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        Ok(CYCLONEDX.into())
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+}
+
+struct TestEnv {
+    app: Router,
+    #[allow(dead_code)]
+    base: PathBuf,
+}
+
+/// 建測試環境：temp data_dir、非空 db 目錄（db_present=true）、掃描白名單 root。
+fn build_env(engine: Arc<dyn ScanEngine>, db_present: bool, max_concurrent: usize) -> TestEnv {
+    let base = std::env::temp_dir().join(format!(
+        "cytrace-jobs-test-{}-{}",
+        std::process::id(),
+        DIR_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let scan_root = base.join("scan-targets");
+    std::fs::create_dir_all(scan_root.join("app")).unwrap();
+    std::fs::write(scan_root.join("app/bin"), b"x").unwrap();
+    let db_dir = base.join("db");
+    std::fs::create_dir_all(&db_dir).unwrap();
+    if db_present {
+        std::fs::write(db_dir.join("metadata.json"), "{}").unwrap();
+    }
+
+    let mut env: HashMap<String, String> = HashMap::new();
+    env.insert("CYTRACE_ADMIN_PASSWORD_HASH".into(), TEST_PHC.clone());
+    env.insert(
+        "CYTRACE_SCAN_ROOTS".into(),
+        format!("targets={}", scan_root.display()),
+    );
+    env.insert(
+        "CYTRACE_MAX_CONCURRENT_SCANS".into(),
+        max_concurrent.to_string(),
+    );
+    if db_present {
+        env.insert("GRYPE_DB_CACHE_DIR".into(), db_dir.display().to_string());
+    }
+    let cfg = ServerConfig::resolve(
+        CliFlags {
+            bind: Some("127.0.0.1:0".into()),
+            data_dir: Some(base.join("data")),
+            ..Default::default()
+        },
+        env,
+    )
+    .unwrap();
+    let state = AppState::with_engine(cfg, engine).unwrap();
+    TestEnv {
+        app: build_router_with_state(state),
+        base,
+    }
+}
+
+fn with_csrf_and(req: axum::http::request::Builder) -> axum::http::request::Builder {
+    req.header(CSRF_HEADER, "1")
+}
+
+async fn login(app: &Router) -> String {
+    let mut req = with_csrf_and(Request::post("/api/v1/session"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(format!("{{\"password\":\"{TEST_PASSWORD}\"}}")))
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(SocketAddr::from(([10, 1, 0, 1], 40000))));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    resp.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+async fn json_of(resp: axum::response::Response) -> serde_json::Value {
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn create_job(
+    app: &Router,
+    cookie: &str,
+    path: &str,
+    fail_on: Option<&str>,
+) -> (StatusCode, serde_json::Value) {
+    let fail_on_field = fail_on
+        .map(|f| format!(",\"fail_on\":\"{f}\""))
+        .unwrap_or_default();
+    let body = format!(
+        "{{\"target\":{{\"kind\":\"mounted\",\"root\":\"targets\",\"path\":\"{path}\"}}{fail_on_field}}}"
+    );
+    let req = with_csrf_and(Request::post("/api/v1/jobs"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    (status, json_of(resp).await)
+}
+
+async fn get_job(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/jobs/{id}"))
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    json_of(resp).await
+}
+
+/// 輪詢直到終態（FakeEngine 極快；上限 5s 防呆）。
+async fn wait_terminal(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
+    for _ in 0..50 {
+        let v = get_job(app, cookie, id).await;
+        let s = v["status"].as_str().unwrap_or("").to_string();
+        if !matches!(s.as_str(), "queued" | "running") {
+            return v;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("job 未在時限內到終態");
+}
+
+#[tokio::test]
+async fn full_job_lifecycle_with_fake_engine() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+
+    let (status, v) = create_job(&env.app, &cookie, "app", Some("high")).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["status"], "queued");
+    assert_eq!(v["target"], "mounted:targets/app");
+
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "job 應成功：{done}");
+    // fixtures：Critical + Medium → overall_risk Critical；fail_on=high → triggered
+    assert_eq!(done["summary"]["overall_risk"], "Critical");
+    assert_eq!(done["failon_triggered"], true);
+    assert!(done["finished_at"].as_str().unwrap().ends_with('Z'));
+
+    // 產物落盤（report/scan-result/sbom/grype）
+    let job_dir = env.base.join("data/jobs").join(&id);
+    for f in [
+        "job.json",
+        "sbom.cdx.json",
+        "grype.json",
+        "scan-result.json",
+        "report.html",
+    ] {
+        assert!(job_dir.join(f).exists(), "缺產物 {f}");
+    }
+    // 報表含注入資料（sentinel 已被替換）
+    let html = std::fs::read_to_string(job_dir.join("report.html")).unwrap();
+    assert!(html.contains("cytrace-data"));
+
+    // 列表
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/jobs")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let list = json_of(resp).await;
+    assert_eq!(list["total"], 1);
+
+    // 終態刪除 → 404
+    let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/{id}")))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert!(!job_dir.exists());
+    let v = get_job(&env.app, &cookie, &id).await;
+    assert_eq!(v["error"]["kind"], "not_found");
+}
+
+#[tokio::test]
+async fn db_missing_returns_503_degraded() {
+    let env = build_env(Arc::new(FakeEngine), false, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job(&env.app, &cookie, "app", None).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(v["error"]["kind"], "db_missing");
+}
+
+#[tokio::test]
+async fn traversal_and_unknown_paths_forbidden() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for bad in ["../secret", "/etc", "no/such/dir"] {
+        let (status, v) = create_job(&env.app, &cookie, bad, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "path={bad}");
+        assert_eq!(v["error"]["kind"], "forbidden_path");
+    }
+}
+
+#[tokio::test]
+async fn invalid_fail_on_rejected() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job(&env.app, &cookie, "app", Some("catastrophic")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(v["error"]["kind"], "validation");
+}
+
+#[tokio::test]
+async fn running_delete_conflicts_and_queued_cancels() {
+    // 併發 1 + 慢引擎：第一個 running、第二個 queued
+    let env = build_env(Arc::new(SlowEngine), true, 1);
+    let cookie = login(&env.app).await;
+    let (_, first) = create_job(&env.app, &cookie, "app", None).await;
+    let (_, second) = create_job(&env.app, &cookie, "app", None).await;
+    let (fid, sid) = (
+        first["id"].as_str().unwrap().to_string(),
+        second["id"].as_str().unwrap().to_string(),
+    );
+
+    // 等第一個進 running
+    for _ in 0..30 {
+        if get_job(&env.app, &cookie, &fid).await["status"] == "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(get_job(&env.app, &cookie, &fid).await["status"], "running");
+
+    // running → DELETE 409
+    let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/{fid}")))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+
+    // queued → DELETE = 取消
+    let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/{sid}")))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+    assert_eq!(get_job(&env.app, &cookie, &sid).await["status"], "canceled");
+
+    // 第一個最終完成（取消的不會被執行）
+    let done = wait_terminal(&env.app, &cookie, &fid).await;
+    assert_eq!(done["status"], "done");
+    assert_eq!(
+        get_job(&env.app, &cookie, &sid).await["status"],
+        "canceled",
+        "取消的 job 不得被 runner 撿走"
+    );
+}
+
+#[tokio::test]
+async fn targets_endpoint_lists_root_names_only() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/targets")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let v = json_of(resp).await;
+    assert_eq!(v["roots"][0]["name"], "targets");
+    assert!(v["roots"][0].get("path").is_none(), "不得洩漏實際路徑");
+}

@@ -47,6 +47,14 @@ pub struct ServerConfig {
     pub session_ttl: Duration,
     /// TLS 憑證（未設 = HTTP 明文，啟動時警告）。
     pub tls: Option<TlsPaths>,
+    /// 掛載掃描白名單（`CYTRACE_SCAN_ROOTS=name=/abs/path,...`）。
+    pub scan_roots: Vec<(String, PathBuf)>,
+    /// 同時掃描上限（`CYTRACE_MAX_CONCURRENT_SCANS`，預設 2）。
+    pub max_concurrent_scans: usize,
+    /// 佇列上限——非終態 job 總數（`CYTRACE_MAX_QUEUED`，預設 32）。
+    pub max_queued: usize,
+    /// 掃描完成後保留上傳原檔（`CYTRACE_KEEP_INPUT`，預設 false；T805 使用）。
+    pub keep_input: bool,
 }
 
 impl ServerConfig {
@@ -112,6 +120,27 @@ impl ServerConfig {
             }
         };
 
+        let scan_roots = match env.get("CYTRACE_SCAN_ROOTS") {
+            Some(raw) => crate::targets::parse_roots(raw)
+                .map_err(|e| CytraceError::Config(format!("CYTRACE_SCAN_ROOTS：{e}")))?,
+            None => Vec::new(),
+        };
+
+        let parse_usize = |key: &str, default: usize| -> Result<usize> {
+            match env.get(key) {
+                Some(raw) => raw
+                    .parse::<usize>()
+                    .map_err(|_| CytraceError::Config(format!("{key} 不是整數：{raw}"))),
+                None => Ok(default),
+            }
+        };
+        let max_concurrent_scans = parse_usize("CYTRACE_MAX_CONCURRENT_SCANS", 2)?.max(1);
+        let max_queued = parse_usize("CYTRACE_MAX_QUEUED", 32)?.max(1);
+        let keep_input = env
+            .get("CYTRACE_KEEP_INPUT")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         Ok(ServerConfig {
             bind,
             data_dir,
@@ -120,6 +149,10 @@ impl ServerConfig {
             admin_user,
             session_ttl,
             tls,
+            scan_roots,
+            max_concurrent_scans,
+            max_queued,
+            keep_input,
         })
     }
 

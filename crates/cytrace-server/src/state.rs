@@ -2,24 +2,41 @@
 
 use crate::auth::LoginThrottle;
 use crate::config::ServerConfig;
+use crate::jobs::registry::JobRegistry;
 use crate::session::SessionStore;
+use cytrace_core::engine::{RealEngine, ScanEngine};
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 
-/// axum `State` extractor 的共享狀態（jobs registry 隨 T804 增補）。
+/// axum `State` extractor 的共享狀態。
 #[derive(Clone)]
 pub struct AppState {
     pub cfg: Arc<ServerConfig>,
     pub sessions: Arc<SessionStore>,
     pub throttle: Arc<LoginThrottle>,
+    pub engine: Arc<dyn ScanEngine>,
+    pub jobs: Arc<JobRegistry>,
+    pub scan_semaphore: Arc<Semaphore>,
 }
 
 impl AppState {
-    pub fn new(cfg: ServerConfig) -> Self {
+    /// 真實引擎（子程序呼叫 syft/grype）。開啟 data_dir 失敗（不可寫等）→ 啟動錯誤。
+    pub fn new(cfg: ServerConfig) -> anyhow::Result<Self> {
+        Self::with_engine(cfg, Arc::new(RealEngine))
+    }
+
+    /// 注入引擎（整合測試用 fake，免 syft/grype binary）。
+    pub fn with_engine(cfg: ServerConfig, engine: Arc<dyn ScanEngine>) -> anyhow::Result<Self> {
         let sessions = Arc::new(SessionStore::new(cfg.session_ttl));
-        AppState {
+        let jobs = Arc::new(JobRegistry::open(&cfg.data_dir)?);
+        let scan_semaphore = Arc::new(Semaphore::new(cfg.max_concurrent_scans));
+        Ok(AppState {
             cfg: Arc::new(cfg),
             sessions,
             throttle: Arc::new(LoginThrottle::default()),
-        }
+            engine,
+            jobs,
+            scan_semaphore,
+        })
     }
 }
