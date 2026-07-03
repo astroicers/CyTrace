@@ -114,7 +114,10 @@ jobs:
         if: steps.rel.outputs.is_release == 'true'
         run: |
           VER=${{ steps.rel.outputs.tag }}
-          IMG=ghcr.io/astroicers/cytrace:${VER#v}
+          # 用 metadata 產出的精確 push tag（不自行重組，避免 v 前綴不一致）
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          # push（load:false）後 image 不在本地，docker save 需先 pull 回來
+          docker pull "$IMG"
           docker save "$IMG" -o "cytrace-${VER}-image.tar"
           sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS
           docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}' > IMAGE_DIGEST.txt || \
