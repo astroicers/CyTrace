@@ -52,6 +52,108 @@
       "interrupted": "伺服器重啟時中斷；請重新建立掃描"
     }
   },
+  "console": {
+    "app": {
+      "title": "CyTrace 控制台",
+      "nav_dashboard": "掃描任務",
+      "nav_new_scan": "新增掃描",
+      "nav_reports": "報表",
+      "nav_system": "系統資訊",
+      "logout": "登出"
+    },
+    "login": {
+      "title": "登入 CyTrace 控制台",
+      "subtitle": "地端依賴風險掃描",
+      "password": "管理密碼",
+      "submit": "登入",
+      "signing_in": "登入中…",
+      "error_invalid": "密碼錯誤",
+      "error_rate_limited": "登入嘗試過於頻繁，請稍後再試",
+      "error_network": "無法連線到伺服器"
+    },
+    "jobs": {
+      "title": "掃描任務",
+      "empty": "尚無掃描任務",
+      "new_scan": "新增掃描",
+      "col_target": "目標",
+      "col_status": "狀態",
+      "col_risk": "風險",
+      "col_created": "建立時間",
+      "col_actions": "操作",
+      "status_queued": "佇列中",
+      "status_running": "掃描中",
+      "status_done": "完成",
+      "status_failed": "失敗",
+      "status_canceled": "已取消",
+      "status_interrupted": "已中斷",
+      "failon_triggered": "已達門檻",
+      "view": "檢視",
+      "refresh": "重新整理"
+    },
+    "scan": {
+      "title": "新增掃描",
+      "mode_upload": "上傳檔案",
+      "mode_path": "伺服器路徑",
+      "drop_hint": "拖放檔案至此，或點擊選擇",
+      "formats_hint": "支援 zip / tar / tar.gz 或單一檔案",
+      "select_file": "選擇檔案",
+      "root_label": "掃描根目錄",
+      "path_label": "相對路徑",
+      "path_placeholder": "例如 app/service",
+      "no_roots": "未設定掛載掃描根目錄（僅能上傳檔案）",
+      "fail_on": "風險門檻（達此等級即標記）",
+      "fail_on_none": "不設門檻",
+      "submit": "開始掃描",
+      "submitting": "送出中…",
+      "uploading": "上傳中 {{percent}}%",
+      "cancel": "取消",
+      "error_no_file": "請先選擇檔案",
+      "error_no_path": "請輸入掃描路徑"
+    },
+    "job": {
+      "title": "掃描任務詳情",
+      "target": "目標",
+      "created": "建立時間",
+      "started": "開始時間",
+      "finished": "完成時間",
+      "risk": "風險總評",
+      "error_title": "錯誤",
+      "view_report": "檢視報表",
+      "download_report": "下載報表",
+      "download_result": "下載 ScanResult",
+      "cancel": "取消任務",
+      "delete": "刪除任務",
+      "running_hint": "掃描進行中，稍候會自動更新…",
+      "counts": "各嚴重度計數"
+    },
+    "reports": {
+      "title": "報表",
+      "empty": "尚無已完成的報表",
+      "col_target": "目標",
+      "col_risk": "風險",
+      "col_generated": "產生時間",
+      "view": "檢視",
+      "download": "下載"
+    },
+    "system": {
+      "title": "系統資訊",
+      "cytrace_version": "CyTrace 版本",
+      "db_status": "漏洞資料庫",
+      "db_present": "已載入",
+      "db_absent": "未載入（無法掃描）",
+      "upload_limit": "上傳上限",
+      "scan_roots": "掛載掃描根目錄"
+    },
+    "common": {
+      "loading": "載入中…",
+      "retry": "重試",
+      "back": "返回",
+      "confirm": "確定",
+      "cancel": "取消",
+      "unauthorized": "登入已逾時，請重新登入",
+      "error": "發生錯誤"
+    }
+  },
   "report": {
     "title": "依賴風險報表",
     "cover": "機關識別",

@@ -24,6 +24,15 @@ frontend:
 frontend-check:
 	cd frontend && pnpm typecheck
 
+# Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
+# 改 console 前端後跑 make frontend-console 重產。
+frontend-console:
+	cd frontend && pnpm install --frozen-lockfile && pnpm build:console
+	rm -rf crates/cytrace-server/assets/console
+	mkdir -p crates/cytrace-server/assets/console
+	cp -r frontend/dist-console/. crates/cytrace-server/assets/console/
+	@echo "✓ console 已更新（crates/cytrace-server/assets/console/）"
+
 # ── 產品（Rust workspace）──
 build:
 	cargo build --workspace

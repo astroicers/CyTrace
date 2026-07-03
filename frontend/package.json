@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "dev:console": "vite --config vite.console.config.ts",
+    "build:console": "tsc -b && vite build --config vite.console.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit"
   },

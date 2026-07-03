@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-TW">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CyTrace 控制台</title>
+    <!-- CSP 由 axum HTTP header 下發為權威（含 frame-ancestors）；此處不放 meta，避免 dev HMR 干擾。 -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/console/main.tsx"></script>
+  </body>
+</html>

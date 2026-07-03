@@ -8,8 +8,11 @@ use crate::auth;
 use crate::config::ServerConfig;
 use crate::error::{ApiError, ErrorKind, Lang};
 use crate::state::AppState;
+use crate::static_files;
 use axum::extract::State;
-use axum::middleware;
+use axum::http::{header, HeaderValue, Request};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -57,9 +60,38 @@ pub fn build_router_with_state(state: AppState) -> Router {
 
     public
         .merge(protected)
-        .fallback(fallback)
+        .fallback(fallback) // 未命中：/api/* → JSON 404；其餘 → console SPA
         .layer(middleware::from_fn(auth::csrf_guard))
+        .layer(middleware::from_fn(security_headers))
         .with_state(state)
+}
+
+/// 安全標頭：console CSP（connect-src 'self'）+ 常規硬化（ADR-011 §6）。
+/// 報表端點自帶 meta CSP（connect-src 'none'），不受此層影響（HTTP header 與 meta 併存，較嚴者生效）。
+async fn security_headers(req: Request<axum::body::Body>, next: Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    // 只在 handler 未自設 CSP 時填 console CSP——報表端點自帶較寬的 CSP
+    // （需 script-src 'unsafe-inline' 給 singlefile 內聯腳本），不可被此處覆蓋。
+    if !h.contains_key(header::CONTENT_SECURITY_POLICY) {
+        h.insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(
+                "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+                 img-src 'self' data:; font-src 'self'; connect-src 'self'; \
+                 form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            ),
+        );
+    }
+    h.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    resp
 }
 
 /// liveness（無 auth、不洩漏版本；容器 healthcheck 由 `cytrace health` TCP 檢查搭配）。
@@ -69,12 +101,21 @@ async fn healthz() -> &'static str {
 
 /// 版本與 DB 快照狀態（ADR-012 C3：DB 缺失 degraded 回報，CI 冒煙依賴此行為）。
 async fn version(State(app): State<AppState>) -> Json<Value> {
+    let roots: Vec<&str> = app.cfg.scan_roots.iter().map(|(n, _)| n.as_str()).collect();
     Json(json!({
         "cytrace": env!("CARGO_PKG_VERSION"),
         "db": { "present": app.cfg.db_present() },
+        "upload_limit_mb": app.cfg.max_upload_bytes / (1024 * 1024),
+        "scan_roots": roots,
     }))
 }
 
-async fn fallback(lang: Lang) -> ApiError {
-    ApiError::new(lang, ErrorKind::NotFound)
+/// 未命中路由：`/api/*`、`/healthz` → JSON 404；其餘（`/`、`/assets/*`）→ console SPA。
+async fn fallback(lang: Lang, uri: axum::http::Uri) -> Response {
+    let path = uri.path();
+    if path.starts_with("/api/") || path == "/healthz" {
+        ApiError::new(lang, ErrorKind::NotFound).into_response()
+    } else {
+        static_files::console_spa(uri).await
+    }
 }

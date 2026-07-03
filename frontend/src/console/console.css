@@ -1,0 +1,12 @@
+/* 繼承報表的 Tailwind token / 系統字型 / 嚴重度色票（不改 index.css，report 產物不受污染）。 */
+@import '../index.css';
+
+/* job 狀態色 token（色塊 + 文字標籤雙載體，a11y）。 */
+@theme {
+  --color-status-queued: #6b7280;
+  --color-status-running: #1d4ed8;
+  --color-status-done: #15803d;
+  --color-status-failed: #b91c1c;
+  --color-status-canceled: #78716c;
+  --color-status-interrupted: #a16207;
+}

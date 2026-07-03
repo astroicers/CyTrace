@@ -314,3 +314,57 @@ async fn cookie_attributes_hardened() {
     // 無 TLS 設定 → 不加 Secure（HTTP 測試環境）
     assert!(!cookie.contains("Secure"));
 }
+
+// ─── console 靜態服務與 CSP（T806）───
+
+#[tokio::test]
+async fn console_html_served_at_root() {
+    let resp = app()
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp.headers()[header::CONTENT_TYPE].to_str().unwrap();
+    assert!(ct.contains("text/html"), "content-type={ct}");
+}
+
+#[tokio::test]
+async fn hash_route_path_falls_back_to_spa() {
+    // 前端 hash routing：任意非 API 路徑都回 console.html
+    let resp = app()
+        .oneshot(Request::get("/scans/new").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .contains("text/html"));
+}
+
+#[tokio::test]
+async fn console_response_has_hardened_csp() {
+    let resp = app()
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let csp = resp.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap();
+    assert!(csp.contains("script-src 'self'"), "csp={csp}");
+    assert!(csp.contains("connect-src 'self'"));
+    assert!(csp.contains("frame-ancestors 'none'"));
+    // console 不得有 unsafe-inline script（外部檔 bundle）
+    assert!(!csp.contains("script-src 'unsafe-inline'"));
+}
+
+#[tokio::test]
+async fn unknown_api_route_still_json_404_not_spa() {
+    let resp = app()
+        .oneshot(Request::get("/api/v1/nope").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let ct = resp.headers()[header::CONTENT_TYPE].to_str().unwrap();
+    assert!(ct.contains("application/json"), "應回 JSON 而非 SPA HTML");
+}

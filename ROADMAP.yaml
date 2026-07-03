@@ -628,7 +628,7 @@ milestones:
         spec: null
         srs_ref: FR-007
         depends_on: [T803]
-        status: pending
+        status: completed
         estimated_complexity: high
         source_type: manual
         source_ref: ""

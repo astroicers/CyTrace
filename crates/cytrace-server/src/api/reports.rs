@@ -32,6 +32,16 @@ pub async fn report(
     let html = read_artifact(&app, &id, "report.html")
         .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
     let mut resp = ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response();
+    // 報表自帶 CSP（需 script-src 'unsafe-inline' 給 singlefile 內聯腳本；connect-src 'none' 零外連）。
+    // 顯式設此 header → security_headers middleware 不覆蓋（見 router::security_headers）。
+    resp.headers_mut().insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static(
+            "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+             img-src 'self' data:; font-src 'self' data:; connect-src 'none'; \
+             base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        ),
+    );
     if q.download == Some(1) {
         if let Ok(v) = header::HeaderValue::from_str(&format!(
             "attachment; filename=\"cytrace-{id}.report.html\""

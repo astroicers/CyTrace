@@ -15,6 +15,7 @@ pub mod jobs;
 pub mod router;
 pub mod session;
 pub mod state;
+pub mod static_files;
 pub mod targets;
 pub mod tls;
 pub mod upload;
