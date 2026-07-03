@@ -649,7 +649,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T805, T806]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
