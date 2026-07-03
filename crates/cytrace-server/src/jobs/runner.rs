@@ -11,8 +11,14 @@ use cytrace_core::{assemble, failon, parse, timefmt};
 use cytrace_types::{DbSnapshot, Meta, Severity, Summary, ToolVersions};
 use std::path::Path;
 
-/// 送出 job：背景 task 取票（queued）→ running → 終態。呼叫端已 persist queued 記錄。
+/// 送出 job（不清理 input）——掛載目標用。
 pub fn spawn(app: AppState, job_id: String, scan_target: String) {
+    spawn_with_cleanup(app, job_id, scan_target, false)
+}
+
+/// 送出 job：背景 task 取票（queued）→ running → 終態。呼叫端已 persist queued 記錄。
+/// `cleanup_input=true` 時，終態後刪除 `jobs/<id>/input/`（上傳型 job 縮小機密駐留窗）。
+pub fn spawn_with_cleanup(app: AppState, job_id: String, scan_target: String, cleanup_input: bool) {
     tokio::spawn(async move {
         let permit = match app.scan_semaphore.clone().acquire_owned().await {
             Ok(p) => p,
@@ -68,6 +74,9 @@ pub fn spawn(app: AppState, job_id: String, scan_target: String) {
                     });
                 });
             }
+        }
+        if cleanup_input {
+            let _ = std::fs::remove_dir_all(app.jobs.job_dir(&job_id).join("input"));
         }
         drop(permit);
     });

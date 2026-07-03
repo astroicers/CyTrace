@@ -86,6 +86,8 @@ pub enum ErrorKind {
     ForbiddenPath,
     Conflict,
     QueueFull,
+    PayloadTooLarge,
+    UnsupportedArchive,
 }
 
 impl ErrorKind {
@@ -105,6 +107,8 @@ impl ErrorKind {
             ErrorKind::ForbiddenPath => "forbidden_path",
             ErrorKind::Conflict => "conflict",
             ErrorKind::QueueFull => "queue_full",
+            ErrorKind::PayloadTooLarge => "payload_too_large",
+            ErrorKind::UnsupportedArchive => "unsupported_archive",
         }
     }
 
@@ -119,6 +123,8 @@ impl ErrorKind {
             ErrorKind::ForbiddenPath => StatusCode::FORBIDDEN,
             ErrorKind::Conflict => StatusCode::CONFLICT,
             ErrorKind::QueueFull => StatusCode::TOO_MANY_REQUESTS,
+            ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            ErrorKind::UnsupportedArchive => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

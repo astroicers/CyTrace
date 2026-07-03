@@ -7,6 +7,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod api;
+pub mod archive;
 pub mod auth;
 pub mod config;
 pub mod error;
@@ -16,6 +17,7 @@ pub mod session;
 pub mod state;
 pub mod targets;
 pub mod tls;
+pub mod upload;
 
 use config::ServerConfig;
 use cytrace_i18n::Catalog;

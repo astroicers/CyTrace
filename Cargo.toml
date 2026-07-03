@@ -32,7 +32,11 @@ cytrace-server = { path = "crates/cytrace-server" }
 
 # Web 服務模式（ADR-011；features 最小化、禁任何 HTTP client）
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "multipart"] }
+# 上傳壓縮包安全解壓（ADR-011 §6；純 Rust、features 最小化）
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 argon2 = "0.5"
 getrandom = "0.2"
 rpassword = "7"

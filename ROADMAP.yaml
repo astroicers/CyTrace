@@ -609,7 +609,7 @@ milestones:
         spec: null
         srs_ref: NFR-09
         depends_on: [T804]
-        status: pending
+        status: completed
         estimated_complexity: high
         source_type: manual
         source_ref: ""

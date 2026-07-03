@@ -43,7 +43,10 @@
       "validation": "請求格式錯誤",
       "forbidden_path": "不允許的掃描路徑",
       "conflict": "job 執行中，無法刪除（可等完成或先取消）",
-      "queue_full": "掃描佇列已滿，請稍後再送出"
+      "queue_full": "掃描佇列已滿，請稍後再送出",
+      "payload_too_large": "上傳或解壓內容超過大小上限",
+      "unsupported_archive": "不支援的壓縮格式（僅 zip / tar / tar.gz）",
+      "extract_too_large": "解壓內容超過大小上限"
     },
     "job": {
       "interrupted": "伺服器重啟時中斷；請重新建立掃描"

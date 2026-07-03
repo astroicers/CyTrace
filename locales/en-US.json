@@ -43,7 +43,10 @@
       "validation": "Invalid request",
       "forbidden_path": "Scan path not allowed",
       "conflict": "Job is running; cancel or wait before deleting",
-      "queue_full": "Scan queue is full; try again later"
+      "queue_full": "Scan queue is full; try again later",
+      "payload_too_large": "Upload or extracted content exceeds size limit",
+      "unsupported_archive": "Unsupported archive format (zip / tar / tar.gz only)",
+      "extract_too_large": "Extracted content exceeds size limit"
     },
     "job": {
       "interrupted": "Interrupted by server restart; please re-submit the scan"

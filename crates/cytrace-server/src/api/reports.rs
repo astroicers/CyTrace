@@ -1,0 +1,86 @@
+//! 報表與稽核產物端點（ADR-011 §4）：線上檢視 / 下載 / ScanResult / sbom·grype。
+
+use crate::error::{ApiError, ErrorKind, Lang};
+use crate::state::AppState;
+use axum::extract::{Path, Query, State};
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
+use std::path::PathBuf;
+
+#[derive(Deserialize)]
+pub struct DownloadQuery {
+    download: Option<u8>,
+}
+
+/// 讀 job 目錄下的產物檔（路徑固定、不吃使用者輸入 → 無穿越風險）。
+fn read_artifact(app: &AppState, id: &str, file: &str) -> Option<Vec<u8>> {
+    let path: PathBuf = app.jobs.job_dir(id).join(file);
+    std::fs::read(path).ok()
+}
+
+/// `GET /api/v1/jobs/{id}/report[?download=1]`：自包含單檔 HTML。
+pub async fn report(
+    State(app): State<AppState>,
+    lang: Lang,
+    Path(id): Path<String>,
+    Query(q): Query<DownloadQuery>,
+) -> Result<Response, ApiError> {
+    if app.jobs.get(&id).is_none() {
+        return Err(ApiError::new(lang, ErrorKind::NotFound));
+    }
+    let html = read_artifact(&app, &id, "report.html")
+        .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
+    let mut resp = ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response();
+    if q.download == Some(1) {
+        if let Ok(v) = header::HeaderValue::from_str(&format!(
+            "attachment; filename=\"cytrace-{id}.report.html\""
+        )) {
+            resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+        }
+    }
+    Ok(resp)
+}
+
+/// `GET /api/v1/jobs/{id}/result`：ScanResult JSON（ADR-009 稽核產物，可餵回 `cytrace report`）。
+pub async fn result(
+    State(app): State<AppState>,
+    lang: Lang,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    artifact_json(&app, lang, &id, "scan-result.json")
+}
+
+#[derive(Deserialize)]
+pub struct ArtifactKind {
+    id: String,
+    kind: String,
+}
+
+/// `GET /api/v1/jobs/{id}/artifacts/{kind}`：sbom | grype。
+pub async fn artifact(
+    State(app): State<AppState>,
+    lang: Lang,
+    Path(p): Path<ArtifactKind>,
+) -> Result<Response, ApiError> {
+    let file = match p.kind.as_str() {
+        "sbom" => "sbom.cdx.json",
+        "grype" => "grype.json",
+        _ => return Err(ApiError::new(lang, ErrorKind::NotFound)),
+    };
+    artifact_json(&app, lang, &p.id, file)
+}
+
+fn artifact_json(app: &AppState, lang: Lang, id: &str, file: &str) -> Result<Response, ApiError> {
+    if app.jobs.get(id).is_none() {
+        return Err(ApiError::new(lang, ErrorKind::NotFound));
+    }
+    let bytes =
+        read_artifact(app, id, file).ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        bytes,
+    )
+        .into_response())
+}

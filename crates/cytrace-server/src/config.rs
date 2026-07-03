@@ -53,8 +53,12 @@ pub struct ServerConfig {
     pub max_concurrent_scans: usize,
     /// 佇列上限——非終態 job 總數（`CYTRACE_MAX_QUEUED`，預設 32）。
     pub max_queued: usize,
-    /// 掃描完成後保留上傳原檔（`CYTRACE_KEEP_INPUT`，預設 false；T805 使用）。
+    /// 掃描完成後保留上傳原檔（`CYTRACE_KEEP_INPUT`，預設 false）。
     pub keep_input: bool,
+    /// 上傳大小上限 bytes（`CYTRACE_MAX_UPLOAD_MB`，預設 512MB）。
+    pub max_upload_bytes: u64,
+    /// 總解壓量上限 bytes（`CYTRACE_MAX_EXTRACT_MB`，預設 min(10×上傳, 4GB)）。
+    pub max_extract_bytes: u64,
 }
 
 impl ServerConfig {
@@ -141,6 +145,17 @@ impl ServerConfig {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
+        let max_upload_bytes = parse_usize("CYTRACE_MAX_UPLOAD_MB", 512)? as u64 * 1024 * 1024;
+        let max_extract_bytes = match env.get("CYTRACE_MAX_EXTRACT_MB") {
+            Some(raw) => {
+                (raw.parse::<u64>().map_err(|_| {
+                    CytraceError::Config(format!("CYTRACE_MAX_EXTRACT_MB 不是整數：{raw}"))
+                })?) * 1024
+                    * 1024
+            }
+            None => (max_upload_bytes.saturating_mul(10)).min(4 * 1024 * 1024 * 1024),
+        };
+
         Ok(ServerConfig {
             bind,
             data_dir,
@@ -153,6 +168,8 @@ impl ServerConfig {
             max_concurrent_scans,
             max_queued,
             keep_input,
+            max_upload_bytes,
+            max_extract_bytes,
         })
     }
 

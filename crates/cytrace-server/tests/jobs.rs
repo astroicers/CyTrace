@@ -332,3 +332,201 @@ async fn targets_endpoint_lists_root_names_only() {
     assert_eq!(v["roots"][0]["name"], "targets");
     assert!(v["roots"][0].get("path").is_none(), "不得洩漏實際路徑");
 }
+
+// ─── 上傳與報表端點（T805）───
+
+fn multipart_body(boundary: &str, filename: &str, data: &[u8], fail_on: Option<&str>) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(data);
+    body.extend_from_slice(b"\r\n");
+    if let Some(f) = fail_on {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"fail_on\"\r\n\r\n{f}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    body
+}
+
+fn make_zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut buf);
+        let opt = zip::write::SimpleFileOptions::default();
+        for (name, data) in entries {
+            w.start_file(*name, opt).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap();
+    }
+    buf.into_inner()
+}
+
+async fn upload_scan(
+    app: &Router,
+    cookie: &str,
+    body: Vec<u8>,
+    boundary: &str,
+) -> (StatusCode, serde_json::Value) {
+    let req = with_csrf_and(Request::post("/api/v1/jobs/upload"))
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, cookie)
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    (status, json_of(resp).await)
+}
+
+#[tokio::test]
+async fn upload_zip_scans_and_produces_report() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let zip = make_zip_bytes(&[("app/main.py", b"print(1)"), ("app/lib.py", b"x=2")]);
+    let boundary = "----cytracetest";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "app.zip", &zip, Some("high")),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["target"], "upload:app.zip");
+
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+
+    // 報表端點：線上檢視回 HTML
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/jobs/{id}/report"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()[header::CONTENT_TYPE],
+        "text/html; charset=utf-8"
+    );
+
+    // download=1 → attachment
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/jobs/{id}/report?download=1"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(resp.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains("attachment"));
+
+    // result / artifacts JSON
+    for (path, key) in [
+        ("result", "schema_version"),
+        ("artifacts/sbom", "bomFormat"),
+    ] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/jobs/{id}/{path}"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "path={path}");
+        let _ = key; // 存在即可（形狀由 core golden 保證）
+    }
+
+    // input 掃後預設刪除（keep_input=false）
+    assert!(!env.base.join("data/jobs").join(&id).join("input").exists());
+}
+
+#[tokio::test]
+async fn upload_zip_slip_rejected() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let zip = make_zip_bytes(&[("ok.txt", b"x"), ("../evil.txt", b"pwn")]);
+    let boundary = "----cytraceslip";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "e.zip", &zip, None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["error"]["kind"], "forbidden_path");
+}
+
+#[tokio::test]
+async fn upload_over_size_limit_rejected() {
+    // 上傳上限設 0（=0MB → 任何內容超限）
+    let env = {
+        let base = std::env::temp_dir().join(format!(
+            "cytrace-jobs-test-{}-{}",
+            std::process::id(),
+            DIR_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let db_dir = base.join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        std::fs::write(db_dir.join("metadata.json"), "{}").unwrap();
+        let mut env: HashMap<String, String> = HashMap::new();
+        env.insert("CYTRACE_ADMIN_PASSWORD_HASH".into(), TEST_PHC.clone());
+        env.insert("GRYPE_DB_CACHE_DIR".into(), db_dir.display().to_string());
+        env.insert("CYTRACE_MAX_UPLOAD_MB".into(), "0".into());
+        let cfg = ServerConfig::resolve(
+            CliFlags {
+                bind: Some("127.0.0.1:0".into()),
+                data_dir: Some(base.join("data")),
+                ..Default::default()
+            },
+            env,
+        )
+        .unwrap();
+        TestEnv {
+            app: build_router_with_state(AppState::with_engine(cfg, Arc::new(FakeEngine)).unwrap()),
+            base,
+        }
+    };
+    let cookie = login(&env.app).await;
+    let boundary = "----cytracebig";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "big.bin", b"some bytes here", None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{v}");
+    assert_eq!(v["error"]["kind"], "payload_too_large");
+}

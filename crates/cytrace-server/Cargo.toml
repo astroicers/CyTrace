@@ -22,6 +22,9 @@ rustls = { workspace = true }
 argon2 = { workspace = true }
 getrandom = { workspace = true }
 sha2 = { workspace = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
 
 [dev-dependencies]
 tower = { workspace = true }

@@ -36,9 +36,20 @@ pub fn build_router_with_state(state: AppState) -> Router {
         .route("/api/v1/targets", get(api::jobs::targets_list))
         .route("/api/v1/jobs", get(api::jobs::list).post(api::jobs::create))
         .route(
+            "/api/v1/jobs/upload",
+            axum::routing::post(api::jobs::upload),
+        )
+        .route(
             "/api/v1/jobs/{id}",
             get(api::jobs::get).delete(api::jobs::delete),
         )
+        .route("/api/v1/jobs/{id}/report", get(api::reports::report))
+        .route("/api/v1/jobs/{id}/result", get(api::reports::result))
+        .route(
+            "/api/v1/jobs/{id}/artifacts/{kind}",
+            get(api::reports::artifact),
+        )
+        .layer(axum::extract::DefaultBodyLimit::disable()) // 上傳大小由 handler 串流計數把關
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_session,
