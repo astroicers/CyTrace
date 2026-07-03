@@ -4,7 +4,9 @@ resolver = "2"
 members = [
     "crates/cytrace-types",
     "crates/cytrace-core",
+    "crates/cytrace-i18n",
     "crates/cytrace-report",
+    "crates/cytrace-server",
     "crates/cytrace-cli",
 ]
 
@@ -24,7 +26,29 @@ clap = { version = "4", features = ["derive"] }
 # 內部 crate（模組邊界鐵律見 SDS §2）
 cytrace-types = { path = "crates/cytrace-types" }
 cytrace-core = { path = "crates/cytrace-core" }
+cytrace-i18n = { path = "crates/cytrace-i18n" }
 cytrace-report = { path = "crates/cytrace-report" }
+cytrace-server = { path = "crates/cytrace-server" }
+
+# Web 服務模式（ADR-011；features 最小化、禁任何 HTTP client）
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "multipart"] }
+# 上傳壓縮包安全解壓（ADR-011 §6；純 Rust、features 最小化）
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+argon2 = "0.5"
+getrandom = "0.2"
+rpassword = "7"
+sha2 = "0.10"
+rust-embed = "8"
+mime_guess = "2"
+# TLS：自帶 PEM 憑證（ADR-011；ring provider——musl/msvc 皆可建、免 cmake）
+axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+# 測試用（oneshot router 測試，不開真實 socket）
+tower = { version = "0.5", default-features = false, features = ["util"] }
+http-body-util = "0.1"
 
 # 穩定優先（NFR-02）：release 以體積/可重現為先
 [profile.release]

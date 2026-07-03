@@ -20,6 +20,8 @@
 [CmdletBinding()]
 param(
   [string]$OutDir = "delivery",
+  # 引擎版本事實源：scripts/versions.env（Dockerfile ARG / CI 直接讀取）。
+  # 此處 default 須與 versions.env 同步——bump 引擎版本時三處一起改（ADR-012 checklist）。
   [string]$SyftVersion = "1.45.1",
   [string]$GrypeVersion = "0.114.0",
   [string]$DbPath = "$env:LOCALAPPDATA\grype\db",
@@ -94,6 +96,8 @@ $env:Path = "$here\bin;$env:Path"
 $env:GRYPE_DB_CACHE_DIR = "$here\db"
 $env:GRYPE_DB_AUTO_UPDATE = 'false'
 $env:GRYPE_DB_VALIDATE_AGE = 'false'
+$env:GRYPE_CHECK_FOR_APP_UPDATE = 'false'
+$env:SYFT_CHECK_FOR_APP_UPDATE = 'false'
 & "$here\bin\cytrace.exe" @args
 exit $LASTEXITCODE
 '@ | Out-File -Encoding utf8 "$Bundle\cytrace-offline.ps1"

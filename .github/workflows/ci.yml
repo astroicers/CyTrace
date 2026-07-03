@@ -23,11 +23,29 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test（含 golden baseline）
         run: cargo test --workspace
+      - name: 純 CLI 可退（--no-default-features 零 tokio，CLI 零迴歸）
+        run: cargo build --no-default-features -p cytrace-cli --locked
+      - name: 零 HTTP client 依賴（零外連機械保證，ADR-011）
+        run: |
+          if cargo tree -e normal 2>/dev/null | grep -iE 'reqwest|hyper-tls|native-tls|(^| )ureq( |$)|(^| )curl( |$)'; then
+            echo "✗ 依賴樹出現 HTTP client（違反零外連鐵則）"; exit 1
+          else
+            echo "✓ 依賴樹無 HTTP client"
+          fi
       - name: i18n 鍵一致（NFR-06）
         run: python3 scripts/i18n-check.py
 
+  supply-chain:
+    name: 供應鏈（cargo-deny：license / 來源白名單）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses sources bans
+
   frontend:
-    name: 前端（typecheck + 單檔 build）
+    name: 前端（typecheck + 報表/console build + 零外連）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -43,8 +61,14 @@ jobs:
         run: cd frontend && pnpm install --frozen-lockfile
       - name: typecheck
         run: cd frontend && pnpm typecheck
-      - name: build（單檔內聯）
+      - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
+      - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）
+        run: |
+          if ! grep -q '<!--CYTRACE_DATA-->' frontend/dist/index.html; then
+            echo "✗ 報表 sentinel 遺失（注入契約被破壞）"; exit 1
+          fi
+          echo "✓ 報表 sentinel 完整"
       - name: 零外連自檢（報表不得有外部 http(s) 資源）
         run: |
           if grep -nE 'src="https?://|href="https?://' frontend/dist/index.html; then
@@ -52,6 +76,10 @@ jobs:
           else
             echo "✓ 報表零外部資源"
           fi
+      - name: build console SPA
+        run: cd frontend && pnpm build:console
+      - name: console 零外連自檢
+        run: bash scripts/console-egress-check.sh frontend/dist-console
 
   windows-package:
     name: Windows 安裝包冒煙（package.ps1 -SkipDb）

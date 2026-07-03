@@ -58,10 +58,24 @@ cargo build --release
 | `cytrace scan <目標> [-o 目錄]` | 只產 `sbom.cdx.json` 與 `grype.json` |
 | `cytrace report <json> [-o 檔]` | 由既有 ScanResult JSON 離線重現報表（稽核複核） |
 | `cytrace batch <t1> <t2> …` | 多目標批次掃描 |
+| `cytrace serve [--tls-cert/--tls-key]` | Web 服務模式：登入控制台 + 掃描/報表 API（ADR-011） |
+| `cytrace hash-password` | 離線產生管理密碼 argon2id hash |
 
 - **目標格式**：`dir:/路徑`、`映像:標籤`（容器）、檔案系統
 - **語言**：`--lang zh-TW｜en-US`
 - **退出碼**：`0` 正常／`2` 達 `--fail-on` 門檻／`1` 錯誤
+
+### 容器（Web 服務模式）
+
+```bash
+# 產管理密碼 hash，起站，瀏覽器登入操作
+docker run --rm ghcr.io/astroicers/cytrace:latest hash-password
+docker run -d --read-only --tmpfs /tmp -p 8443:8443 \
+  -v ./data:/data -v ./db:/db:ro \
+  -e CYTRACE_ADMIN_PASSWORD_HASH='<hash>' \
+  ghcr.io/astroicers/cytrace:latest
+```
+詳見 [docs/DOCKER.md](docs/DOCKER.md)；離線搬運見 [docs/DELIVERY_SOP.md](docs/DELIVERY_SOP.md) §7。
 
 ## 嚴重度尺度
 

@@ -52,8 +52,12 @@ CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
   - Syft  (Anchore, Apache-2.0)  — SBOM 產生
   - Grype (Anchore, Apache-2.0)  — 漏洞比對
 
-Rust 相依套件之授權見隨附 cytrace.sbom.cdx.json。
-供應鏈純淨：本產品不含中國大陸來源依賴（如 OpenSCA-cli）。
+Web 服務模式（cytrace serve，ADR-011）的 TLS 由 rustls + ring 提供：
+  - ring — 授權為 ISC 與 OpenSSL/BoringSSL 混合（見 ring crate LICENSE）。
+    全部 Rust 相依套件授權（含 tokio/axum/argon2 等）與版本見隨附 cytrace.sbom.cdx.json。
+
+供應鏈純淨：本產品不含中國大陸來源依賴（如 OpenSCA-cli）；
+Rust 相依經 cargo-deny（license/來源白名單）於 CI 把關。
 NOTICE
 
 # 6) 離線執行 wrapper
@@ -66,6 +70,9 @@ export PATH="$HERE/bin:$PATH"
 export GRYPE_DB_CACHE_DIR="$HERE/db"
 export GRYPE_DB_AUTO_UPDATE=false
 export GRYPE_DB_VALIDATE_AGE=false
+# 關閉 syft/grype 的 app update-check outbound（零外連；與容器 ENV 一致，ADR-012）
+export GRYPE_CHECK_FOR_APP_UPDATE=false
+export SYFT_CHECK_FOR_APP_UPDATE=false
 exec "$HERE/bin/cytrace" "$@"
 WRAP
 chmod +x "$BUNDLE/cytrace-offline" "$BUNDLE/bin/cytrace"

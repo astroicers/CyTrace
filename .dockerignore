@@ -1,0 +1,13 @@
+# build context 精簡（保留 crates/cytrace-report/assets/ 與 crates/cytrace-server/assets/）
+target/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-console/
+delivery/
+.git/
+docs/
+*.report.html
+.asp-*
+.asp-gate-log/
+.claude/
+*.tsbuildinfo

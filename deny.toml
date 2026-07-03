@@ -1,0 +1,41 @@
+# cargo-deny 設定（ADR-011：供應鏈守門，license/來源白名單）
+# CI：cargo deny check licenses sources bans
+
+[licenses]
+# 白名單制：不在清單內的 license 直接 fail（供應鏈純淨鐵則）
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+]
+confidence-threshold = 0.9
+# ring（T803 rustls 引入時）授權為 ISC/MIT/OpenSSL 混合——屆時以 clarify 條目
+# 明確標註並在 NOTICE 揭露（ADR-011 審查點）；審查不過改 aws-lc-rs。
+
+[sources]
+# 只允許 crates.io——禁 git 依賴、禁第三方 registry（禁中國來源鐵則的機械面）
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[bans]
+# 重複版本先觀察不擋（tokio 生態常見）；HTTP client 類 crate 全域禁止（零外連機械保證）
+multiple-versions = "warn"
+deny = [
+    { crate = "reqwest", reason = "零外連鐵則：依賴樹不得存在 HTTP client（ADR-011）" },
+    { crate = "curl", reason = "零外連鐵則：依賴樹不得存在 HTTP client（ADR-011）" },
+    { crate = "ureq", reason = "零外連鐵則：依賴樹不得存在 HTTP client（ADR-011）" },
+    { crate = "hyper-tls", reason = "零外連鐵則：不得出現 client TLS 堆疊（ADR-011）" },
+    { crate = "native-tls", reason = "零外連鐵則 + musl 靜態：禁 OpenSSL 動態連結（ADR-011）" },
+    { crate = "openssl-sys", reason = "musl 靜態可重現建置：禁 C 依賴 OpenSSL（ADR-007/011）" },
+]
+
+[advisories]
+# 離線環境不強制 advisory DB（有網 CI 跑 report-only；正式弱點掃描走 grype dogfooding）
+db-path = "~/.cargo/advisory-db"

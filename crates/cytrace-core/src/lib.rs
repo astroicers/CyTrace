@@ -3,10 +3,12 @@
 //! 模組邊界鐵律：業務規則只在本 crate；型別只在 `cytrace-types`；CLI 不含業務邏輯。
 //! 嚴重度分級與 fail-on 為**純函式**，不依賴 live 引擎，可用 fixture 完整測試（air-gapped 設計）。
 
+pub mod engine;
 pub mod error;
 pub mod failon;
 pub mod parse;
 pub mod severity;
+pub mod timefmt;
 
 pub use error::{CytraceError, Result};
 

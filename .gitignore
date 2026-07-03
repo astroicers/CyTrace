@@ -16,9 +16,10 @@
 **/*.rs.bk
 Cargo.lock.bak
 
-# ── Node / 前端（報表檢視器）──
+# ── Node / 前端（報表檢視器 + console）──
 node_modules/
 dist/
+dist-console/
 .vite/
 *.tsbuildinfo
 

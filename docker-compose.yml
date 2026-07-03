@@ -1,0 +1,33 @@
+# CyTrace 容器部署範例（ADR-012）。生產請依場域調整路徑與資源。
+# 起站前：以 `cytrace hash-password` 產生 CYTRACE_ADMIN_PASSWORD_HASH。
+services:
+  cytrace:
+    image: ghcr.io/astroicers/cytrace:latest
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # 依掃描目標大小調整；syft 暫存過大會 ENOSPC
+      - /tmp:size=1g
+    ports:
+      - "8443:8443"
+    environment:
+      # 必填：argon2id PHC 字串（不收明文）
+      CYTRACE_ADMIN_PASSWORD_HASH: "${CYTRACE_ADMIN_PASSWORD_HASH:?請先以 cytrace hash-password 產生}"
+      # 選填 TLS（掛憑證後啟用）
+      CYTRACE_TLS_CERT: /certs/tls.crt
+      CYTRACE_TLS_KEY: /certs/tls.key
+      # 掛載目錄掃描白名單
+      CYTRACE_SCAN_ROOTS: "targets=/scan-targets"
+    volumes:
+      - ./data:/data                 # rw：job 結果與報表
+      - ./db:/db:ro                  # grype DB 快照（DELIVERY_SOP §5 更新的同一份）
+      - ./certs:/certs:ro            # TLS 憑證（選用）
+      - ./targets:/scan-targets:ro   # 掃描目標
+    healthcheck:
+      test: ["CMD", "cytrace", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

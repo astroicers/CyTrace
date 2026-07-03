@@ -12,7 +12,147 @@
     "done": "Done: {{count}} vulnerabilities, overall risk {{risk}}",
     "fail_on_triggered": "Reached --fail-on threshold ({{threshold}}), exiting with code 2",
     "engine_missing": "Engine binary not found: {{engine}} (check the bundled path)",
-    "report_written": "Report written: {{path}}"
+    "report_written": "Report written: {{path}}",
+    "hashpw": {
+      "prompt": "Enter password (min {{min}} characters): ",
+      "confirm": "Confirm password: ",
+      "mismatch": "Passwords do not match",
+      "too_short": "Password must be at least {{min}} characters",
+      "done": "argon2id PHC string (set as CYTRACE_ADMIN_PASSWORD_HASH):"
+    },
+    "health": {
+      "ok": "Service alive: {{addr}}",
+      "fail": "Cannot connect: {{addr}}"
+    }
+  },
+  "server": {
+    "listening": "CyTrace server listening on {{addr}}",
+    "shutdown": "Shutdown signal received, stopping…",
+    "plaintext_warning": "⚠️ TLS not configured — serving plaintext HTTP (set CYTRACE_TLS_CERT/KEY to enable HTTPS)",
+    "err": {
+      "engine": "Engine subprocess error",
+      "parse": "Parse error",
+      "io": "I/O error",
+      "config": "Configuration error",
+      "db_missing": "Vulnerability DB snapshot missing; scanning unavailable",
+      "not_found": "Resource not found",
+      "internal": "Internal server error",
+      "auth": "Not signed in or invalid credentials",
+      "csrf": "Missing required request header (CSRF protection)",
+      "rate_limited": "Too many login attempts; try again later",
+      "validation": "Invalid request",
+      "forbidden_path": "Scan path not allowed",
+      "conflict": "Job is running; cancel or wait before deleting",
+      "queue_full": "Scan queue is full; try again later",
+      "payload_too_large": "Upload or extracted content exceeds size limit",
+      "unsupported_archive": "Unsupported archive format (zip / tar / tar.gz only)",
+      "extract_too_large": "Extracted content exceeds size limit"
+    },
+    "job": {
+      "interrupted": "Interrupted by server restart; please re-submit the scan"
+    }
+  },
+  "console": {
+    "app": {
+      "title": "CyTrace Console",
+      "nav_dashboard": "Scans",
+      "nav_new_scan": "New scan",
+      "nav_reports": "Reports",
+      "nav_system": "System",
+      "logout": "Sign out"
+    },
+    "login": {
+      "title": "Sign in to CyTrace Console",
+      "subtitle": "On-premises dependency risk scanning",
+      "password": "Admin password",
+      "submit": "Sign in",
+      "signing_in": "Signing in…",
+      "error_invalid": "Incorrect password",
+      "error_rate_limited": "Too many login attempts; try again later",
+      "error_network": "Cannot reach the server"
+    },
+    "jobs": {
+      "title": "Scans",
+      "empty": "No scans yet",
+      "new_scan": "New scan",
+      "col_target": "Target",
+      "col_status": "Status",
+      "col_risk": "Risk",
+      "col_created": "Created",
+      "col_actions": "Actions",
+      "status_queued": "Queued",
+      "status_running": "Running",
+      "status_done": "Done",
+      "status_failed": "Failed",
+      "status_canceled": "Canceled",
+      "status_interrupted": "Interrupted",
+      "failon_triggered": "Threshold met",
+      "view": "View",
+      "refresh": "Refresh"
+    },
+    "scan": {
+      "title": "New scan",
+      "mode_upload": "Upload file",
+      "mode_path": "Server path",
+      "drop_hint": "Drop a file here, or click to choose",
+      "formats_hint": "zip / tar / tar.gz or a single file",
+      "select_file": "Choose file",
+      "root_label": "Scan root",
+      "path_label": "Relative path",
+      "path_placeholder": "e.g. app/service",
+      "no_roots": "No mounted scan roots configured (upload only)",
+      "fail_on": "Risk threshold (flag at this level)",
+      "fail_on_none": "No threshold",
+      "submit": "Start scan",
+      "submitting": "Submitting…",
+      "uploading": "Uploading {{percent}}%",
+      "cancel": "Cancel",
+      "error_no_file": "Please choose a file first",
+      "error_no_path": "Please enter a scan path"
+    },
+    "job": {
+      "title": "Scan details",
+      "target": "Target",
+      "created": "Created",
+      "started": "Started",
+      "finished": "Finished",
+      "risk": "Overall risk",
+      "error_title": "Error",
+      "view_report": "View report",
+      "download_report": "Download report",
+      "download_result": "Download ScanResult",
+      "cancel": "Cancel scan",
+      "delete": "Delete scan",
+      "running_hint": "Scan in progress; this will update automatically…",
+      "counts": "Counts by severity"
+    },
+    "reports": {
+      "title": "Reports",
+      "empty": "No completed reports yet",
+      "col_target": "Target",
+      "col_risk": "Risk",
+      "col_generated": "Generated",
+      "view": "View",
+      "download": "Download"
+    },
+    "system": {
+      "title": "System",
+      "cytrace_version": "CyTrace version",
+      "db_status": "Vulnerability DB",
+      "db_present": "Loaded",
+      "db_absent": "Not loaded (scanning unavailable)",
+      "upload_limit": "Upload limit",
+      "scan_roots": "Mounted scan roots"
+    },
+    "common": {
+      "loading": "Loading…",
+      "retry": "Retry",
+      "back": "Back",
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "unauthorized": "Session expired; please sign in again",
+      "error": "Something went wrong"
+    }
   },
   "report": {
     "title": "Dependency Risk Report",

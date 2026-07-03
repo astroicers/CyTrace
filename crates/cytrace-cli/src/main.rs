@@ -2,16 +2,13 @@
 //!
 //! 退出碼語意（ADR-006 / SDS §5）：`0` 正常 / `2` `--fail-on` 觸發 / 其他非 0 為錯誤。
 
-mod engine;
-mod i18n;
-
 use clap::{Parser, Subcommand};
-use cytrace_core::{assemble, failon, parse};
+use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
+use cytrace_core::{assemble, engine, failon, parse};
+use cytrace_i18n::Catalog;
 use cytrace_types::{DbSnapshot, Meta, Severity, ToolVersions};
-use i18n::Catalog;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const EXIT_OK: u8 = 0;
 const EXIT_FAILON: u8 = 2;
@@ -65,6 +62,32 @@ enum Command {
         /// 報表輸出路徑（預設 ./<input>.report.html）。
         #[arg(long, short)]
         out: Option<PathBuf>,
+    },
+    /// 啟動 Web 服務模式（ADR-011）：登入控制台 + 掃描/報表 API。
+    #[cfg(feature = "server")]
+    Serve {
+        /// 監聽位址（預設 127.0.0.1:8443；亦可用 CYTRACE_BIND）。
+        #[arg(long)]
+        bind: Option<String>,
+        /// 資料目錄（job 與報表產物；預設 /data；亦可用 CYTRACE_DATA_DIR）。
+        #[arg(long)]
+        data_dir: Option<PathBuf>,
+        /// TLS 憑證 PEM（與 --tls-key 成對；亦可用 CYTRACE_TLS_CERT）。
+        #[arg(long)]
+        tls_cert: Option<PathBuf>,
+        /// TLS 金鑰 PEM（與 --tls-cert 成對；亦可用 CYTRACE_TLS_KEY）。
+        #[arg(long)]
+        tls_key: Option<PathBuf>,
+    },
+    /// 離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）。
+    #[cfg(feature = "server")]
+    HashPassword,
+    /// 服務存活檢查（TCP connect；容器 HEALTHCHECK 用，distroless 無 shell）。
+    #[cfg(feature = "server")]
+    Health {
+        /// 檢查位址（預設同 serve 解析順序：--bind > CYTRACE_BIND > 127.0.0.1:8443）。
+        #[arg(long)]
+        bind: Option<String>,
     },
 }
 
@@ -126,7 +149,70 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             }
             Ok(worst)
         }
+        #[cfg(feature = "server")]
+        Command::Serve {
+            bind,
+            data_dir,
+            tls_cert,
+            tls_key,
+        } => {
+            let cfg = cytrace_server::config::ServerConfig::resolve(
+                cytrace_server::config::CliFlags {
+                    bind: bind.clone(),
+                    data_dir: data_dir.clone(),
+                    tls_cert: tls_cert.clone(),
+                    tls_key: tls_key.clone(),
+                },
+                std::env::vars().collect(),
+            )?;
+            cytrace_server::serve(cfg, &cli.lang)?;
+            Ok(EXIT_OK)
+        }
+        #[cfg(feature = "server")]
+        Command::HashPassword => hash_password_interactive(cat),
+        #[cfg(feature = "server")]
+        Command::Health { bind } => {
+            // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
+            let bind_raw = bind
+                .clone()
+                .or_else(|| std::env::var("CYTRACE_BIND").ok())
+                .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string());
+            let target: std::net::SocketAddr = bind_raw
+                .parse()
+                .map_err(|_| anyhow::anyhow!("位址不合法 / invalid address: {bind_raw}"))?;
+            let addr = target.to_string();
+            match std::net::TcpStream::connect_timeout(&target, std::time::Duration::from_secs(3)) {
+                Ok(_) => {
+                    println!("{}", cat.t("cli.health.ok", &[("addr", &addr)]));
+                    Ok(EXIT_OK)
+                }
+                Err(_) => {
+                    eprintln!("{}", cat.t("cli.health.fail", &[("addr", &addr)]));
+                    Ok(EXIT_ERR)
+                }
+            }
+        }
     }
+}
+
+/// 互動式讀密碼兩次（隱藏輸入）→ 輸出 argon2id PHC 字串。
+#[cfg(feature = "server")]
+fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
+    use cytrace_server::auth::{hash_password, MIN_PASSWORD_LEN};
+    let min = MIN_PASSWORD_LEN.to_string();
+    let pw = rpassword::prompt_password(cat.t("cli.hashpw.prompt", &[("min", &min)]))?;
+    if pw.chars().count() < MIN_PASSWORD_LEN {
+        eprintln!("{}", cat.t("cli.hashpw.too_short", &[("min", &min)]));
+        return Ok(EXIT_ERR);
+    }
+    let confirm = rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[]))?;
+    if pw != confirm {
+        eprintln!("{}", cat.t("cli.hashpw.mismatch", &[]));
+        return Ok(EXIT_ERR);
+    }
+    println!("{}", cat.t("cli.hashpw.done", &[]));
+    println!("{}", hash_password(&pw)?);
+    Ok(EXIT_OK)
 }
 
 /// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。
@@ -191,32 +277,6 @@ fn meta_for(target: &str) -> Meta {
     }
 }
 
-fn epoch_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Unix epoch 秒 → ISO-8601 UTC 字串（純函式、零依賴；civil-from-days 演算法）。
-fn epoch_to_iso(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (h, mi, s) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    // Howard Hinnant 的 civil_from_days（自 1970-01-01 起的天數）
-    let z = days + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
-}
-
 fn default_report_path(input: &Path) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("scan");
     PathBuf::from(format!("{stem}.report.html"))
@@ -270,13 +330,6 @@ mod tests {
             default_report_path(Path::new("a/b/scan.json")),
             PathBuf::from("scan.report.html")
         );
-    }
-
-    #[test]
-    fn epoch_to_iso_formats_utc() {
-        assert_eq!(epoch_to_iso(0), "1970-01-01T00:00:00Z");
-        assert_eq!(epoch_to_iso(1_609_459_200), "2021-01-01T00:00:00Z");
-        assert_eq!(epoch_to_iso(1_782_295_451), "2026-06-24T10:04:11Z");
     }
 
     #[test]
