@@ -132,8 +132,9 @@
       "col_target": "目標",
       "col_risk": "風險",
       "col_generated": "產生時間",
-      "view": "檢視",
-      "download": "下載"
+      "view": "檢視報表",
+      "download": "下載",
+      "detail": "詳情"
     },
     "system": {
       "title": "系統資訊",

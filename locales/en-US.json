@@ -132,8 +132,9 @@
       "col_target": "Target",
       "col_risk": "Risk",
       "col_generated": "Generated",
-      "view": "View",
-      "download": "Download"
+      "view": "View report",
+      "download": "Download",
+      "detail": "Details"
     },
     "system": {
       "title": "System",

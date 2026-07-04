@@ -71,7 +71,7 @@ export function ReportsPage() {
                         onClick={() => navigate({ page: 'job', id: job.id })}
                         className="text-sm text-gray-500 hover:underline"
                       >
-                        {t('console.jobs.view')}
+                        {t('console.reports.detail')}
                       </button>
                     </div>
                   </td>
