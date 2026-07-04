@@ -122,9 +122,17 @@ jobs:
           sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS
           docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}' > IMAGE_DIGEST.txt || \
             docker inspect "$IMG" --format '{{index .RepoDigests 0}}' > IMAGE_DIGEST.txt
-          # image SBOM（dogfooding：離線側可攜，registry attestation docker save 不保留）
-          docker run --rm -v "$PWD":/w -w /w "$IMG" scan "dir:/w" -o cyclonedx-json -q \
-            > cytrace-image.sbom.cdx.json || echo "SBOM 產生略過（非致命）"
+          # image SBOM（dogfooding）：用 image 內建 syft 掃剛存的 tar。
+          # --user 0:0：syft 預設非 root（65532）讀不到 host 掛入的 tar；chmod a+r 補讀權。
+          # 失敗不留空檔（否則 Release 上傳報 size must be >= 1）。
+          chmod a+r "cytrace-${VER}-image.tar"
+          if docker run --rm --entrypoint syft --user 0:0 -v "$PWD":/w -w /w "$IMG" \
+               "docker-archive:cytrace-${VER}-image.tar" -o cyclonedx-json 2>/dev/null \
+               > cytrace-image.sbom.cdx.json && [ -s cytrace-image.sbom.cdx.json ]; then
+            echo "✓ image SBOM 產生"
+          else
+            echo "SBOM 產生略過（非致命）"; rm -f cytrace-image.sbom.cdx.json
+          fi
 
       - name: 附掛 Release 資產
         if: steps.rel.outputs.is_release == 'true'
