@@ -27,3 +27,37 @@ html {
 body {
   margin: 0;
 }
+
+/* 列印 / 存 PDF（ADR-005 記載的「瀏覽器列印替代」；報表加 window.print() 按鈕）。
+   目標：隱藏互動工具列、保留嚴重度色票、避免區塊/表列被跨頁切斷、深色模式強制轉亮。 */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  /* 色票/徽章背景色必須印得出來（預設瀏覽器會省略背景色） */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* 深色模式列印時強制亮底暗字（省墨、可讀） */
+  html.dark,
+  html.dark body {
+    background: #fff !important;
+  }
+  .dark .dark\:bg-gray-950 {
+    background-color: #fff !important;
+  }
+  .dark .dark\:text-gray-100 {
+    color: #111827 !important;
+  }
+  /* 五區塊與表列不要被分頁切斷；標題不與內容分離 */
+  section,
+  tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  h1,
+  h2 {
+    break-after: avoid;
+  }
+}

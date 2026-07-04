@@ -164,6 +164,7 @@
     "notes": {
       "title": "Notes",
       "disclaimer_not_pentest": "This is a generated dependency-risk report, NOT a penetration test or security assessment, and must not be cited as penetration-test findings."
-    }
+    },
+    "print": "Print / Save PDF"
   }
 }

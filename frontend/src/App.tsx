@@ -211,7 +211,16 @@ export default function App() {
     <div className="mx-auto max-w-4xl bg-white px-4 py-6 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <header className="flex items-center justify-between">
         <h1 className="text-xl font-bold">CyTrace — {t('report.title')}</h1>
-        <Toolbar />
+        <div className="no-print flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
+          >
+            {t('report.print')}
+          </button>
+          <Toolbar />
+        </div>
       </header>
       <Cover />
       <RiskSummary onPick={setFilter} active={filter} />
