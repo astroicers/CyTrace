@@ -705,7 +705,7 @@ milestones:
   - id: M9
     title: "CBOM 密碼學資產盤點（CycloneDX CBOM + 量子脆弱判定）"
     target_date: 2027-03-31
-    status: pending
+    status: in_progress
     tasks:
       - id: T901
         title: "ADR-013 落稿 + 外部事實查證快照（純文件）"
@@ -715,7 +715,7 @@ milestones:
         spec: null
         srs_ref: NFR-05
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
