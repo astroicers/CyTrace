@@ -118,7 +118,9 @@
       "uploading": "上傳中 {{percent}}%",
       "cancel": "取消",
       "error_no_file": "請先選擇檔案",
-      "error_no_path": "請輸入掃描路徑"
+      "error_no_path": "請輸入掃描路徑",
+      "cbom": "併同盤點密碼學資產（CBOM）",
+      "cbom_hint": "盤點憑證、金鑰與 TLS 設定並標示量子脆弱項目；掃描時間會增加"
     },
     "job": {
       "title": "掃描任務詳情",

@@ -8,7 +8,13 @@
       "bom-ref": "cert-ok",
       "type": "cryptographic-asset",
       "name": "cytrace-test-fixture",
-      "evidence": { "occurrences": [{ "location": "server.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "server.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "certificate",
         "certificateProperties": {
@@ -17,7 +23,9 @@
           "notValidBefore": "2026-09-22T08:23:40Z",
           "notValidAfter": "2027-09-22T08:23:40Z",
           "certificateFormat": "X.509",
-          "certificateExtension": "crt"
+          "certificateExtension": "crt",
+          "signatureAlgorithmRef": "alg-rsa-sig",
+          "subjectPublicKeyRef": "key-pub-rsa"
         }
       }
     },
@@ -25,13 +33,20 @@
       "bom-ref": "cert-expired",
       "type": "cryptographic-asset",
       "name": "weak-fixture",
-      "evidence": { "occurrences": [{ "location": "weak.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "weak.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "certificate",
         "certificateProperties": {
           "subjectName": "weak-fixture",
           "notValidAfter": "2020-01-01T00:00:00Z",
-          "certificateFormat": "X.509"
+          "certificateFormat": "X.509",
+          "signatureAlgorithmRef": "alg-mldsa"
         }
       }
     },
@@ -40,7 +55,14 @@
       "type": "cryptographic-asset",
       "name": "RSA-2048",
       "description": "Identified a Private Key",
-      "evidence": { "occurrences": [{ "location": "server.key", "line": 0 }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "server.key",
+            "line": 0
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "related-crypto-material",
         "relatedCryptoMaterialProperties": {
@@ -55,7 +77,14 @@
       "bom-ref": "key-rsa1024",
       "type": "cryptographic-asset",
       "name": "RSA-1024",
-      "evidence": { "occurrences": [{ "location": "weak.key", "line": 0 }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "weak.key",
+            "line": 0
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "related-crypto-material",
         "relatedCryptoMaterialProperties": {
@@ -70,27 +99,52 @@
       "bom-ref": "key-ed25519",
       "type": "cryptographic-asset",
       "name": "ED25519",
-      "evidence": { "occurrences": [{ "location": "ed25519.key", "line": 0 }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "ed25519.key",
+            "line": 0
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "related-crypto-material",
-        "relatedCryptoMaterialProperties": { "type": "private-key", "format": "PEM" }
+        "relatedCryptoMaterialProperties": {
+          "type": "private-key",
+          "format": "PEM"
+        }
       }
     },
     {
       "bom-ref": "key-pub-rsa",
       "type": "cryptographic-asset",
       "name": "RSA-2048",
-      "evidence": { "occurrences": [{ "location": "server.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "server.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "related-crypto-material",
-        "relatedCryptoMaterialProperties": { "type": "public-key", "size": 2048 }
+        "relatedCryptoMaterialProperties": {
+          "type": "public-key",
+          "size": 2048
+        }
       }
     },
     {
       "bom-ref": "alg-sha256",
       "type": "cryptographic-asset",
       "name": "SHA256",
-      "evidence": { "occurrences": [{ "location": "server.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "server.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
         "algorithmProperties": {
@@ -105,10 +159,18 @@
       "bom-ref": "alg-rsa-sig",
       "type": "cryptographic-asset",
       "name": "RSA",
-      "evidence": { "occurrences": [{ "location": "server.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "server.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
-        "algorithmProperties": { "primitive": "signature" },
+        "algorithmProperties": {
+          "primitive": "signature"
+        },
         "oid": "1.2.840.113549.1.1.1"
       }
     },
@@ -116,7 +178,13 @@
       "bom-ref": "alg-mldsa",
       "type": "cryptographic-asset",
       "name": "ML-DSA-87",
-      "evidence": { "occurrences": [{ "location": "pqc.crt" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "pqc.crt"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
         "algorithmProperties": {
@@ -130,30 +198,57 @@
       "bom-ref": "alg-aes",
       "type": "cryptographic-asset",
       "name": "AES-256",
-      "evidence": { "occurrences": [{ "location": "openssl.cnf" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "openssl.cnf"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
-        "algorithmProperties": { "primitive": "block-cipher", "parameterSetIdentifier": "256" }
+        "algorithmProperties": {
+          "primitive": "block-cipher",
+          "parameterSetIdentifier": "256"
+        }
       }
     },
     {
       "bom-ref": "alg-ed25519-curve",
       "type": "cryptographic-asset",
       "name": "Ed25519",
-      "evidence": { "occurrences": [{ "location": "ed25519.key" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "ed25519.key"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
-        "algorithmProperties": { "primitive": "signature", "curve": "Ed25519" }
+        "algorithmProperties": {
+          "primitive": "signature",
+          "curve": "Ed25519"
+        }
       }
     },
     {
       "bom-ref": "alg-unknown-curve",
       "type": "cryptographic-asset",
       "name": "EC",
-      "evidence": { "occurrences": [{ "location": "mystery.key" }] },
+      "evidence": {
+        "occurrences": [
+          {
+            "location": "mystery.key"
+          }
+        ]
+      },
       "cryptoProperties": {
         "assetType": "algorithm",
-        "algorithmProperties": { "primitive": "signature", "curve": "brainpoolP256r1" }
+        "algorithmProperties": {
+          "primitive": "signature",
+          "curve": "brainpoolP256r1"
+        }
       }
     },
     {

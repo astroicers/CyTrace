@@ -76,12 +76,13 @@ export const api = {
   // ── jobs ──
   listJobs: () => request<JobList>('/api/v1/jobs'),
   getJob: (id: string) => request<JobRecord>(`/api/v1/jobs/${id}`),
-  createMountedJob: (root: string, path: string, failOn?: string) =>
+  createMountedJob: (root: string, path: string, failOn?: string, cbom = false) =>
     request<JobRecord>('/api/v1/jobs', {
       method: 'POST',
       body: {
         target: { kind: 'mounted', root, path },
         ...(failOn ? { fail_on: failOn } : {}),
+        ...(cbom ? { cbom: true } : {}),
       },
     }),
   deleteJob: (id: string) =>

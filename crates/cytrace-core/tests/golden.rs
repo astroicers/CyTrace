@@ -49,3 +49,52 @@ fn scanresult_matches_golden_baseline() {
         "輸出偏離 golden baseline——若為刻意變更，UPDATE_GOLDEN=1 重產並複核"
     );
 }
+
+const CBOM: &str = include_str!("fixtures/cbom.json");
+const GOLDEN_CRYPTO_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/golden/scanresult-crypto.json"
+);
+
+/// 含 CBOM 的 golden（ADR-013 決策 7）：釘死 crypto 區段的序列化形態。
+///
+/// 特別要釘的是 `skip_serializing_if` 的行為——`None` 欄位不得序列化成 `null`，
+/// 否則舊版消費者會讀到型別不符的值。
+#[test]
+fn scanresult_with_crypto_matches_golden_baseline() {
+    use cytrace_types::{CbomStatus, CryptoInventory};
+
+    let components = parse::parse_cyclonedx(CYCLONEDX).unwrap();
+    let findings = parse::parse_grype(GRYPE).unwrap();
+    let assets = parse::parse_cbom(CBOM).unwrap();
+    let mut meta = fixed_meta();
+    meta.tool_versions.theia = Some("1.1.2".into());
+    meta.scan_identity = Some("uid=1000".into());
+    let crypto = Some(CryptoInventory {
+        status: CbomStatus::Completed,
+        assets,
+        unscanned_count: 2,
+    });
+    let result = cytrace_core::assemble_with_crypto(meta, components, findings, crypto);
+    let actual = serde_json::to_string_pretty(&result).unwrap();
+
+    if std::env::var("UPDATE_GOLDEN").is_ok() {
+        std::fs::write(GOLDEN_CRYPTO_PATH, format!("{actual}\n")).unwrap();
+    }
+
+    let expected = std::fs::read_to_string(GOLDEN_CRYPTO_PATH)
+        .expect("golden 不存在；先以 UPDATE_GOLDEN=1 產生");
+    assert_eq!(
+        actual.trim(),
+        expected.trim(),
+        "CBOM 輸出偏離 golden baseline——若為刻意變更，UPDATE_GOLDEN=1 重產並複核"
+    );
+    assert!(
+        !actual.contains("PRIVATE KEY"),
+        "NFR-09：golden 不得含金鑰內容"
+    );
+    assert!(
+        !actual.contains("\"primitive\": null"),
+        "None 不得序列化為 null"
+    );
+}

@@ -118,7 +118,9 @@
       "uploading": "Uploading {{percent}}%",
       "cancel": "Cancel",
       "error_no_file": "Please choose a file first",
-      "error_no_path": "Please enter a scan path"
+      "error_no_path": "Please enter a scan path",
+      "cbom": "Also inventory cryptographic assets (CBOM)",
+      "cbom_hint": "Inventories certificates, keys and TLS configuration and flags quantum-vulnerable items; scans take longer"
     },
     "job": {
       "title": "Scan details",

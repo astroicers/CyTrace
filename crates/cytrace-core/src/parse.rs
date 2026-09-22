@@ -156,6 +156,8 @@ struct CbomDoc {
 
 #[derive(Deserialize)]
 struct CbomComponent {
+    #[serde(default, rename = "bom-ref")]
+    bom_ref: Option<String>,
     #[serde(default)]
     name: String,
     #[serde(default, rename = "type")]
@@ -204,6 +206,12 @@ struct AlgorithmProps {
 struct CertificateProps {
     #[serde(default, rename = "notValidAfter")]
     not_valid_after: Option<String>,
+    /// 指向簽章演算法元件的 bom-ref（CycloneDX）。
+    #[serde(default, rename = "signatureAlgorithmRef")]
+    signature_algorithm_ref: Option<String>,
+    /// 指向公鑰材料元件的 bom-ref。
+    #[serde(default, rename = "subjectPublicKeyRef")]
+    subject_public_key_ref: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -220,32 +228,71 @@ struct MaterialProps {
 pub fn parse_cbom(json: &str) -> Result<Vec<CryptoAsset>> {
     let doc: CbomDoc =
         serde_json::from_str(json).map_err(|e| CytraceError::Parse(format!("cbom: {e}")))?;
+
+    // 先建 bom-ref → (名稱, 曲線, NIST 等級) 索引：憑證的量子狀態由其
+    // signatureAlgorithmRef / subjectPublicKeyRef 指向的元件決定，而非憑證的 subject 名稱。
+    let index: std::collections::HashMap<&str, (&str, Option<&str>, Option<u8>)> = doc
+        .components
+        .iter()
+        .filter_map(|c| {
+            let r = c.bom_ref.as_deref()?;
+            let alg = c.crypto_properties.as_ref()?.algorithm.as_ref();
+            Some((
+                r,
+                (
+                    c.name.as_str(),
+                    alg.and_then(|a| a.curve.as_deref()),
+                    alg.and_then(|a| a.nist_level),
+                ),
+            ))
+        })
+        .collect();
+
     Ok(doc
         .components
-        .into_iter()
+        .iter()
         .filter(|c| c.kind == "cryptographic-asset")
         .filter_map(|c| {
-            let props = c.crypto_properties?;
+            let props = c.crypto_properties.as_ref()?;
             let alg = props.algorithm.as_ref();
             let curve = alg.and_then(|a| a.curve.as_deref());
             let key_size = props.material.as_ref().and_then(|m| m.size);
-            let quantum =
-                quantum::classify_with_level(&c.name, curve, alg.and_then(|a| a.nist_level));
+
+            // 憑證：改以所引用之演算法判定（ADR-013 決策 6）；引用缺席或指不到才退回自身名稱
+            let referenced = props
+                .certificate
+                .as_ref()
+                .and_then(|cert| {
+                    cert.signature_algorithm_ref
+                        .as_deref()
+                        .or(cert.subject_public_key_ref.as_deref())
+                })
+                .and_then(|r| index.get(r).copied());
+            let (q_name, q_curve, q_level) = match referenced {
+                Some((n, cv, lv)) => (n, cv, lv),
+                None => (c.name.as_str(), curve, alg.and_then(|a| a.nist_level)),
+            };
+
+            let quantum = quantum::classify_with_level(q_name, q_curve, q_level);
             Some(CryptoAsset {
                 quantum,
                 weak_key: quantum::weak_key(&c.name, curve, key_size),
-                name: c.name,
-                asset_type: props.asset_type,
+                name: c.name.clone(),
+                asset_type: props.asset_type.clone(),
                 location: c
                     .evidence
-                    .and_then(|e| e.occurrences.into_iter().next())
-                    .map(|o| o.location)
+                    .as_ref()
+                    .and_then(|e| e.occurrences.first())
+                    .map(|o| o.location.clone())
                     .unwrap_or_default(),
                 primitive: alg
                     .and_then(|a| a.primitive.clone())
                     .or_else(|| props.material.as_ref().and_then(|m| m.kind.clone())),
                 key_size,
-                not_after: props.certificate.and_then(|c| c.not_valid_after),
+                not_after: props
+                    .certificate
+                    .as_ref()
+                    .and_then(|c| c.not_valid_after.clone()),
             })
         })
         .collect())

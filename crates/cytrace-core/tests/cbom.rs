@@ -189,3 +189,33 @@ fn empty_components_yields_empty_list() {
     let assets = parse_cbom(r#"{"bomFormat":"CycloneDX","specVersion":"1.6"}"#).expect("解析");
     assert!(assets.is_empty());
 }
+
+// ── 憑證的量子狀態須由其簽章演算法決定（不是由 subject 名稱）──
+
+#[test]
+fn certificate_quantum_resolves_via_signature_algorithm_ref() {
+    // theia 對憑證輸出的 name 是 subject 名稱（如 "cytrace-test-fixture"），
+    // 拿它去比對演算法名稱表必然是 Unknown——每張憑證都 Unknown 會讓量子閘門失去鑑別力。
+    // CycloneDX 的 certificateProperties.signatureAlgorithmRef 指向真正的演算法元件，應據此判定。
+    let assets = parse_cbom(&fixture()).expect("解析");
+
+    let rsa_cert = assets
+        .iter()
+        .find(|a| a.name == "cytrace-test-fixture")
+        .expect("找到 RSA 簽章憑證");
+    assert_eq!(
+        rsa_cert.quantum,
+        QuantumStatus::Vulnerable,
+        "簽章為 RSA 的憑證應判為量子脆弱，而非 Unknown"
+    );
+
+    let pqc_cert = assets
+        .iter()
+        .find(|a| a.name == "weak-fixture")
+        .expect("找到 PQC 簽章憑證");
+    assert_eq!(
+        pqc_cert.quantum,
+        QuantumStatus::Safe,
+        "簽章為 ML-DSA 的憑證應判為後量子安全"
+    );
+}
