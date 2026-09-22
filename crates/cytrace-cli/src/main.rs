@@ -140,14 +140,12 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             out_dir,
         } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-            let mut worst = EXIT_OK;
+            let mut codes = Vec::with_capacity(targets.len());
             for target in targets {
                 let out = Some(dir.join(format!("{}.report.html", sanitize(target))));
-                if run_one(target, fail_on.as_deref(), out, cat)? == EXIT_FAILON {
-                    worst = EXIT_FAILON;
-                }
+                codes.push(run_one(target, fail_on.as_deref(), out, cat)?);
             }
-            Ok(worst)
+            Ok(worst_exit(codes))
         }
         #[cfg(feature = "server")]
         Command::Serve {
@@ -216,6 +214,25 @@ fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
 }
 
 /// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。
+/// 批次退出碼彙整（ADR-013 決策 9）。
+///
+/// 優先序：**任一目標 `EXIT_ERR` → 整批 1（優先於 2）**；否則任一 `EXIT_FAILON` → 2；否則 0。
+///
+/// 錯誤優先於 fail-on 的理由：`--fail-on-quantum-vulnerable` 為 fail-closed，
+/// 「未取得 CBOM 結果」以 `EXIT_ERR` 表達；若被別的目標的 2 蓋掉，CI 會誤判為
+/// 「有脆弱資產但掃描成功」，而實際上是**根本沒掃到**。
+fn worst_exit(codes: impl IntoIterator<Item = u8>) -> u8 {
+    let mut worst = EXIT_OK;
+    for c in codes {
+        match c {
+            EXIT_ERR => return EXIT_ERR,
+            EXIT_FAILON => worst = EXIT_FAILON,
+            _ => {}
+        }
+    }
+    worst
+}
+
 fn run_one(
     target: &str,
     fail_on: Option<&str>,
@@ -294,6 +311,27 @@ fn sanitize(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── T905：batch 退出碼彙整（ADR-013 決策 9）──
+
+    #[test]
+    fn batch_exit_prefers_error_over_failon() {
+        // 錯誤（含 fail-closed 的閘門未取得結果）優先於 fail-on：
+        // 「沒掃到」絕不能因為別的目標只回 2 就被蓋掉
+        assert_eq!(worst_exit([EXIT_OK, EXIT_FAILON, EXIT_ERR]), EXIT_ERR);
+        assert_eq!(worst_exit([EXIT_ERR, EXIT_FAILON]), EXIT_ERR);
+    }
+
+    #[test]
+    fn batch_exit_reports_failon_when_no_error() {
+        assert_eq!(worst_exit([EXIT_OK, EXIT_FAILON, EXIT_OK]), EXIT_FAILON);
+    }
+
+    #[test]
+    fn batch_exit_is_ok_when_all_ok() {
+        assert_eq!(worst_exit([EXIT_OK, EXIT_OK]), EXIT_OK);
+        assert_eq!(worst_exit([]), EXIT_OK);
+    }
 
     #[test]
     fn parses_report_subcommand() {
