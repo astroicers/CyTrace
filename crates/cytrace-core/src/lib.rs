@@ -7,6 +7,7 @@ pub mod engine;
 pub mod error;
 pub mod failon;
 pub mod parse;
+pub mod quantum;
 pub mod severity;
 pub mod timefmt;
 
@@ -27,5 +28,6 @@ pub fn assemble(
         components,
         findings,
         summary,
+        crypto: None,
     }
 }

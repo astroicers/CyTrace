@@ -90,11 +90,15 @@ pub struct DbSnapshot {
     pub built: String,
 }
 
-/// 引擎版本（釘選；NFR-02 / ADR-002）。
+/// 引擎版本（釘選；NFR-02 / ADR-002 / ADR-013）。
+///
+/// `theia` 為 CBOM 引擎（ADR-013）；v1 ScanResult 無此欄位，故帶 `default`（NFR-03）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolVersions {
     pub syft: String,
     pub grype: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub theia: Option<String>,
 }
 
 /// 掃描元資料。`generated_at` 為非決定性欄位，golden baseline 比對前須正規化/排除（ADR-008/009）。
@@ -104,6 +108,9 @@ pub struct Meta {
     pub tool_versions: ToolVersions,
     pub db_snapshot: DbSnapshot,
     pub generated_at: String,
+    /// 執行掃描的身分（ADR-013 決策 10）。權限會影響 `dir` 模式的偵測完整度，故須可稽核。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scan_identity: Option<String>,
 }
 
 /// 風險摘要。
@@ -111,6 +118,89 @@ pub struct Meta {
 pub struct Summary {
     pub counts_by_severity: BTreeMap<Severity, u64>,
     pub overall_risk: Severity,
+}
+
+/// 量子脆弱判定結果（ADR-013 決策 6）。
+///
+/// **與弱金鑰是兩條獨立的軸**：RSA-4096 為 [`QuantumStatus::Vulnerable`] 但非弱金鑰。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum QuantumStatus {
+    /// 後量子安全（PQC 演算法，或 NIST 量子安全等級達門檻）。
+    Safe,
+    /// 量子脆弱（可被 Shor 演算法破解之公鑰系統）。
+    Vulnerable,
+    /// 不適用（對稱演算法、雜湊等非公鑰系統）。
+    NotApplicable,
+    /// 無法判定（未知演算法或曲線）——**不臆測**。
+    Unknown,
+}
+
+impl QuantumStatus {
+    /// i18n 訊息鍵（ADR-004）。前端與 CLI catalog 共用同一鍵。
+    pub fn i18n_key(&self) -> &'static str {
+        match self {
+            QuantumStatus::Safe => "crypto.quantum.safe",
+            QuantumStatus::Vulnerable => "crypto.quantum.vulnerable",
+            QuantumStatus::NotApplicable => "crypto.quantum.not_applicable",
+            QuantumStatus::Unknown => "crypto.quantum.unknown",
+        }
+    }
+}
+
+/// CBOM 掃描狀態（ADR-013 決策 4/7）。
+///
+/// 「沒開」「引擎不在」「失敗」「跑了但 0 項」四者必須可區分——
+/// 空輸出**絕不**映射為「掃到 0 項」。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CbomStatus {
+    /// 使用者未指定 `--cbom`。
+    NotRequested,
+    /// 指定了，但引擎 binary 不存在（降級，不影響主流程）。
+    EngineAbsent,
+    /// 執行或解析失敗；`reason_key` 為 i18n 鍵。
+    Failed { reason_key: String },
+    /// 正常完成（`assets` 可能為空，代表確實沒掃到密碼資產）。
+    Completed,
+}
+
+/// 單一密碼學資產（CycloneDX `cryptographic-asset` 子集；ADR-013 決策 7）。
+///
+/// **不含金鑰內容**（NFR-09）——只記錄存在、型別、長度、位置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CryptoAsset {
+    pub name: String,
+    pub asset_type: String,
+    pub quantum: QuantumStatus,
+    /// 弱金鑰（RSA < 2048、ECC 曲線強度 < 128-bit）；與 `quantum` 為獨立兩軸。
+    pub weak_key: bool,
+    pub location: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub primitive: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub key_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub not_after: Option<String>,
+}
+
+/// CBOM 盤點結果（ADR-013 決策 7）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CryptoInventory {
+    pub status: CbomStatus,
+    #[serde(default)]
+    pub assets: Vec<CryptoAsset>,
+    /// 因權限不可讀而未掃描的項目數（ADR-013 決策 10）——**不得無聲略過**。
+    #[serde(default)]
+    pub unscanned_count: u64,
+}
+
+impl Default for CryptoInventory {
+    fn default() -> Self {
+        Self {
+            status: CbomStatus::NotRequested,
+            assets: Vec::new(),
+            unscanned_count: 0,
+        }
+    }
 }
 
 /// 統一掃描結果——core ↔ report 的穩定資料契約（ADR-009）。
@@ -123,10 +213,13 @@ pub struct ScanResult {
     pub components: Vec<Component>,
     pub findings: Vec<Vulnerability>,
     pub summary: Summary,
+    /// CBOM 密碼學資產盤點（ADR-013）。v1 檔無此欄位 → `None`。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub crypto: Option<CryptoInventory>,
 }
 
-/// 目前的 ScanResult schema 版本（ADR-009 相容政策）。
-pub const SCHEMA_VERSION: u32 = 1;
+/// 目前的 ScanResult schema 版本（ADR-009 相容政策；v2 起含 `crypto`，見 ADR-013）。
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[cfg(test)]
 mod tests {
@@ -165,5 +258,118 @@ mod tests {
     fn i18n_keys_are_stable() {
         assert_eq!(Severity::Critical.i18n_key(), "severity.critical");
         assert_eq!(Severity::Unknown.i18n_key(), "severity.unknown");
+    }
+
+    // ── T903：CBOM 資料契約（ADR-013 決策 7；修訂 ADR-009）──
+
+    fn v1_scanresult_json() -> &'static str {
+        // 真實 v1 形狀（無 crypto 欄位）——ADR-009 向後相容的驗收標的
+        r#"{
+            "schema_version": 1,
+            "meta": {
+                "target": "dir:/tmp/x",
+                "tool_versions": {"syft": "1.45.1", "grype": "0.114.0"},
+                "db_snapshot": {"version": "5", "built": "2026-07-01T00:00:00Z"},
+                "generated_at": "2026-07-01T00:00:00Z"
+            },
+            "components": [],
+            "findings": [],
+            "summary": {"counts_by_severity": {}, "overall_risk": "Unknown"}
+        }"#
+    }
+
+    #[test]
+    fn schema_version_is_2() {
+        assert_eq!(SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn v1_scanresult_without_crypto_still_deserializes() {
+        let r: ScanResult = serde_json::from_str(v1_scanresult_json()).expect("v1 須可讀入");
+        assert_eq!(r.schema_version, 1);
+        assert!(r.crypto.is_none(), "v1 檔無 crypto 欄位 → None");
+    }
+
+    #[test]
+    fn v1_scanresult_tool_versions_without_theia_still_deserializes() {
+        let r: ScanResult = serde_json::from_str(v1_scanresult_json()).expect("v1 須可讀入");
+        assert_eq!(r.meta.tool_versions.theia, None, "theia 欄位須有 default");
+        assert_eq!(r.meta.scan_identity, None, "scan_identity 須有 default");
+    }
+
+    #[test]
+    fn cbom_status_distinguishes_not_requested_from_completed_with_zero_assets() {
+        // ADR-013 決策 4/7：「沒開」「引擎不在」「失敗」「跑了但 0 項」必須可區分
+        let not_requested = CryptoInventory {
+            status: CbomStatus::NotRequested,
+            ..CryptoInventory::default()
+        };
+        let completed_empty = CryptoInventory {
+            status: CbomStatus::Completed,
+            ..CryptoInventory::default()
+        };
+        assert_ne!(not_requested.status, completed_empty.status);
+        assert!(not_requested.assets.is_empty());
+        assert!(completed_empty.assets.is_empty());
+    }
+
+    #[test]
+    fn cbom_status_failed_carries_reason_key() {
+        let failed = CbomStatus::Failed {
+            reason_key: "cbom.err.stdout_not_json".into(),
+        };
+        match failed {
+            CbomStatus::Failed { reason_key } => {
+                assert_eq!(reason_key, "cbom.err.stdout_not_json")
+            }
+            _ => panic!("須為 Failed"),
+        }
+    }
+
+    #[test]
+    fn quantum_status_i18n_keys_are_stable() {
+        assert_eq!(QuantumStatus::Safe.i18n_key(), "crypto.quantum.safe");
+        assert_eq!(
+            QuantumStatus::Vulnerable.i18n_key(),
+            "crypto.quantum.vulnerable"
+        );
+        assert_eq!(
+            QuantumStatus::NotApplicable.i18n_key(),
+            "crypto.quantum.not_applicable"
+        );
+        assert_eq!(QuantumStatus::Unknown.i18n_key(), "crypto.quantum.unknown");
+    }
+
+    #[test]
+    fn crypto_asset_omits_optional_fields_when_none() {
+        // golden 穩定性（ADR-013 決策 7）：未知欄位不得序列化成 null
+        let a = CryptoAsset {
+            name: "RSA-2048".into(),
+            asset_type: "related-crypto-material".into(),
+            quantum: QuantumStatus::Vulnerable,
+            weak_key: false,
+            location: "app/server.key".into(),
+            primitive: None,
+            key_size: None,
+            not_after: None,
+        };
+        let j = serde_json::to_string(&a).expect("序列化");
+        assert!(!j.contains("primitive"), "None 欄位不得出現：{j}");
+        assert!(!j.contains("null"), "不得有 null：{j}");
+        assert!(j.contains("\"weak_key\":false"), "weak_key 須恆常序列化");
+    }
+
+    #[test]
+    fn unscanned_count_defaults_to_zero_and_survives_roundtrip() {
+        // ADR-013 決策 10：因權限未掃描的項目數不得無聲消失
+        let inv = CryptoInventory {
+            status: CbomStatus::Completed,
+            unscanned_count: 3,
+            ..CryptoInventory::default()
+        };
+        let j = serde_json::to_string(&inv).expect("序列化");
+        let back: CryptoInventory = serde_json::from_str(&j).expect("反序列化");
+        assert_eq!(back.unscanned_count, 3);
+        assert_eq!(CryptoInventory::default().unscanned_count, 0);
     }
 }

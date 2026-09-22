@@ -116,12 +116,14 @@ fn run_pipeline(
         tool_versions: ToolVersions {
             syft: "pinned".into(),
             grype: "pinned".into(),
+            theia: None,
         },
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),
         },
         generated_at: timefmt::epoch_to_iso(timefmt::epoch_secs()),
+        scan_identity: None,
     };
     let result = assemble(meta, components, findings);
     std::fs::write(

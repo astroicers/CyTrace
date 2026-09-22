@@ -3,7 +3,8 @@
 //! 只擷取需要的欄位，其餘以 `#[serde(default)]` 容忍，避免上游 schema 微調即失敗。
 
 use crate::error::{CytraceError, Result};
-use cytrace_types::{Component, Severity, Vulnerability};
+use crate::quantum;
+use cytrace_types::{Component, CryptoAsset, Severity, Vulnerability};
 use serde::Deserialize;
 
 // ─── Grype JSON（子集）─────────────────────────────────────────────
@@ -138,6 +139,114 @@ pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
                 kind: c.kind,
                 licenses,
             }
+        })
+        .collect())
+}
+
+// ─── CBOM（CycloneDX cryptographic-asset 子集；ADR-013 決策 7）────────
+//
+// 只取判定與報表需要的欄位——**絕不**取金鑰內容（NFR-09）。
+// 容忍 1.6 / 1.7：兩版的 cryptoProperties 形狀在本子集內相同。
+
+#[derive(Deserialize)]
+struct CbomDoc {
+    #[serde(default)]
+    components: Vec<CbomComponent>,
+}
+
+#[derive(Deserialize)]
+struct CbomComponent {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default, rename = "cryptoProperties")]
+    crypto_properties: Option<CryptoProps>,
+    #[serde(default)]
+    evidence: Option<CbomEvidence>,
+}
+
+#[derive(Deserialize)]
+struct CbomEvidence {
+    #[serde(default)]
+    occurrences: Vec<CbomOccurrence>,
+}
+
+#[derive(Deserialize)]
+struct CbomOccurrence {
+    #[serde(default)]
+    location: String,
+}
+
+#[derive(Deserialize)]
+struct CryptoProps {
+    #[serde(default, rename = "assetType")]
+    asset_type: String,
+    #[serde(default, rename = "algorithmProperties")]
+    algorithm: Option<AlgorithmProps>,
+    #[serde(default, rename = "certificateProperties")]
+    certificate: Option<CertificateProps>,
+    #[serde(default, rename = "relatedCryptoMaterialProperties")]
+    material: Option<MaterialProps>,
+}
+
+#[derive(Deserialize)]
+struct AlgorithmProps {
+    #[serde(default)]
+    primitive: Option<String>,
+    #[serde(default)]
+    curve: Option<String>,
+    #[serde(default, rename = "nistQuantumSecurityLevel")]
+    nist_level: Option<u8>,
+}
+
+#[derive(Deserialize)]
+struct CertificateProps {
+    #[serde(default, rename = "notValidAfter")]
+    not_valid_after: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MaterialProps {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    size: Option<u32>,
+}
+
+/// 解析 theia 產出的 CBOM，取出密碼學資產並完成量子／弱金鑰判定。
+///
+/// 只保留 `type == "cryptographic-asset"` 的元件；其餘（如 `file`）一律略過。
+pub fn parse_cbom(json: &str) -> Result<Vec<CryptoAsset>> {
+    let doc: CbomDoc =
+        serde_json::from_str(json).map_err(|e| CytraceError::Parse(format!("cbom: {e}")))?;
+    Ok(doc
+        .components
+        .into_iter()
+        .filter(|c| c.kind == "cryptographic-asset")
+        .filter_map(|c| {
+            let props = c.crypto_properties?;
+            let alg = props.algorithm.as_ref();
+            let curve = alg.and_then(|a| a.curve.as_deref());
+            let key_size = props.material.as_ref().and_then(|m| m.size);
+            let quantum =
+                quantum::classify_with_level(&c.name, curve, alg.and_then(|a| a.nist_level));
+            Some(CryptoAsset {
+                quantum,
+                weak_key: quantum::weak_key(&c.name, curve, key_size),
+                name: c.name,
+                asset_type: props.asset_type,
+                location: c
+                    .evidence
+                    .and_then(|e| e.occurrences.into_iter().next())
+                    .map(|o| o.location)
+                    .unwrap_or_default(),
+                primitive: alg
+                    .and_then(|a| a.primitive.clone())
+                    .or_else(|| props.material.as_ref().and_then(|m| m.kind.clone())),
+                key_size,
+                not_after: props.certificate.and_then(|c| c.not_valid_after),
+            })
         })
         .collect())
 }

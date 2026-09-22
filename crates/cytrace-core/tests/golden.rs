@@ -18,12 +18,14 @@ fn fixed_meta() -> Meta {
         tool_versions: ToolVersions {
             syft: "1.45.1".into(),
             grype: "0.114.0".into(),
+            theia: None,
         },
         db_snapshot: DbSnapshot {
             version: "v6.1.7".into(),
             built: "2026-06-19".into(),
         },
         generated_at: "FIXED-FOR-GOLDEN".into(),
+        scan_identity: None,
     }
 }
 

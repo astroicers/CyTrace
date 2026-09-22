@@ -268,12 +268,14 @@ fn meta_for(target: &str) -> Meta {
         tool_versions: ToolVersions {
             syft: "pinned".into(),
             grype: "pinned".into(),
+            theia: None,
         },
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),
         },
         generated_at: epoch_to_iso(epoch_secs()),
+        scan_identity: None,
     }
 }
 
