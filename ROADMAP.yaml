@@ -771,7 +771,7 @@ milestones:
         spec: null
         srs_ref: NFR-02
         depends_on: [T901]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -795,7 +795,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T901]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -817,7 +817,7 @@ milestones:
         spec: null
         srs_ref: NFR-09
         depends_on: [T903]
-        status: pending
+        status: completed
         estimated_complexity: high
         source_type: manual
         source_ref: ""
@@ -840,7 +840,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T902, T904]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -861,7 +861,7 @@ milestones:
         spec: null
         srs_ref: NFR-06
         depends_on: [T903]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -880,7 +880,7 @@ milestones:
         spec: null
         srs_ref: NFR-07
         depends_on: [T905, T906]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -902,7 +902,7 @@ milestones:
         spec: null
         srs_ref: NFR-05
         depends_on: [T901]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: ""

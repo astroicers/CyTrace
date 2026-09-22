@@ -1,9 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)"
+      "Bash(*)",
+      "Bash(cd /home/ubuntu/CyTrace *)"
     ],
     "deny": [
+      "Bash(docker deploy *)",
+      "Bash(docker push *)",
       "Bash(gh pr merge *)",
       "Bash(gh pr merge)",
       "Bash(git push --force *)",
@@ -12,14 +15,15 @@
       "Bash(git push origin main)",
       "Bash(git rebase *)",
       "Bash(git rebase)",
-      "Bash(rm -rf *)",
       "Bash(rm -r *)",
-      "Bash(docker push *)",
-      "Bash(docker deploy *)"
+      "Bash(rm -rf *)"
     ],
     "ask": [
       "Bash(git push *)",
       "Bash(git push)"
+    ],
+    "additionalDirectories": [
+      "/home/ubuntu/CyTrace"
     ]
   },
   "hooks": {

@@ -9,10 +9,11 @@ cytrace-<版本>/
 ├── bin/
 │   ├── cytrace            # musl 靜態 binary（零 runtime 依賴）
 │   ├── syft               # 釘選版（產 SBOM）
-│   └── grype              # 釘選版（比對 CVE）
+│   ├── grype              # 釘選版（比對 CVE）
+│   └── cbomkit-theia      # 釘選版（密碼學資產盤點；自源碼建置，ADR-013）
 ├── db/                    # grype 漏洞 DB 離線快照（含建立日期）
 ├── cytrace.sbom.cdx.json  # CyTrace 自產 SBOM（dogfooding，FR-009）
-├── NOTICE                 # 第三方授權（Syft/Grype 等，皆 Apache-2.0）
+├── NOTICE                 # 第三方授權（Syft/Grype/theia 本體 Apache-2.0；theia 相依另含 MIT/MPL-2.0）
 ├── cytrace-offline        # 離線執行 wrapper（設定 PATH 與 GRYPE_DB_CACHE_DIR）
 ├── SHA256SUMS             # 完整性
 └── SHA256SUMS.minisig     # 真實性（minisign detached 簽章）
