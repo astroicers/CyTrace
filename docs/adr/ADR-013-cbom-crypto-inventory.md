@@ -186,7 +186,7 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
 | 依賴清單 + 授權彙整 | ✅ vendor **153 模組**，其中 **134 個模組帶自己的 LICENSE 檔**（差額 19 為同一 repo 下共用上層授權的子模組，例如 `golang.org/x/*`、`go.opentelemetry.io/*` 家族）；深度掃描共 **122 份授權檔**（含子目錄內的附屬授權）。類型：Apache 42、MIT 42（另 7 份為未標題的 MIT 全文）、BSD 4、ISC 1、**MPL-2.0 3**。**無 GPL / AGPL / LGPL**（判定指令：`grep -rlniE "GNU (GENERAL\|AFFERO\|LESSER) PUBLIC LICENSE" vendor --include="LICENSE*"` → 僅 3 筆命中，逐一開檔確認皆為 **MPL-2.0 相容性條款**中提及 GNU 之字樣，非 GPL 授權） |
 | MPL-2.0 三項 | ✅ `hashicorp/golang-lru`、`hashicorp/go-version`、`cyphar/filepath-securejoin`。檔案級弱 copyleft，靜態連結散布可接受，**須列入 NOTICE**（掛 T902，見下） |
 | **全量原產地盤點（153 模組）** | ✅ 已做。**域名層**：`github.com` 132、`golang.org` 6、`go.opentelemetry.io` 5、`google.golang.org` 3、其餘 7 個各 1；**無 `.cn`、無 gitee，無任何中國企業網域**。**著作權層**：對全 vendor 的 LICENSE 與 `.go` 檔掃描中國企業／城市關鍵字（alibaba/aliyun/tencent/baidu/huawei/bytedance/xiaomi/pingcap/qiniu/didi/beijing/shanghai/shenzhen/hangzhou/china 等）→ **零命中**。**組織層**：72 個 GitHub 擁有者逐一檢視，**無任何中國企業或中國開源組織**（無 OpenSCA 類專案） |
-| 個人維護者國籍 | ⚠ **方法上無法機械判定，亦未判定**。已知具個人身分線索者：`huandu/xstrings`（`Copyright (c) 2015 Huan Du`）、`STARRY-S/zip`（`Copyright (c) 2023, Starry`）。**裁定建議**：CLAUDE.md 鐵則的規範對象是**中國來源的專案／組織**（原文舉例為 OpenSCA-cli），個人貢獻者國籍既不可驗證亦非該鐵則本意；若要改採「個人亦納管」，須先修鐵則並**同步適用於現行 syft/grype**（見下列） |
+| 個人維護者國籍 | ⚖️ **已裁定不納管**（見下方「鐵則涵蓋範圍之裁定」）。已知具個人身分線索者：`huandu/xstrings`（`Copyright (c) 2015 Huan Du`）、`STARRY-S/zip`（`Copyright (c) 2023, Starry`），依本裁定不構成違反 |
 | `huandu/xstrings` 是否為 theia 獨有 | ✅ **否**：釘選的 **syft v1.45.1 與 grype v0.114.0 的 `go.sum` 同樣含 `huandu/xstrings v1.5.0`（經 `Masterminds/sprig v3.3.0`）**——現行交件早已包含，非 theia 增量。是否排除須三引擎一致裁定 |
 | 內嵌 gitleaks 規則庫授權 | ✅ `zricethezav/gitleaks/v8 v8.30.1` **MIT**、`gitleaks/go-gitdiff v0.9.1` **MIT** |
 | `GOOS=windows` 建置（ADR-010） | ✅ 交叉編譯成功，產物為 PE32+ x86-64 console executable |
@@ -196,6 +196,26 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
 | `--network none` 離線性 | ✅ 建置與 `dir` 掃描全程 `--network none` 成功；唯獨需可寫 `HOME` |
 | `image`（docker-save tar）模式 | ✅ 通過。`docker save` tar 掃描成功（3,499–3,714 元件，含 base image CA 憑證庫）；**私鑰偵測不受宿主權限影響**——以 nonroot(65534) 與 root 掃同一 tar，結果完全相同（RSA-2048 / RSA-1024 / ED25519 皆偵測到，含 `size`）；輸出同樣不含金鑰內容 |
 | 輸入不可讀時的行為（image 模式） | ⚠ **危險**：tar 不可讀時錯誤只寫 stderr、**stdout 空白、exit code 仍為 0**；且會**依序回退嘗試 docker daemon / podman / containerd / registry**，stderr 可見 `Get "https://index.docker.io/v2/"` —— **隱含外連**，見決策 2 與決策 10 |
+
+### 鐵則涵蓋範圍之裁定：「禁中國來源依賴」及於組織，不及於個人
+
+> **來歷**：2026-09-22，AI 提出本解釋並說明理由，使用者於對話中以「按你的建議」採納。
+> （非逐字裁決語句，僅為採納既有建議；如需更強的正式裁定，應於升 `Accepted` 時一併複述確認。）
+
+**裁定內容**：`CLAUDE.md` 供應鏈純淨鐵則與 `docs/SRS.md` NFR-05 所禁止的「中國來源依賴」，
+規範對象為**中國來源的專案、組織或企業**（鐵則原文舉例為 OpenSCA-cli），
+**不及於個別貢獻者的國籍或居住地**。
+
+**理由**：
+
+1. 鐵則原文的舉例即為專案層級，非個人層級。
+2. 個人國籍無法由 repo 內容驗證，納入等同訂下一條執行不了、也無法稽核的規則。
+3. 若改採個人納管，**現行交件立即不合規**——已 Accepted 的 ADR-002 選定的 syft / grype
+   同樣含 `huandu/xstrings`（經 `Masterminds/sprig`）。該議題範圍遠大於 CBOM，須另案處理。
+
+**連帶要求（併入 T902）**：出貨 NOTICE 現行宣告「本產品不含中國大陸來源依賴（如 OpenSCA-cli）」
+（`scripts/package.sh:59`）須加註涵蓋範圍，例如「本宣告之審查範圍為依賴之來源網域、著作權聲明與
+維護組織；不含個別貢獻者之國籍」。**本 ADR 不修改該檔**（Draft 期間禁動生產碼），僅記錄要求。
 
 ### ⚠ 新發現一：`dir` 模式下權限不足會靜默漏檢
 
