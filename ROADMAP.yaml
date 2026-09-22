@@ -752,7 +752,9 @@ milestones:
           假私鑰不外洩（通過）皆已回填 ADR-013。
           image（docker-save tar）模式亦已實測通過：私鑰偵測不受宿主權限影響（nonroot 與 root 結果相同）、
           輸出不外洩金鑰。
-          【仍待辦，另案】Windows 平台實際執行行為（只驗交叉編譯產出格式）、OCI layout 目錄模式。
+          OCI layout 目錄與 OCI tar 兩模式亦已實測通過（結果與 docker save tar 一致）；
+          四種輸入的輸出皆通過 vendored CycloneDX 1.6 schema 離線驗證。
+          【仍待辦，另案】Windows 平台實際執行行為（只驗交叉編譯產出格式，需 Windows 主機）。
           【新發現，已成 ADR 決策 10】(1) HOME 不可寫會污染 stdout；(2) dir 模式權限不足會靜默漏檢
           （0600 私鑰無聲略過、exit 0），image 模式不受此影響；(3) image 輸入不可讀時 stdout 空白 + exit 0
           且回退嘗試 registry（隱含外連）→ 空輸出一律歸 Failed，不得當成「0 項」。

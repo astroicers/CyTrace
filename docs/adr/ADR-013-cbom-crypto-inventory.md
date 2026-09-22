@@ -194,7 +194,8 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
 | 假私鑰 fixture：輸出不含金鑰內容（決策 8） | ✅ **通過**。RSA-2048 / RSA-1024 / Ed25519 私鑰與一組隨機假 AWS 憑證皆被偵測，輸出只含型別、長度、格式（PEM）、OID 與檔案路徑；三個私鑰檔的任一 40 字元片段、access key id 與 secret 值**皆未出現在輸出中**；`PRIVATE KEY` 標記 0 命中。→ 決策 5「原樣落地」與 NFR-09 **不衝突**，退路暫不需啟用 |
 | theia 是否污染 stdout | ⚠ **會**。`HOME` 不可寫時，`could not create application folder …` 會印到 **stdout**，使 JSON 解析失敗（exit code 仍為 0）。→ 見決策 10 |
 | `--network none` 離線性 | ✅ 建置與 `dir` 掃描全程 `--network none` 成功；唯獨需可寫 `HOME` |
-| `image`（docker-save tar）模式 | ✅ 通過。`docker save` tar 掃描成功（3,499–3,714 元件，含 base image CA 憑證庫）；**私鑰偵測不受宿主權限影響**——以 nonroot(65534) 與 root 掃同一 tar，結果完全相同（RSA-2048 / RSA-1024 / ED25519 皆偵測到，含 `size`）；輸出同樣不含金鑰內容 |
+| `image` 模式三種輸入 | ✅ **全數通過**：`docker save` tar、**OCI layout 目錄**、**OCI layout tar** 皆掃描成功（3,499–3,714 元件，含 base image CA 憑證庫）；三者私鑰偵測結果一致（RSA-2048 / RSA-1024 / ED25519）。**私鑰偵測不受宿主權限影響**——以 nonroot(65534) 與 root 掃同一輸入，結果完全相同；輸出同樣不含金鑰內容 |
+| CycloneDX 1.6 schema 合規 | ✅ 以 **vendored schema 離線驗證**（`bom-1.6.schema.json` + `spdx` + `jsf-0.82`，Draft7Validator）：`dir`、`docker save` tar、OCI 目錄、OCI tar **四種輸入的輸出皆零違規** |
 | 輸入不可讀時的行為（image 模式） | ⚠ **危險**：tar 不可讀時錯誤只寫 stderr、**stdout 空白、exit code 仍為 0**；且會**依序回退嘗試 docker daemon / podman / containerd / registry**，stderr 可見 `Get "https://index.docker.io/v2/"` —— **隱含外連**，見決策 2 與決策 10 |
 
 ### 鐵則涵蓋範圍之裁定：「禁中國來源依賴」及於組織，不及於個人
