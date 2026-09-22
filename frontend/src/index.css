@@ -11,6 +11,13 @@
   --color-sev-low: #1d4ed8;
   --color-sev-negligible: #4b5563;
   --color-sev-unknown: #6b7280;
+
+  /* 量子狀態色票（ADR-013）。刻意與嚴重度色票**不同色相族**：
+     兩者是不同的風險軸，同色會讓讀者誤以為可直接比較。 */
+  --color-q-safe: #15803d;
+  --color-q-vulnerable: #7e22ce;
+  --color-q-na: #6b7280;
+  --color-q-unknown: #a16207;
 }
 
 :root {
