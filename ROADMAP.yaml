@@ -736,7 +736,7 @@ milestones:
         spec: null
         srs_ref: NFR-05
         depends_on: [T901]
-        status: pending
+        status: in_progress
         estimated_complexity: high
         source_type: manual
         source_ref: ""
@@ -746,6 +746,12 @@ milestones:
         description: |
           ⚠ 本任務會 clone / 建置 / 執行第三方程式，須人類指定拋棄式隔離環境（不掛家目錄、不掛 docker.sock、
           不共用 go module 快取、不含真實金鑰）並逐次授權，autopilot 不得自動執行。
+          【2026-09-22 已完成（golang:1.26.1 容器、v1.1.2@dcd95ac、建置與執行 --network none）】
+          依賴授權（無 GPL/AGPL；MPL-2.0 三項須列 NOTICE）、gitleaks MIT、xstrings 非 theia 獨有
+          （syft 1.45.1 / grype 0.114.0 早已含）、Windows 交叉編譯、可重現建置 SHA 一致、
+          假私鑰不外洩（通過）皆已回填 ADR-013。
+          【仍待辦】image（docker-save tar / OCI）模式實測、Windows 平台實際執行行為。
+          【新發現，已成 ADR 決策 10】HOME 不可寫會污染 stdout；權限不足會靜默漏檢（0600 私鑰無聲略過、exit 0）。
           項目：go list -m all 授權與原產地、huandu/xstrings 判定（並確認釘選 syft/grype 是否已含）、
           gitleaks 規則庫授權、GOOS=windows 建置 + dir/image 兩模式、假私鑰 fixture 驗證輸出不含金鑰內容、
           theia stdout 是否污染 JSON、--network none 離線性。

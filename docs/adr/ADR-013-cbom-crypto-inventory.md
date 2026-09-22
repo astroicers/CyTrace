@@ -113,6 +113,17 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
      一律 **exit 1（錯誤）並說明原因**，不得回 0——「沒掃到」絕不等於「通過」。
    - `Unknown` 視為**未通過**（exit 2）；理由：軍規場域寧可誤報不可漏報。
    - CVE 閘門與量子閘門共用 exit 2 時，**輸出須指明是哪一個觸發**（CI 需可區分）。
+10. **執行環境硬性條件（T901b 實測後新增）**：
+    - **必須提供可寫 `HOME`**：`HOME` 不可寫時 theia 會把非 JSON 訊息印到 **stdout** 汙染輸出。
+      `engine::cbom` 一律以 `HOME=<專用暫存目錄>` 啟動；且**解析前先驗證 stdout 為合法 JSON**，
+      失敗即歸為 `CbomStatus::Failed`（決策 4），不得把污染後的內容當結果。
+    - **必須以能讀取目標的身分執行**：實測顯示權限不足時 theia **靜默漏檢**（`0600` 私鑰完全未回報、
+      無警告、exit 0）。故：
+      - CLI 模式以呼叫者身分執行，**掃描前檢查目標可讀性**，遇不可讀項目須計數並在報表顯性標示
+        「因權限未掃描 N 項」——**不得無聲略過**；
+      - 容器 / server 模式（distroless nonroot 65532）同理；沿用 `f98e021` 對 image SBOM 的處置慣例，
+        必要時以指定 UID 執行，並把採用的身分寫入報表 meta。
+    - 成功指標新增對應測試（見下）。
 
 ## 修訂提議（人類已裁定：**接受三引擎**，2026-09-22）
 
@@ -139,16 +150,28 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
 
 本專案鐵則禁止中國來源依賴。theia 依賴樹需逐模組審查原產地與授權，審查結果附於本節：
 
+**實測環境**（2026-09-22 執行，ROADMAP T901b）：拋棄式 `golang:1.26.1` 容器，原始碼為
+`git clone --branch v1.1.2` → commit `dcd95ac86d1cbe6e867ff3ee059b9ef77bac6a59`，clone 置於 repo 外暫存區；
+**抓取階段**（`go mod vendor`）開網路，**建置與執行階段一律 `--network none`**，不掛家目錄、不掛 docker.sock。
+
 | 項目 | 狀態 |
 |------|------|
-| `go list -m all` 全清單 + 授權彙整 | ⏳ 待做 |
-| 間接依賴 `huandu/xstrings`（經 Masterminds/sprig）原產地判定 | ⏳ 待做（若不合規 → fork 剔除 sprig 或改選項 B） |
-| 內嵌 gitleaks 規則庫授權（MIT）確認 | ⏳ 待做 |
-| `GOOS=windows` 建置 + `dir` **與 `image`（docker-save tar）** 兩模式實測（ADR-010） | ⏳ 待做 |
-| 假私鑰 fixture：確認 theia 輸出不含金鑰內容（決策 8；不合格則走退路） | ⏳ 待做 |
-| theia 是否把 log 寫入 stdout 污染 JSON（決定是否需分流 stderr） | ⏳ 待做 |
-| `--network none` 下實測離線性（目前僅為讀原始碼推論） | ⏳ 待做 |
-| 釘選 syft 1.45.1 / grype 0.114.0 是否已含 `huandu/xstrings`（若是，裁定須三引擎一致） | ⏳ 待做 |
+| 依賴清單 + 授權彙整（vendor 153 模組 / 122 份 LICENSE） | ✅ Apache 42、MIT 42、BSD 4、ISC 1、**MPL-2.0 3**（hashicorp/golang-lru、hashicorp/go-version、cyphar/filepath-securejoin）；**無 GPL / AGPL / LGPL**。MPL-2.0 為檔案級弱 copyleft，靜態連結散布可接受，**須列入 NOTICE**（併入 T908） |
+| 間接依賴 `huandu/xstrings`（經 Masterminds/sprig）原產地判定 | ✅ **非 theia 獨有**：釘選的 **syft v1.45.1 與 grype v0.114.0 的 `go.sum` 亦含 `huandu/xstrings v1.5.0`（經 sprig v3.3.0）**——現行交件早已包含。故不構成採用 theia 的增量風險；是否排除須三引擎一致裁定，屬既有議題 |
+| 內嵌 gitleaks 規則庫授權 | ✅ `zricethezav/gitleaks/v8 v8.30.1` **MIT**、`gitleaks/go-gitdiff v0.9.1` **MIT** |
+| `GOOS=windows` 建置（ADR-010） | ✅ 交叉編譯成功，產物為 PE32+ x86-64 console executable |
+| 可重現建置 | ✅ 以決策 1 的參數於**兩個不同路徑**各建一次，SHA256 相同：`672a3d06ce32d1a242f0f4c10dc0280c257fa4717ecf9c7c6e5f2718bf3adecf`（linux/amd64，27,947,134 bytes，`statically linked, stripped`） |
+| 假私鑰 fixture：輸出不含金鑰內容（決策 8） | ✅ **通過**。RSA-2048 / RSA-1024 / Ed25519 私鑰與一組隨機假 AWS 憑證皆被偵測，輸出只含型別、長度、格式（PEM）、OID 與檔案路徑；三個私鑰檔的任一 40 字元片段、access key id 與 secret 值**皆未出現在輸出中**；`PRIVATE KEY` 標記 0 命中。→ 決策 5「原樣落地」與 NFR-09 **不衝突**，退路暫不需啟用 |
+| theia 是否污染 stdout | ⚠ **會**。`HOME` 不可寫時，`could not create application folder …` 會印到 **stdout**，使 JSON 解析失敗（exit code 仍為 0）。→ 見決策 10 |
+| `--network none` 離線性 | ✅ 建置與 `dir` 掃描全程 `--network none` 成功；唯獨需可寫 `HOME` |
+| `image`（docker-save tar）模式 | ⏳ 未測（本輪只測 `dir`），留待 T901b 續作 |
+
+### ⚠ 新發現：權限不足會靜默漏檢（本輪最重要的實測結果）
+
+同一份 fixture，以**非 root（65534）**執行時，三個 `0600 root:root` 的私鑰檔**完全未被偵測**，
+只找到 `0644` 的那一個檔；**無錯誤、無警告，exit code 仍為 0**。
+這與既有的 image SBOM 問題同類（見 commit `f98e021`：syft 需 `--user 0:0` 才掃得到 tar）。
+對 CyTrace 影響重大——容器交付跑 distroless **nonroot（65532）**，掃描掛載目標時會**靜默低報**私鑰。
 
 ## 後果（Consequences）
 
@@ -178,6 +201,8 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
 | 閘門 fail-closed | 指定 `--fail-on-quantum-vulnerable` 而未取得 CBOM 結果 → exit 1（非 0） | 整合測試（T907） | 每次 CI |
 | 版本可稽核（NFR-03） | 報表標示 theia 版本 | 報表欄位檢查 | 每次 CI |
 | CycloneDX 合規 | `cbom.cdx.json` 通過 vendored 1.6 schema 驗證 | 離線 schema 驗證 | 每次 CI |
+| stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
+| 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 
 ## 關聯（Relations）
 
