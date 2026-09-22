@@ -98,6 +98,84 @@ fn real_engine_end_to_end_against_temp_fixture() {
     assert!(!json.contains("PRIVATE KEY"), "NFR-09：輸出不得含金鑰內容");
 }
 
+// ── 因權限未掃描的項目計數（ADR-013 決策 10）──
+
+#[test]
+#[cfg(unix)]
+fn unreadable_files_in_dir_target_are_counted() {
+    // T901b 實測：dir 模式下 theia 讀不到的檔案會被**靜默跳過**（無錯誤、exit 0）。
+    // 報表若顯示「0 項未掃描」等於謊稱清單完整，故必須自行清點。
+    use cytrace_core::unreadable_count;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("cytrace-unreadable-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("sub")).expect("建立目錄");
+    fs::write(dir.join("readable.crt"), b"x").expect("可讀檔");
+    fs::write(dir.join("sub/secret.key"), b"x").expect("不可讀檔");
+    fs::set_permissions(
+        dir.join("sub/secret.key"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .expect("設定權限");
+
+    let root_can_read_anything = fs::File::open(dir.join("sub/secret.key")).is_ok();
+    let n = unreadable_count(&dir);
+    let _ = fs::remove_dir_all(&dir);
+
+    if root_can_read_anything {
+        assert_eq!(n, 0, "以 root 執行時本就讀得到，計數應為 0");
+    } else {
+        assert_eq!(n, 1, "應清點出 1 個不可讀檔案（遞迴含子目錄）");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn collect_cbom_reports_unscanned_items_for_dir_targets() {
+    // 接線驗證：掃描完成但有讀不到的檔 → unscanned_count 必須反映出來，
+    // 否則報表會謊稱清單完整（決策 10 的唯一緩解手段）
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("cytrace-collect-unscan-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("建立目錄");
+    fs::write(dir.join("ok.crt"), b"x").expect("可讀檔");
+    fs::write(dir.join("locked.key"), b"x").expect("不可讀檔");
+    fs::set_permissions(dir.join("locked.key"), fs::Permissions::from_mode(0o000))
+        .expect("設定權限");
+    let skipped = fs::File::open(dir.join("locked.key")).is_err();
+
+    let inv = collect_cbom(
+        &Engine(Ok(Some(r#"{"bomFormat":"CycloneDX"}"#.into()))),
+        dir.to_str().unwrap(),
+    );
+    let _ = fs::remove_dir_all(&dir);
+
+    assert_eq!(inv.status, CbomStatus::Completed);
+    if skipped {
+        assert_eq!(
+            inv.unscanned_count, 1,
+            "讀不到的檔案必須計入 unscanned_count"
+        );
+    }
+}
+
+#[test]
+fn fully_readable_dir_counts_zero_unreadable() {
+    use cytrace_core::unreadable_count;
+    use std::fs;
+    let dir = std::env::temp_dir().join(format!("cytrace-readable-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("建立目錄");
+    fs::write(dir.join("a.crt"), b"x").expect("寫檔");
+    let n = unreadable_count(&dir);
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(n, 0);
+}
+
 #[test]
 fn empty_but_valid_cbom_is_completed_with_zero_assets() {
     // 跑完確實沒資產 → Completed（與 Failed / EngineAbsent 必須可區分）

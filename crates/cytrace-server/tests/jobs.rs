@@ -21,6 +21,7 @@ use tower::util::ServiceExt;
 // 直接重用 core 的 golden fixtures（2 元件、Critical+Medium 兩弱點）
 const CYCLONEDX: &str = include_str!("../../cytrace-core/tests/fixtures/cyclonedx.json");
 const GRYPE: &str = include_str!("../../cytrace-core/tests/fixtures/grype.json");
+const CBOM: &str = include_str!("../../cytrace-core/tests/fixtures/cbom.json");
 
 const TEST_PASSWORD: &str = "test-password-123";
 static TEST_PHC: LazyLock<String> = LazyLock::new(|| hash_password(TEST_PASSWORD).unwrap());
@@ -33,6 +34,23 @@ impl ScanEngine for FakeEngine {
     }
     fn vuln(&self, _sbom: &str) -> CoreResult<String> {
         Ok(GRYPE.into())
+    }
+    fn cbom(&self, _target: &str) -> CoreResult<Option<String>> {
+        Ok(Some(CBOM.into()))
+    }
+}
+
+/// CBOM 引擎壞掉：驗證主流程（SBOM/CVE/報表）不受影響（ADR-013 決策 4）。
+struct BrokenCbomEngine;
+impl ScanEngine for BrokenCbomEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        Ok(CYCLONEDX.into())
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+    fn cbom(&self, _target: &str) -> CoreResult<Option<String>> {
+        Err(cytrace_core::CytraceError::Engine("theia 爆炸".into()))
     }
 }
 
@@ -138,6 +156,25 @@ async fn create_job(
         .unwrap_or_default();
     let body = format!(
         "{{\"target\":{{\"kind\":\"mounted\",\"root\":\"targets\",\"path\":\"{path}\"}}{fail_on_field}}}"
+    );
+    let req = with_csrf_and(Request::post("/api/v1/jobs"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::COOKIE, cookie)
+        .body(Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    (status, json_of(resp).await)
+}
+
+/// 同 create_job，但開啟 CBOM（ADR-013：預設關閉，須顯式指定）。
+async fn create_job_with_cbom(
+    app: &Router,
+    cookie: &str,
+    path: &str,
+) -> (StatusCode, serde_json::Value) {
+    let body = format!(
+        "{{\"target\":{{\"kind\":\"mounted\",\"root\":\"targets\",\"path\":\"{path}\"}},\"cbom\":true}}"
     );
     let req = with_csrf_and(Request::post("/api/v1/jobs"))
         .header(header::CONTENT_TYPE, "application/json")
@@ -600,4 +637,75 @@ async fn artifact_endpoint_rejects_path_traversal_id() {
             resp.status()
         );
     }
+}
+
+// ── T907：CBOM 在 server 端的降級不變量（ADR-013 決策 4）──
+
+#[tokio::test]
+async fn cbom_engine_failure_does_not_fail_the_job() {
+    // 不變量：CBOM 壞掉時，SBOM／CVE／報表全部照常產出，job 不得標為 failed
+    let env = build_env(Arc::new(BrokenCbomEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job_with_cbom(&env.app, &cookie, "app").await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(
+        done["status"], "done",
+        "CBOM 失敗不得讓整個 job 失敗：{done}"
+    );
+    assert_eq!(
+        done["summary"]["overall_risk"], "Critical",
+        "主流程結果須完好"
+    );
+
+    for (path, key) in [
+        ("result", "schema_version"),
+        ("artifacts/sbom", "bomFormat"),
+    ] {
+        let resp = env
+            .app
+            .clone()
+            .oneshot(
+                Request::get(format!("/api/v1/jobs/{id}/{path}"))
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path} 應仍可取得");
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert!(
+            String::from_utf8_lossy(&body).contains(key),
+            "{path} 內容不正確"
+        );
+    }
+}
+
+#[tokio::test]
+async fn cbom_artifact_is_served_when_scan_succeeds() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (_, v) = create_job_with_cbom(&env.app, &cookie, "app").await;
+    let id = v["id"].as_str().unwrap().to_string();
+    wait_terminal(&env.app, &cookie, &id).await;
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("/api/v1/jobs/{id}/artifacts/cbom"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "cbom 產物應可下載");
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("cryptographic-asset"), "應為 CBOM 內容");
+    assert!(!text.contains("PRIVATE KEY"), "NFR-09：不得含金鑰內容");
 }

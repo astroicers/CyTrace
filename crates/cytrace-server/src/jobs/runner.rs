@@ -7,18 +7,24 @@ use super::{JobError, JobStatus};
 use crate::state::AppState;
 use cytrace_core::engine::ScanEngine;
 use cytrace_core::error::CytraceError;
-use cytrace_core::{assemble, failon, parse, timefmt};
+use cytrace_core::{failon, parse, timefmt};
 use cytrace_types::{DbSnapshot, Meta, Severity, Summary, ToolVersions};
 use std::path::Path;
 
 /// 送出 job（不清理 input）——掛載目標用。
-pub fn spawn(app: AppState, job_id: String, scan_target: String) {
-    spawn_with_cleanup(app, job_id, scan_target, false)
+pub fn spawn(app: AppState, job_id: String, scan_target: String, cbom: bool) {
+    spawn_with_cleanup(app, job_id, scan_target, false, cbom)
 }
 
 /// 送出 job：背景 task 取票（queued）→ running → 終態。呼叫端已 persist queued 記錄。
 /// `cleanup_input=true` 時，終態後刪除 `jobs/<id>/input/`（上傳型 job 縮小機密駐留窗）。
-pub fn spawn_with_cleanup(app: AppState, job_id: String, scan_target: String, cleanup_input: bool) {
+pub fn spawn_with_cleanup(
+    app: AppState,
+    job_id: String,
+    scan_target: String,
+    cleanup_input: bool,
+    cbom: bool,
+) {
     tokio::spawn(async move {
         let permit = match app.scan_semaphore.clone().acquire_owned().await {
             Ok(p) => p,
@@ -42,7 +48,13 @@ pub fn spawn_with_cleanup(app: AppState, job_id: String, scan_target: String, cl
         let job_dir = app.jobs.job_dir(&job_id);
         let fail_on = app.jobs.get(&job_id).and_then(|r| r.fail_on.clone());
         let result = tokio::task::spawn_blocking(move || {
-            run_pipeline(engine.as_ref(), &scan_target, fail_on.as_deref(), &job_dir)
+            run_pipeline(
+                engine.as_ref(),
+                &scan_target,
+                fail_on.as_deref(),
+                &job_dir,
+                cbom,
+            )
         })
         .await;
 
@@ -103,11 +115,23 @@ fn run_pipeline(
     target: &str,
     fail_on: Option<&str>,
     job_dir: &Path,
+    cbom: bool,
 ) -> cytrace_core::error::Result<(Summary, bool)> {
     let sbom = engine.sbom(target)?;
     let grype = engine.vuln(&sbom)?;
     std::fs::write(job_dir.join("sbom.cdx.json"), &sbom)?;
     std::fs::write(job_dir.join("grype.json"), &grype)?;
+
+    // CBOM 失敗只影響 crypto 區段，不中止 job（ADR-013 決策 4）
+    let crypto = if cbom {
+        let inv = cytrace_core::collect_cbom(engine, target);
+        if let Ok(Some(raw)) = engine.cbom(target) {
+            std::fs::write(job_dir.join("cbom.cdx.json"), &raw)?;
+        }
+        Some(inv)
+    } else {
+        None
+    };
 
     let components = parse::parse_cyclonedx(&sbom)?;
     let findings = parse::parse_grype(&grype)?;
@@ -125,7 +149,7 @@ fn run_pipeline(
         generated_at: timefmt::epoch_to_iso(timefmt::epoch_secs()),
         scan_identity: None,
     };
-    let result = assemble(meta, components, findings);
+    let result = cytrace_core::assemble_with_crypto(meta, components, findings, crypto);
     std::fs::write(
         job_dir.join("scan-result.json"),
         serde_json::to_string_pretty(&result)

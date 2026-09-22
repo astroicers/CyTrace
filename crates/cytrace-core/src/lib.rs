@@ -26,6 +26,36 @@ pub fn assemble(
     assemble_with_crypto(meta, components, findings, None)
 }
 
+/// 遞迴清點目錄下**開檔失敗**的檔案數（ADR-013 決策 10）。
+///
+/// T901b 實測：`dir` 模式下 theia 讀不到的檔案會被**靜默跳過**——無錯誤、無警告、exit 0。
+/// 報表若不標示這件事，等於謊稱資產清單完整。掃描前自行清點，讓缺口可見。
+///
+/// 讀不到的**目錄**本身也計為一項（其下內容無從得知）。
+pub fn unreadable_count(root: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 1; // 目錄不可讀：內容無從得知，整體計為一項缺口
+    };
+    let mut n = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // symlink 不追（避免循環與重複計數）
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            n += 1;
+            continue;
+        };
+        if meta.is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            n += unreadable_count(&path);
+        } else if std::fs::File::open(&path).is_err() {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// 執行 CBOM 掃描並組成 [`cytrace_types::CryptoInventory`]（ADR-013 決策 4）。
 ///
 /// **永不回傳錯誤**——CBOM 的任何問題都只反映在 `status`，不中止 SBOM / CVE 主流程：
@@ -53,7 +83,12 @@ pub fn collect_cbom(
             Ok(assets) => CryptoInventory {
                 status: CbomStatus::Completed,
                 assets,
-                unscanned_count: 0,
+                // dir 模式讀不到的檔案會被 theia 靜默跳過，故自行清點讓缺口可見（決策 10）。
+                // image 模式讀 layer 內容，不受宿主權限影響 → 不適用。
+                unscanned_count: match engine::cbom_target(target) {
+                    Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
+                    _ => 0,
+                },
             },
             Err(e) => failed(e),
         },
