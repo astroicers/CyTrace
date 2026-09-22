@@ -5,6 +5,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 引擎版本與校驗和的單一事實源（ADR-012 決策 7 / ADR-013 決策 1）
+# shellcheck source=versions.env
+[ -f "$ROOT/scripts/versions.env" ] && . "$ROOT/scripts/versions.env"
 OUT_DIR="${1:-$ROOT/delivery}"
 TARGET="x86_64-unknown-linux-musl"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -30,6 +33,18 @@ say "收集釘選引擎 syft/grype"
 cp "$(command -v syft)" "$BUNDLE/bin/syft"
 cp "$(command -v grype)" "$BUNDLE/bin/grype"
 
+# 2b) CBOM 引擎 cbomkit-theia（ADR-013）——自源碼建置之產物，SHA256 須符 versions.env
+if command -v cbomkit-theia >/dev/null; then
+  say "收集 CBOM 引擎 cbomkit-theia"
+  cp "$(command -v cbomkit-theia)" "$BUNDLE/bin/cbomkit-theia"
+  if [ -n "${THEIA_LINUX_AMD64_SHA256:-}" ]; then
+    echo "${THEIA_LINUX_AMD64_SHA256}  $BUNDLE/bin/cbomkit-theia" | sha256sum -c - \
+      || { echo "  ❌ cbomkit-theia SHA256 與 versions.env 不符（非可重現建置之產物）"; exit 1; }
+  fi
+else
+  echo "  ⚠️  找不到 cbomkit-theia；本包不含 CBOM 引擎，--cbom 將降級為「未盤點」"
+fi
+
 # 3) grype DB 離線快照
 DBROOT="${GRYPE_DB_CACHE_DIR:-$HOME/.cache/grype/db}"
 if [ -d "$DBROOT" ]; then
@@ -48,15 +63,24 @@ syft scan "dir:$ROOT" --exclude './frontend/node_modules/**' --exclude './target
 cat > "$BUNDLE/NOTICE" <<NOTICE
 CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
 
-本產品封裝下列 Apache-2.0 工具（未修改）：
-  - Syft  (Anchore, Apache-2.0)  — SBOM 產生
-  - Grype (Anchore, Apache-2.0)  — 漏洞比對
+本產品封裝下列工具（未修改）：
+  - Syft          (Anchore, Apache-2.0)  — SBOM 產生
+  - Grype         (Anchore, Apache-2.0)  — 漏洞比對
+  - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) — 密碼學資產盤點（CBOM；ADR-013）
+    自源碼建置（tag v${THEIA_VERSION:-1.1.2}），非上游 release binary。
+    其相依含下列非 Apache-2.0 成分：
+      · gitleaks v8（MIT）、gitleaks/go-gitdiff（MIT）— 內嵌之機密偵測規則
+      · MPL-2.0（檔案級弱 copyleft）：hashicorp/golang-lru、hashicorp/go-version、
+        cyphar/filepath-securejoin
+    完整相依清單與授權見上游 vendor 目錄；本產品僅散布建置產物，未修改原始碼。
 
 Web 服務模式（cytrace serve，ADR-011）的 TLS 由 rustls + ring 提供：
   - ring — 授權為 ISC 與 OpenSSL/BoringSSL 混合（見 ring crate LICENSE）。
     全部 Rust 相依套件授權（含 tokio/axum/argon2 等）與版本見隨附 cytrace.sbom.cdx.json。
 
-供應鏈純淨：本產品不含中國大陸來源依賴（如 OpenSCA-cli）；
+供應鏈純淨：本產品不含中國大陸來源依賴（如 OpenSCA-cli）。
+  本宣告之審查範圍為相依套件的**來源網域、著作權聲明與維護組織**；
+  不含個別貢獻者之國籍或居住地（ADR-013「鐵則涵蓋範圍之裁定」）。
 Rust 相依經 cargo-deny（license/來源白名單）於 CI 把關。
 NOTICE
 

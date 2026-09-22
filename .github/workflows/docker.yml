@@ -86,6 +86,8 @@ jobs:
             GRYPE_VERSION=${{ env.GRYPE_VERSION }}
             SYFT_LINUX_AMD64_SHA256=${{ env.SYFT_LINUX_AMD64_SHA256 }}
             GRYPE_LINUX_AMD64_SHA256=${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+            THEIA_COMMIT=${{ env.THEIA_COMMIT }}
+            THEIA_LINUX_AMD64_SHA256=${{ env.THEIA_LINUX_AMD64_SHA256 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
