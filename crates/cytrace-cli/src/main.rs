@@ -4,7 +4,7 @@
 
 use clap::{Parser, Subcommand};
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
-use cytrace_core::{assemble, engine, failon, parse};
+use cytrace_core::{engine, failon, parse};
 use cytrace_i18n::Catalog;
 use cytrace_types::{DbSnapshot, Meta, Severity, ToolVersions};
 use std::path::{Path, PathBuf};
@@ -37,6 +37,12 @@ enum Command {
         /// 報表輸出路徑（預設 ./<basename>.report.html）。
         #[arg(long, short)]
         out: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
+        /// 有量子脆弱資產即以退出碼 2 結束；**未取得 CBOM 結果則以 1 結束**（fail-closed）。
+        #[arg(long, requires = "cbom")]
+        fail_on_quantum_vulnerable: bool,
     },
     /// 多目標批次掃描（FR-010）：逐一出報表；任一目標達 --fail-on 即整體退出碼 2。
     Batch {
@@ -47,13 +53,22 @@ enum Command {
         /// 報表輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
+        /// 任一目標有量子脆弱資產即退出碼 2；任一目標未取得 CBOM 結果則整批 1。
+        #[arg(long, requires = "cbom")]
+        fail_on_quantum_vulnerable: bool,
     },
-    /// 只產 sbom.cdx.json 與 grype.json。
+    /// 只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）。
     Scan {
         target: String,
         /// 輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
     },
     /// 由既有 ScanResult JSON 離線重現報表（稽核複核；ADR-009）。
     Report {
@@ -120,30 +135,62 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             );
             Ok(EXIT_OK)
         }
-        Command::Scan { target, out_dir } => {
+        Command::Scan {
+            target,
+            out_dir,
+            cbom,
+        } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
             println!("{}", cat.t("cli.scanning", &[("target", target)]));
             let sbom = engine::sbom(target)?;
             let grype = engine::vuln(&sbom)?;
             std::fs::write(dir.join("sbom.cdx.json"), &sbom)?;
             std::fs::write(dir.join("grype.json"), &grype)?;
+            if *cbom {
+                // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物
+                match engine::cbom(target) {
+                    Ok(Some(json)) => std::fs::write(dir.join("cbom.cdx.json"), &json)?,
+                    Ok(None) => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
+                    Err(e) => eprintln!(
+                        "{}",
+                        cat.t("cli.cbom.failed", &[("reason", &e.to_string())])
+                    ),
+                }
+            }
             Ok(EXIT_OK)
         }
         Command::Run {
             target,
             fail_on,
             out,
-        } => run_one(target, fail_on.as_deref(), out.clone(), cat),
+            cbom,
+            fail_on_quantum_vulnerable,
+        } => run_one(
+            target,
+            fail_on.as_deref(),
+            out.clone(),
+            cat,
+            CbomOpts {
+                enabled: *cbom,
+                fail_on_quantum: *fail_on_quantum_vulnerable,
+            },
+        ),
         Command::Batch {
             targets,
             fail_on,
             out_dir,
+            cbom,
+            fail_on_quantum_vulnerable,
         } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+            let opts = CbomOpts {
+                enabled: *cbom,
+                fail_on_quantum: *fail_on_quantum_vulnerable,
+            };
             let mut codes = Vec::with_capacity(targets.len());
             for target in targets {
                 let out = Some(dir.join(format!("{}.report.html", sanitize(target))));
-                codes.push(run_one(target, fail_on.as_deref(), out, cat)?);
+                codes.push(run_one(target, fail_on.as_deref(), out, cat, opts)?);
             }
             Ok(worst_exit(codes))
         }
@@ -238,13 +285,21 @@ fn run_one(
     fail_on: Option<&str>,
     out: Option<PathBuf>,
     cat: &Catalog,
+    opts: CbomOpts,
 ) -> anyhow::Result<u8> {
     println!("{}", cat.t("cli.scanning", &[("target", target)]));
     let sbom = engine::sbom(target)?;
     let grype = engine::vuln(&sbom)?;
     let components = parse::parse_cyclonedx(&sbom)?;
     let findings = parse::parse_grype(&grype)?;
-    let result = assemble(meta_for(target), components, findings);
+    // CBOM 失敗只影響 crypto 區段，不中止主流程（ADR-013 決策 4）
+    let crypto = opts
+        .enabled
+        .then(|| cytrace_core::collect_cbom(&engine::RealEngine, target));
+    if let Some(inv) = &crypto {
+        report_cbom_status(inv, cat);
+    }
+    let result = cytrace_core::assemble_with_crypto(meta_for(target), components, findings, crypto);
     let html = cytrace_report::render(&result)?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
     std::fs::write(&path, html)?;
@@ -276,7 +331,55 @@ fn run_one(
             return Ok(EXIT_FAILON);
         }
     }
+    if opts.fail_on_quantum {
+        match failon::quantum_gate(result.crypto.as_ref()) {
+            failon::QuantumGate::Pass => {}
+            failon::QuantumGate::Vulnerable => {
+                eprintln!("{}", cat.t("cli.quantum_gate.vulnerable", &[]));
+                return Ok(EXIT_FAILON);
+            }
+            // fail-closed：沒掃到絕不等於通過（ADR-013 決策 9）
+            failon::QuantumGate::NoResult => {
+                eprintln!("{}", cat.t("cli.quantum_gate.no_result", &[]));
+                return Ok(EXIT_ERR);
+            }
+        }
+    }
     Ok(EXIT_OK)
+}
+
+/// CBOM 相關旗標（ADR-013）。
+#[derive(Debug, Clone, Copy, Default)]
+struct CbomOpts {
+    enabled: bool,
+    fail_on_quantum: bool,
+}
+
+/// 把 CBOM 狀態告知使用者——降級與失敗**必須可見**，不得無聲略過（ADR-013 決策 4/10）。
+fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
+    use cytrace_types::CbomStatus;
+    match &inv.status {
+        CbomStatus::Completed => {
+            println!(
+                "{}",
+                cat.t("cli.cbom.done", &[("count", &inv.assets.len().to_string())])
+            );
+            if inv.unscanned_count > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned",
+                        &[("count", &inv.unscanned_count.to_string())]
+                    )
+                );
+            }
+        }
+        CbomStatus::EngineAbsent => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
+        CbomStatus::Failed { reason_key } => {
+            eprintln!("{}", cat.t("cli.cbom.failed", &[("reason", reason_key)]))
+        }
+        CbomStatus::NotRequested => {}
+    }
 }
 
 fn meta_for(target: &str) -> Meta {

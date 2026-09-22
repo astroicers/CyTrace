@@ -23,6 +23,16 @@
     "health": {
       "ok": "Service alive: {{addr}}",
       "fail": "Cannot connect: {{addr}}"
+    },
+    "cbom": {
+      "done": "Cryptographic asset inventory complete: {{count}} items",
+      "engine_absent": "CBOM engine (cbomkit-theia) not installed; cryptographic assets were not inventoried",
+      "failed": "CBOM inventory failed: {{reason}} (SBOM and vulnerability results are unaffected)",
+      "unscanned": "Warning: {{count}} items were not scanned due to insufficient permissions; the cryptographic asset list is incomplete"
+    },
+    "quantum_gate": {
+      "vulnerable": "Quantum-vulnerable or undetermined cryptographic assets detected; exiting with code 2",
+      "no_result": "--fail-on-quantum-vulnerable was set but no CBOM result was obtained; \"not scanned\" is not \"passed\"; exiting with code 1"
     }
   },
   "server": {
@@ -165,6 +175,41 @@
       "title": "Notes",
       "disclaimer_not_pentest": "This is a generated dependency-risk report, NOT a penetration test or security assessment, and must not be cited as penetration-test findings."
     },
-    "print": "Print / Save PDF"
+    "print": "Print / Save PDF",
+    "crypto": {
+      "title": "Cryptographic assets (CBOM)",
+      "not_executed": "Cryptographic asset inventory was not run",
+      "engine_absent": "CBOM engine not installed; no data in this section",
+      "failed": "CBOM inventory failed; no data in this section",
+      "empty": "No cryptographic assets detected",
+      "unscanned": "{{count}} items were not scanned due to insufficient permissions; this list is incomplete",
+      "scope_note": "Covers certificates, keys and TLS/JCA configuration in the filesystem and image layers; source-code algorithm usage is not detected",
+      "col": {
+        "name": "Name",
+        "type": "Type",
+        "primitive": "Purpose",
+        "key_size": "Key size",
+        "quantum": "Quantum status",
+        "weak_key": "Weak key",
+        "location": "Location",
+        "not_after": "Valid until"
+      },
+      "weak_key_yes": "Yes",
+      "summary": {
+        "total": "Total assets",
+        "vulnerable": "Quantum-vulnerable",
+        "weak_keys": "Weak keys",
+        "expired": "Expired certificates"
+      },
+      "draft_note": "The 2030/2035 dates in NIST IR 8547 are still a draft"
+    }
+  },
+  "crypto": {
+    "quantum": {
+      "safe": "Quantum-safe",
+      "vulnerable": "Quantum-vulnerable",
+      "not_applicable": "Not applicable",
+      "unknown": "Undetermined"
+    }
   }
 }

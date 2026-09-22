@@ -23,6 +23,16 @@
     "health": {
       "ok": "服務存活：{{addr}}",
       "fail": "無法連線：{{addr}}"
+    },
+    "cbom": {
+      "done": "密碼學資產盤點完成：{{count}} 項",
+      "engine_absent": "未安裝 CBOM 引擎（cbomkit-theia），本次未盤點密碼學資產",
+      "failed": "CBOM 盤點失敗：{{reason}}（不影響 SBOM 與弱點比對結果）",
+      "unscanned": "警告：有 {{count}} 個項目因權限不足未掃描，密碼學資產清單並不完整"
+    },
+    "quantum_gate": {
+      "vulnerable": "偵測到量子脆弱或無法判定的密碼學資產，以退出碼 2 結束",
+      "no_result": "已指定 --fail-on-quantum-vulnerable 但未取得 CBOM 結果；「沒掃到」不等於「通過」，以退出碼 1 結束"
     }
   },
   "server": {
@@ -165,6 +175,41 @@
       "title": "附註",
       "disclaimer_not_pentest": "本報表為產出/核發之依賴風險報表，非滲透測試或資安檢測，不得作為滲透測試結論引用。"
     },
-    "print": "列印 / 存 PDF"
+    "print": "列印 / 存 PDF",
+    "crypto": {
+      "title": "密碼學資產（CBOM）",
+      "not_executed": "本次未執行密碼學資產盤點",
+      "engine_absent": "未安裝 CBOM 引擎，本區段無資料",
+      "failed": "CBOM 盤點失敗，本區段無資料",
+      "empty": "未偵測到密碼學資產",
+      "unscanned": "有 {{count}} 個項目因權限不足未掃描，本清單並不完整",
+      "scope_note": "盤點範圍為檔案系統與映像層的憑證、金鑰與 TLS/JCA 設定；不含原始碼層的演算法使用偵測",
+      "col": {
+        "name": "名稱",
+        "type": "類型",
+        "primitive": "用途",
+        "key_size": "金鑰長度",
+        "quantum": "量子狀態",
+        "weak_key": "弱金鑰",
+        "location": "位置",
+        "not_after": "有效期限"
+      },
+      "weak_key_yes": "是",
+      "summary": {
+        "total": "資產總數",
+        "vulnerable": "量子脆弱",
+        "weak_keys": "弱金鑰",
+        "expired": "已過期憑證"
+      },
+      "draft_note": "NIST IR 8547 的 2030／2035 年限目前仍為草案"
+    }
+  },
+  "crypto": {
+    "quantum": {
+      "safe": "後量子安全",
+      "vulnerable": "量子脆弱",
+      "not_applicable": "不適用",
+      "unknown": "無法判定"
+    }
   }
 }
