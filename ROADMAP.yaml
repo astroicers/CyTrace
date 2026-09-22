@@ -5,7 +5,7 @@
 
 version: "1.0"
 project: CyTrace
-last_updated: 2026-07-02
+last_updated: 2026-09-22
 
 # ═══ 專案元資料 ═══
 
@@ -701,6 +701,140 @@ milestones:
           安全測試全套（惡意壓縮包/path traversal/CSRF/節流）；SRS NFR-09 修訂落稿（依 ADR-011 文字）、
           SDS 新增 server 章；NOTICE 更新（ring 授權標註）；workflow_dispatch tag 演練驗 GHCR 全鏈路
           （push→Release 資產→docker load 核對）。
+
+  - id: M9
+    title: "CBOM 密碼學資產盤點（CycloneDX CBOM + 量子脆弱判定）"
+    target_date: 2027-03-31
+    status: in_progress
+    tasks:
+      - id: T901
+        title: "ADR-013 + fact-check + 供應鏈審查（cbomkit-theia 依賴原產地 / Windows 建置 / 私鑰不外洩實測）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-05
+        depends_on: []
+        status: in_progress
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          ADR-013 Draft 已落稿；.asp-fact-check.md 已記錄 CBOM 規格與引擎查證。
+          待完成 ADR-013「供應鏈審查」表五項（go list -m all 授權/原產地、huandu/xstrings 判定、
+          gitleaks 授權、GOOS=windows 建置、假私鑰 fixture 驗證），結果回填後交人類 /asp:approve-adr。
+      - id: T902
+        title: "釘選並交付第三引擎 cbomkit-theia（versions.env / package.sh+ps1 / Dockerfile / docker.yml / NOTICE）"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-02
+        depends_on: [T901]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          自源碼 go mod vendor 建置 theia，版本 + SHA256 寫入 scripts/versions.env；
+          離線包與 image 納入 theia binary；NOTICE 標示來源；引擎缺席時降級不影響主流程。
+      - id: T903
+        title: "core：ScanEngine::cbom + parse_cbom + quantum.rs 量子脆弱判定"
+        type: NEW_FEATURE
+        priority: 1
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T902]
+        status: pending
+        estimated_complexity: high
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          RealEngine 只接本地 dir / docker-save tar（拒 registry 參照）；parse_cbom 解析 cryptographic-asset 子集
+          （容忍 1.6/1.7）；quantum.rs 移植 cbomkit quantum_safe.rego + 金鑰長度規則
+          （Safe/Vulnerable/NotApplicable/Unknown）。
+      - id: T904
+        title: "ScanResult schema v2：crypto 區段（修訂 ADR-009，v1 向後相容）"
+        type: MODIFICATION
+        priority: 1
+        adr: ADR-013
+        spec: null
+        srs_ref: null
+        depends_on: [T903]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          cytrace-types 新增 CryptoInventory / CryptoAsset（serde default），SCHEMA_VERSION 1→2；
+          frontend/src/types.ts 同步；v1 ScanResult 以 report 子命令仍可重建。
+      - id: T905
+        title: "CLI --cbom / --fail-on-quantum-vulnerable + cbom.cdx.json 落地 + console 勾選與 artifacts/cbom"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-013
+        spec: null
+        srs_ref: null
+        depends_on: [T904]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          run/scan/batch 加 --cbom（預設關）；可選 --fail-on-quantum-vulnerable（exit 2）；
+          server jobs/{id}/artifacts/cbom；NewScanPage 加 CBOM 勾選。
+      - id: T906
+        title: "報表 #crypto 區段（雙語 i18n、量子狀態、憑證到期、範圍限制說明）"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-06
+        depends_on: [T904]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          App.tsx 新增 #crypto 區段；locales report.crypto.* 雙語鍵；Notes 註明不含原始碼演算法偵測、
+          NIST IR 8547 年限為草案；零外連檢查與列印 CSS 沿用。
+      - id: T907
+        title: "測試與 golden：cbom fixture、量子規則表、v1 相容、私鑰不外洩、離線 E2E"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-07
+        depends_on: [T905, T906]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: ""
+        triggered_by: manual
+        sla_hours: 72
+        imported_at: ""
+        description: |
+          tests/fixtures/cbom.json（含過期憑證、RSA-2048、ML-DSA、假私鑰）+ golden 更新；
+          server fake engine 加 cbom 路徑；--network none 離線 E2E。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
