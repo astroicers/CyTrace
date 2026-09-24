@@ -26,15 +26,8 @@ pub trait ScanEngine: Send + Sync {
     /// [`cytrace_types::CbomStatus::Failed`]，同樣不中止主流程。
     ///
     /// 預設實作回 `Ok(None)`，使既有 fake 引擎無須改動（測試縫相容）。
-    fn cbom(&self, _target: &str) -> Result<Option<String>> {
+    fn cbom(&self, _target: &str) -> Result<Option<CbomOutput>> {
         Ok(None)
-    }
-
-    /// 引擎因自身門檻（>1 MiB）略過的檔案數；預設 0。
-    ///
-    /// 與 [`ScanEngine::cbom`] 分開，是為了讓既有 fake 引擎無須改動。
-    fn cbom_skipped(&self) -> u64 {
-        0
     }
 }
 
@@ -48,11 +41,8 @@ impl ScanEngine for RealEngine {
     fn vuln(&self, sbom_cyclonedx_json: &str) -> Result<String> {
         vuln(sbom_cyclonedx_json)
     }
-    fn cbom(&self, target: &str) -> Result<Option<String>> {
+    fn cbom(&self, target: &str) -> Result<Option<CbomOutput>> {
         cbom(target)
-    }
-    fn cbom_skipped(&self) -> u64 {
-        last_skipped_count()
     }
 }
 
@@ -100,13 +90,16 @@ fn query_version(bin: &str) -> Option<String> {
 /// 掃描當下的**真實**引擎版本（NFR-03 可稽核）。
 ///
 /// 以執行期查詢取代編譯期常數：交付包若被換過引擎，報表須反映實際跑的那一個。
-/// 查不到（引擎缺席）→ `unknown`，不謊稱版本。theia 1.1.2 無 `--version`，
-/// 故取建置期由 `versions.env` 帶入的釘選值；未帶入時回 `None`（報表不顯示該列）。
-pub fn tool_versions(include_theia: bool) -> cytrace_types::ToolVersions {
+/// 查不到（引擎缺席）→ `unknown`，不謊稱版本。
+///
+/// theia 的判準是 **CBOM 是否真的跑完**（`CbomStatus::Completed`），不是「有沒有下 `--cbom`」：
+/// 引擎缺席或執行失敗卻蓋上版本號，等於在要併入交件的報表上做不實陳述。
+/// theia 1.1.2 無 `--version`，故取建置期由 `versions.env` 帶入的釘選值。
+pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVersions {
     cytrace_types::ToolVersions {
         syft: query_version("syft").unwrap_or_else(|| "unknown".into()),
         grype: query_version("grype").unwrap_or_else(|| "unknown".into()),
-        theia: include_theia
+        theia: matches!(cbom, cytrace_types::CbomStatus::Completed)
             .then(|| option_env!("CYTRACE_THEIA_VERSION").map(str::to_string))
             .flatten(),
     }
@@ -141,6 +134,19 @@ pub fn scan_identity() -> String {
 }
 
 // ─── CBOM（cbomkit-theia；ADR-013）─────────────────────────────────
+
+/// 一次 CBOM 掃描的產物（ADR-013）。
+///
+/// `skipped` 與 `json` **一起回傳**：早期版本以行程內全域狀態傳遞 skipped，
+/// 在 server 併發（預設兩個 job 共用同一 engine）下會跨 job 互相覆寫——
+/// 實測 15/80 的 job 把「真的有檔案被略過」回報成 0，fail-closed 保護靜默消失。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CbomOutput {
+    /// theia 的原始 CycloneDX JSON（原樣落地用）。
+    pub json: String,
+    /// 引擎因自身大小門檻略過的**檔案數**（去重後）。
+    pub skipped: u64,
+}
 
 /// theia 的輸入形態。**只接受本地路徑**——registry 參照一律在此層拒絕（決策 2）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,7 +187,18 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
         .find_map(|p| target.strip_prefix(*p))
         .unwrap_or(target);
 
-    let path = std::path::Path::new(raw);
+    // **一律正規化為絕對路徑**（決定性防線，NFR-01）：
+    // theia 解析輸入失敗後會把字串當成**映像參照**回退到 docker daemon / podman /
+    // containerd / registry。實測 8 bytes 的 gzip 殘檔命名為 `nginx` → 它載入本機真正的
+    // nginx 映像並輸出 10,807 個元件，當成使用者目標寫進報表（報表造假）；
+    // 截斷的 tar 則會 `GET https://index.docker.io/...`（外連）。
+    // 改成絕對路徑後 theia 直接 `could not parse reference`，兩條回退全部關閉。
+    let path = std::fs::canonicalize(raw).map_err(|_| {
+        CytraceError::Config(format!(
+            "cbom.err.target_not_local（目標非本地可讀路徑，拒絕交給引擎）：{target}"
+        ))
+    })?;
+    let path = path.as_path();
     let meta = std::fs::metadata(path).map_err(|_| {
         CytraceError::Config(format!(
             "cbom.err.target_not_local（目標非本地可讀路徑，拒絕交給引擎）：{target}"
@@ -195,8 +212,9 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
                 "cbom.err.target_unreadable（目錄不可讀）：{target}"
             ))
         })?;
-        // OCI layout 目錄以標記檔辨識
-        if path.join("oci-layout").exists() {
+        // OCI layout 目錄：標記檔須**實質有效**才走 image 模式。
+        // 只判 `exists()` 的話，一個空的 oci-layout 檔就能讓任意目錄被當成映像。
+        if is_oci_layout(path) {
             return Ok(CbomTarget::Image(path.to_path_buf()));
         }
         return Ok(CbomTarget::Dir(path.to_path_buf()));
@@ -221,6 +239,21 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
     Ok(CbomTarget::Image(path.to_path_buf()))
 }
 
+/// OCI image layout 目錄的實質驗證（非僅檔名存在）。
+///
+/// 依 OCI Image Layout 規格要求三者齊備：`oci-layout` 為含 `imageLayoutVersion` 的
+/// 合法 JSON、`index.json` 存在、`blobs/` 目錄存在。
+fn is_oci_layout(dir: &std::path::Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(dir.join("oci-layout")) else {
+        return false;
+    };
+    let valid_marker = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("imageLayoutVersion").cloned())
+        .is_some();
+    valid_marker && dir.join("index.json").exists() && dir.join("blobs").is_dir()
+}
+
 /// 以 magic bytes 辨識 tar / gzip（與 server 的 `archive::detect_kind` 同一組判準）。
 ///
 /// gzip=`\x1f\x8b`；tar=offset 257 的 `ustar`。副檔名不予採信。
@@ -241,16 +274,16 @@ fn is_archive(f: &mut std::fs::File) -> bool {
 /// - stdout 須通過 [`ensure_cbom_json`]，空白或非 JSON 一律視為失敗。
 ///
 /// 回傳 `Ok(None)` 僅代表**引擎不存在**（降級）；其餘失敗回 `Err`。
-pub fn cbom(target: &str) -> Result<Option<String>> {
+pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     let t = cbom_target(target)?;
 
     // theia 需要可寫 HOME 才不會把警告印到 stdout（T901b 實測）
     let home = std::env::temp_dir().join(format!("cytrace-theia-home-{}", std::process::id()));
     std::fs::create_dir_all(&home)?;
 
-    // 環境隔離：清空繼承環境後只加回必要項。
-    // theia 的 image 模式會讀 DOCKER_HOST 等變數尋找 daemon；失敗時再回退 registry。
-    // 目標已於 cbom_target 驗過格式，此處是第二道防線（縱深防禦，NFR-01）。
+    // 環境隔離：清空繼承環境後只加回必要項，避免 DOCKER_HOST 等變數把子程序指向非預期的
+    // daemon。**注意**：這不是零外連的防線——daemon 走預設 unix socket、registry 也不吃
+    // 環境變數。真正關閉回退鏈的是 cbom_target 的絕對路徑正規化。
     let out = Command::new("cbomkit-theia")
         .arg(t.subcommand())
         .arg(t.path())
@@ -274,22 +307,13 @@ pub fn cbom(target: &str) -> Result<Option<String>> {
 
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
     let skipped = skipped_file_count(&String::from_utf8_lossy(&out.stderr));
-    LAST_SKIPPED.store(skipped, std::sync::atomic::Ordering::Relaxed);
 
     let stdout = check(out, "cbomkit-theia")?;
     ensure_cbom_json(&stdout)?;
-    Ok(Some(stdout))
-}
-
-/// 最近一次 [`cbom`] 執行中被引擎略過的檔案數。
-///
-/// 以行程內原子變數承接，避免改動 [`ScanEngine::cbom`] 的簽章（既有 fake 引擎不必動）。
-/// 單一掃描流程內序列執行，故不會交錯。
-static LAST_SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// 讀取最近一次 CBOM 掃描被引擎略過的檔案數。
-pub fn last_skipped_count() -> u64 {
-    LAST_SKIPPED.load(std::sync::atomic::Ordering::Relaxed)
+    Ok(Some(CbomOutput {
+        json: stdout,
+        skipped,
+    }))
 }
 
 /// 清點 theia 因**自身大小門檻**而略過的檔案數（ADR-013 決策 10）。
@@ -301,10 +325,24 @@ pub fn last_skipped_count() -> u64 {
 ///
 /// 該門檻在 1.1.2 無旗標可調，故只能在 CyTrace 側清點並顯性標示。
 pub fn skipped_file_count(stderr: &str) -> u64 {
-    stderr
-        .lines()
-        .filter(|l| l.contains("Skipping large file"))
-        .count() as u64
+    // theia 的**每個 plugin** 對同一個檔案各印一行 → 直接數行數會是檔案數的數倍。
+    // 取訊息中的檔名去重，才符合「被略過的檔案數」語意。
+    let mut files = std::collections::BTreeSet::new();
+    for line in stderr.lines() {
+        let Some(rest) = line.split("Skipping large file:").nth(1) else {
+            continue;
+        };
+        let name = rest
+            .split(" (exceeds")
+            .next()
+            .unwrap_or(rest)
+            .trim()
+            .trim_end_matches('"');
+        if !name.is_empty() {
+            files.insert(name.to_string());
+        }
+    }
+    files.len() as u64
 }
 
 /// 驗證 theia stdout 為合法 JSON（ADR-013 決策 10）。
@@ -432,6 +470,63 @@ mod tests {
     }
 
     #[test]
+    fn target_path_is_always_absolute() {
+        // 決定性防線：theia 解析失敗後會把**字串當成映像參照**回退到 docker daemon / registry。
+        // 實測 8 bytes 的 gzip 殘檔命名為 `nginx` → 載入本機真正的 nginx 映像、輸出 10,807 個元件；
+        // 改成絕對路徑後 theia 直接 `could not parse reference`，兩條回退全部關閉。
+        let d = tmpdir("abs");
+        let f = d.join("nginx");
+        fs::write(&f, [0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0]).unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&d).unwrap();
+        let got = cbom_target("nginx");
+        std::env::set_current_dir(prev).unwrap();
+
+        let t = got.expect("gzip 殘檔仍視為封存檔（格式層），但路徑須絕對化");
+        assert!(
+            t.path().is_absolute(),
+            "交給 theia 的路徑必須是絕對路徑，否則會被當成映像名：{:?}",
+            t.path()
+        );
+    }
+
+    #[test]
+    fn directory_target_is_also_absolute() {
+        let d = tmpdir("absdir");
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(d.parent().unwrap()).unwrap();
+        let name = d.file_name().unwrap().to_str().unwrap().to_string();
+        let got = cbom_target(&name);
+        std::env::set_current_dir(prev).unwrap();
+        assert!(got.expect("目錄").path().is_absolute());
+    }
+
+    #[test]
+    fn oci_layout_marker_must_be_valid_before_image_mode() {
+        // 空的 oci-layout 檔原本就能讓目錄走 image 模式（連 magic bytes 都不跑）
+        let d = tmpdir("fakeoci");
+        fs::write(d.join("oci-layout"), b"").unwrap();
+        let t = cbom_target(d.to_str().unwrap()).expect("目錄可掃");
+        assert!(
+            matches!(t, CbomTarget::Dir(_)),
+            "無效的 oci-layout 標記不得讓目錄被當成映像"
+        );
+    }
+
+    #[test]
+    fn valid_oci_layout_directory_is_image_mode() {
+        let d = tmpdir("realoci");
+        fs::write(d.join("oci-layout"), br#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+        fs::write(d.join("index.json"), b"{}").unwrap();
+        fs::create_dir_all(d.join("blobs")).unwrap();
+        assert!(matches!(
+            cbom_target(d.to_str().unwrap()).expect("合法 OCI layout"),
+            CbomTarget::Image(_)
+        ));
+    }
+
+    #[test]
     fn non_archive_file_is_rejected_instead_of_guessed_as_image() {
         // 複審實測：任何「可讀」檔案都被當成 image 交給 theia 時，
         // theia 會把檔名當成映像參照——曾載入本機真正的 nginx 映像並輸出 10,807 項資產，
@@ -464,6 +559,7 @@ mod tests {
     fn oci_layout_directory_maps_to_image_mode() {
         let d = tmpdir("oci");
         fs::write(d.join("oci-layout"), br#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+        fs::write(d.join("index.json"), b"{}").unwrap();
         fs::create_dir_all(d.join("blobs")).unwrap();
         assert!(matches!(
             cbom_target(d.to_str().unwrap()).expect("OCI layout"),

@@ -73,6 +73,17 @@ pub fn collect_cbom(
     engine: &dyn engine::ScanEngine,
     target: &str,
 ) -> cytrace_types::CryptoInventory {
+    collect_cbom_with_raw(engine, target).0
+}
+
+/// 同 [`collect_cbom`]，另回傳引擎的**原始 JSON**供原樣落地（ADR-013 決策 5）。
+///
+/// 呼叫端**不得**為了取得原始輸出而再跑一次引擎：那會讓掃描成本加倍，
+/// 在 server 併發下也加倍干擾。
+pub fn collect_cbom_with_raw(
+    engine: &dyn engine::ScanEngine,
+    target: &str,
+) -> (cytrace_types::CryptoInventory, Option<String>) {
     use cytrace_types::{CbomStatus, CryptoInventory};
 
     let failed = |e: CytraceError| CryptoInventory {
@@ -82,28 +93,37 @@ pub fn collect_cbom(
         ..Default::default()
     };
 
-    match engine.cbom(target) {
-        Ok(None) => CryptoInventory {
-            status: CbomStatus::EngineAbsent,
-            ..Default::default()
-        },
-        Ok(Some(json)) => match parse::parse_cbom(&json) {
-            Ok(assets) => CryptoInventory {
-                status: CbomStatus::Completed,
-                assets,
-                // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
-                //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
-                //   2. 引擎門檻：theia 略過 >1 MiB 的檔案，只在 stderr 警告、exit 仍為 0
-                unscanned_count: engine.cbom_skipped()
-                    + match engine::cbom_target(target) {
-                        Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
-                        _ => 0,
-                    },
-            },
-            Err(e) => failed(e),
+    let raw = match engine.cbom(target) {
+        Ok(None) => {
+            return (
+                CryptoInventory {
+                    status: CbomStatus::EngineAbsent,
+                    ..Default::default()
+                },
+                None,
+            )
+        }
+        Ok(Some(out)) => out,
+        Err(e) => return (failed(e), None),
+    };
+
+    let inv = match parse::parse_cbom(&raw.json) {
+        Ok(assets) => CryptoInventory {
+            status: CbomStatus::Completed,
+            assets,
+            // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
+            //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
+            //   2. 引擎門檻：theia 略過 >1 MiB 的檔案，只在 stderr 警告、exit 仍為 0
+            // `raw.skipped` 隨該次呼叫回傳，不經任何共用狀態——server 併發下不會互相污染。
+            unscanned_count: raw.skipped
+                + match engine::cbom_target(target) {
+                    Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
+                    _ => 0,
+                },
         },
         Err(e) => failed(e),
-    }
+    };
+    (inv, Some(raw.json))
 }
 
 /// 同 [`assemble`]，並附上 CBOM 盤點結果（ADR-013）。

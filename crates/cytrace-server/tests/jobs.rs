@@ -35,8 +35,11 @@ impl ScanEngine for FakeEngine {
     fn vuln(&self, _sbom: &str) -> CoreResult<String> {
         Ok(GRYPE.into())
     }
-    fn cbom(&self, _target: &str) -> CoreResult<Option<String>> {
-        Ok(Some(CBOM.into()))
+    fn cbom(&self, _target: &str) -> CoreResult<Option<cytrace_core::engine::CbomOutput>> {
+        Ok(Some(cytrace_core::engine::CbomOutput {
+            json: CBOM.into(),
+            skipped: 0,
+        }))
     }
 }
 
@@ -49,7 +52,7 @@ impl ScanEngine for BrokenCbomEngine {
     fn vuln(&self, _sbom: &str) -> CoreResult<String> {
         Ok(GRYPE.into())
     }
-    fn cbom(&self, _target: &str) -> CoreResult<Option<String>> {
+    fn cbom(&self, _target: &str) -> CoreResult<Option<cytrace_core::engine::CbomOutput>> {
         Err(cytrace_core::CytraceError::Engine("theia 爆炸".into()))
     }
 }

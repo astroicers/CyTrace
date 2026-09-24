@@ -124,9 +124,10 @@ fn run_pipeline(
 
     // CBOM 失敗只影響 crypto 區段，不中止 job（ADR-013 決策 4）
     let crypto = if cbom {
-        let inv = cytrace_core::collect_cbom(engine, target);
-        if let Ok(Some(raw)) = engine.cbom(target) {
-            std::fs::write(job_dir.join("cbom.cdx.json"), &raw)?;
+        // 一次呼叫同時取得盤點結果與原始 JSON——不可為了落地而再跑一次引擎
+        let (inv, raw) = cytrace_core::collect_cbom_with_raw(engine, target);
+        if let Some(json) = raw {
+            std::fs::write(job_dir.join("cbom.cdx.json"), &json)?;
         }
         Some(inv)
     } else {
@@ -137,7 +138,11 @@ fn run_pipeline(
     let findings = parse::parse_grype(&grype)?;
     let meta = Meta {
         target: target.to_string(),
-        tool_versions: cytrace_core::engine::tool_versions(cbom),
+        tool_versions: cytrace_core::engine::tool_versions(
+            crypto
+                .as_ref()
+                .map_or(&cytrace_types::CbomStatus::NotRequested, |c| &c.status),
+        ),
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),

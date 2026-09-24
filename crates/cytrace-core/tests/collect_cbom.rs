@@ -3,11 +3,19 @@
 //! 以 fake 引擎驗證——**不需要 theia binary**（air-gapped CI 可跑）。
 //! 關鍵不變量：CBOM 出任何問題都只影響 CBOM 區段，絕不中止 SBOM / CVE 主流程。
 
+use cytrace_core::engine::CbomOutput;
 use cytrace_core::engine::ScanEngine;
 use cytrace_core::{collect_cbom, CytraceError, Result};
 use cytrace_types::{CbomStatus, QuantumStatus};
 
 struct Engine(Result<Option<String>>);
+
+fn out(json: &str, skipped: u64) -> CbomOutput {
+    CbomOutput {
+        json: json.into(),
+        skipped,
+    }
+}
 
 /// 引擎回報「因大小門檻略過 N 個檔案」的 fake。
 struct SkippingEngine(u64);
@@ -19,11 +27,8 @@ impl ScanEngine for SkippingEngine {
     fn vuln(&self, _s: &str) -> Result<String> {
         Ok(r#"{"matches":[]}"#.into())
     }
-    fn cbom(&self, _t: &str) -> Result<Option<String>> {
-        Ok(Some(r#"{"bomFormat":"CycloneDX"}"#.into()))
-    }
-    fn cbom_skipped(&self) -> u64 {
-        self.0
+    fn cbom(&self, _t: &str) -> Result<Option<CbomOutput>> {
+        Ok(Some(out(r#"{"bomFormat":"CycloneDX"}"#, self.0)))
     }
 }
 
@@ -34,9 +39,9 @@ impl ScanEngine for Engine {
     fn vuln(&self, _s: &str) -> Result<String> {
         Ok(r#"{"matches":[]}"#.into())
     }
-    fn cbom(&self, _t: &str) -> Result<Option<String>> {
+    fn cbom(&self, _t: &str) -> Result<Option<CbomOutput>> {
         match &self.0 {
-            Ok(v) => Ok(v.clone()),
+            Ok(v) => Ok(v.clone().map(|j| out(&j, 0))),
             Err(e) => Err(CytraceError::Engine(e.to_string())),
         }
     }
@@ -268,4 +273,71 @@ fn scan_identity_reports_the_effective_uid() {
         id["uid=".len()..].chars().all(|c| c.is_ascii_digit()),
         "uid 須為數字，實得 {id}"
     );
+}
+
+// ── 併發下 unscanned_count 不得互相污染（複審實測 15/80 出錯）──
+
+#[test]
+fn concurrent_collect_cbom_does_not_cross_contaminate_unscanned() {
+    use std::sync::Arc;
+    use std::thread;
+
+    // server 預設 max_concurrent_scans=2，兩個 job 共用同一個 Arc<RealEngine>。
+    // 若 skipped 數經行程內全域狀態傳遞，兩者會互相覆寫——最危險的方向是
+    // 「真的有大檔被略過」被回報成 unscanned=0，fail-closed 保護靜默消失。
+    let big: Arc<dyn ScanEngine> = Arc::new(SkippingEngine(4));
+    let small: Arc<dyn ScanEngine> = Arc::new(SkippingEngine(0));
+
+    let h_big = {
+        let e = Arc::clone(&big);
+        thread::spawn(move || {
+            (0..200)
+                .map(|_| collect_cbom(e.as_ref(), "dir:/big").unscanned_count)
+                .collect::<Vec<_>>()
+        })
+    };
+    let h_small = {
+        let e = Arc::clone(&small);
+        thread::spawn(move || {
+            (0..200)
+                .map(|_| collect_cbom(e.as_ref(), "dir:/small").unscanned_count)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let bigs = h_big.join().expect("big 執行緒");
+    let smalls = h_small.join().expect("small 執行緒");
+
+    assert!(
+        bigs.iter().all(|&n| n == 4),
+        "有大檔被略過的目標不得回報為乾淨：{:?}",
+        bigs.iter().filter(|&&n| n != 4).take(5).collect::<Vec<_>>()
+    );
+    assert!(
+        smalls.iter().all(|&n| n == 0),
+        "沒有略過的目標不得被灌入他人的數字"
+    );
+}
+
+#[test]
+fn absent_engine_must_not_stamp_a_theia_version() {
+    use cytrace_core::engine::tool_versions;
+    use cytrace_types::CbomStatus;
+
+    // 報表是要併入交件、可簽章稽核的證據：引擎沒跑卻蓋上版本號，等於不實陳述。
+    // syft/grype 查不到時誠實回 unknown，theia 也必須一致。
+    let absent = tool_versions(&CbomStatus::EngineAbsent);
+    assert_eq!(absent.theia, None, "引擎缺席不得填版本");
+
+    let failed = tool_versions(&CbomStatus::Failed {
+        reason_key: "x".into(),
+    });
+    assert_eq!(failed.theia, None, "執行失敗不得填版本");
+
+    let not_requested = tool_versions(&CbomStatus::NotRequested);
+    assert_eq!(not_requested.theia, None, "未請求不得填版本");
+
+    // 只有真的跑完才標版本
+    let done = tool_versions(&CbomStatus::Completed);
+    assert!(done.theia.is_some(), "完成掃描須標示引擎版本（NFR-03）");
 }

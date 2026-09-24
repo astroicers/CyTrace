@@ -162,7 +162,7 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             if *cbom {
                 // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物
                 match engine::cbom(target) {
-                    Ok(Some(json)) => std::fs::write(dir.join("cbom.cdx.json"), &json)?,
+                    Ok(Some(out)) => std::fs::write(dir.join("cbom.cdx.json"), &out.json)?,
                     Ok(None) => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
                     Err(e) => eprintln!(
                         "{}",
@@ -332,7 +332,12 @@ fn run_one(
         report_cbom_status(inv, cat);
     }
     let result = cytrace_core::assemble_with_crypto(
-        meta_for(target, opts.enabled),
+        meta_for(
+            target,
+            crypto
+                .as_ref()
+                .map_or(&cytrace_types::CbomStatus::NotRequested, |c| &c.status),
+        ),
         components,
         findings,
         crypto,
@@ -422,7 +427,7 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
     }
 }
 
-fn meta_for(target: &str, cbom: bool) -> Meta {
+fn meta_for(target: &str, cbom: &cytrace_types::CbomStatus) -> Meta {
     Meta {
         target: target.to_string(),
         tool_versions: engine::tool_versions(cbom),
