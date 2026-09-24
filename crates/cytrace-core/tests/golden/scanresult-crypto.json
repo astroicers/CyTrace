@@ -163,6 +163,7 @@
         "primitive": "signature"
       }
     ],
-    "unscanned_count": 2
+    "unscanned_unreadable": 2,
+    "unscanned_oversize": 0
   }
 }

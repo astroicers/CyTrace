@@ -73,7 +73,8 @@ fn scanresult_with_crypto_matches_golden_baseline() {
     let crypto = Some(CryptoInventory {
         status: CbomStatus::Completed,
         assets,
-        unscanned_count: 2,
+        unscanned_unreadable: 2,
+        unscanned_oversize: 0,
     });
     let result = cytrace_core::assemble_with_crypto(meta, components, findings, crypto);
     let actual = serde_json::to_string_pretty(&result).unwrap();

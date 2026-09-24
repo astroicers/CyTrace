@@ -16,7 +16,7 @@ pub enum QuantumGate {
 /// 量子閘門：**fail-closed**——「沒掃到」絕不等於「通過」。
 ///
 /// - 引擎缺席 / 執行失敗 / 未請求 / 無 `crypto` 區段 → [`QuantumGate::NoResult`]（退出碼 1）
-/// - 有項目因權限未掃描（`unscanned_count > 0`）→ 結論不完整，同樣 `NoResult`
+/// - 有項目未掃描（權限或引擎門檻，`unscanned_total() > 0`）→ 結論不完整，同樣 `NoResult`
 /// - 任一資產為 `Vulnerable` 或 `Unknown` → [`QuantumGate::Vulnerable`]（退出碼 2）
 ///   （`Unknown` 視為未通過：軍規場域寧可誤報不可漏報）
 /// - 掃描完成且資產為空 → [`QuantumGate::Pass`]（與「沒掃到」必須區分）
@@ -24,7 +24,7 @@ pub fn quantum_gate(crypto: Option<&CryptoInventory>) -> QuantumGate {
     let Some(inv) = crypto else {
         return QuantumGate::NoResult;
     };
-    if !matches!(inv.status, CbomStatus::Completed) || inv.unscanned_count > 0 {
+    if !matches!(inv.status, CbomStatus::Completed) || inv.unscanned_total() > 0 {
         return QuantumGate::NoResult;
     }
     let flagged = inv.assets.iter().any(|a| {
@@ -70,7 +70,8 @@ mod tests {
         CryptoInventory {
             status,
             assets,
-            unscanned_count: 0,
+            unscanned_unreadable: 0,
+            unscanned_oversize: 0,
         }
     }
 
@@ -143,7 +144,7 @@ mod tests {
     fn quantum_gate_flags_unscanned_items_as_no_result() {
         // 有東西因權限沒掃到 → 結論不完整，不得宣告通過
         let mut inv = inventory(CbomStatus::Completed, vec![asset(QuantumStatus::Safe)]);
-        inv.unscanned_count = 2;
+        inv.unscanned_unreadable = 2;
         assert_eq!(quantum_gate(Some(&inv)), QuantumGate::NoResult);
     }
 

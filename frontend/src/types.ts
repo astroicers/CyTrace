@@ -78,8 +78,10 @@ export interface CryptoAsset {
 export interface CryptoInventory {
   status: CbomStatus
   assets: CryptoAsset[]
-  /** 因權限不可讀而未掃描的項目數（ADR-013 決策 10）——須顯性標示。 */
-  unscanned_count: number
+  /** 因**權限不可讀**而未掃描的項目數——可由操作員調整權限解決。 */
+  unscanned_unreadable: number
+  /** 因**引擎 1 MiB 大小門檻**而未掃描的檔案數——操作員無法以權限或參數解除。 */
+  unscanned_oversize: number
 }
 
 export interface ScanResult {

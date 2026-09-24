@@ -180,7 +180,8 @@ fn collect_cbom_reports_unscanned_items_for_dir_targets() {
     assert_eq!(inv.status, CbomStatus::Completed);
     if skipped {
         assert_eq!(
-            inv.unscanned_count, 1,
+            inv.unscanned_total(),
+            1,
             "讀不到的檔案必須計入 unscanned_count"
         );
     }
@@ -217,7 +218,8 @@ fn engine_skipped_files_are_counted_as_unscanned() {
     let inv = collect_cbom(&SkippingEngine(3), "dir:/x");
     assert_eq!(inv.status, CbomStatus::Completed);
     assert_eq!(
-        inv.unscanned_count, 3,
+        inv.unscanned_total(),
+        3,
         "引擎因大小門檻略過的檔案必須計入 unscanned_count"
     );
 }
@@ -292,7 +294,7 @@ fn concurrent_collect_cbom_does_not_cross_contaminate_unscanned() {
         let e = Arc::clone(&big);
         thread::spawn(move || {
             (0..200)
-                .map(|_| collect_cbom(e.as_ref(), "dir:/big").unscanned_count)
+                .map(|_| collect_cbom(e.as_ref(), "dir:/big").unscanned_total())
                 .collect::<Vec<_>>()
         })
     };
@@ -300,7 +302,7 @@ fn concurrent_collect_cbom_does_not_cross_contaminate_unscanned() {
         let e = Arc::clone(&small);
         thread::spawn(move || {
             (0..200)
-                .map(|_| collect_cbom(e.as_ref(), "dir:/small").unscanned_count)
+                .map(|_| collect_cbom(e.as_ref(), "dir:/small").unscanned_total())
                 .collect::<Vec<_>>()
         })
     };
@@ -340,4 +342,26 @@ fn absent_engine_must_not_stamp_a_theia_version() {
     // 只有真的跑完才標版本
     let done = tool_versions(&CbomStatus::Completed);
     assert!(done.theia.is_some(), "完成掃描須標示引擎版本（NFR-03）");
+}
+
+#[test]
+fn scan_identity_is_concurrency_safe() {
+    use cytrace_core::engine::scan_identity;
+    use std::thread;
+    // 併發呼叫不得因共用暫存檔而互相刪除彼此的探測檔
+    let hs: Vec<_> = (0..8)
+        .map(|_| thread::spawn(|| (0..50).map(|_| scan_identity()).collect::<Vec<_>>()))
+        .collect();
+    for h in hs {
+        let ids = h.join().expect("執行緒");
+        assert!(
+            ids.iter()
+                .all(|i| i.starts_with("uid=") && !i.ends_with("unknown")),
+            "併發下不得出現 uid=unknown：{:?}",
+            ids.iter()
+                .filter(|i| i.ends_with("unknown"))
+                .take(3)
+                .collect::<Vec<_>>()
+        );
+    }
 }

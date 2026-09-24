@@ -105,6 +105,17 @@ pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVer
     }
 }
 
+/// 行程內唯一的暫存路徑（`<prefix>-<pid>-<seq>`）。
+///
+/// 只用 pid 的話，**同一行程內的併發呼叫會共用同一個目錄**——server 預設可並發兩個 job，
+/// 複審實測共用 theia HOME 會讓 26/80 的 job 失敗。序號使兩者互不相干。
+fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()))
+}
+
 /// 執行掃描的身分（ADR-013 決策 10）。
 ///
 /// `dir` 模式的偵測完整度取決於權限，故報表須標示當時是誰在跑。
@@ -113,7 +124,7 @@ pub fn scan_identity() -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let probe = std::env::temp_dir().join(format!("cytrace-uid-probe-{}", std::process::id()));
+        let probe = unique_temp_path("cytrace-uid-probe");
         let uid = std::fs::write(&probe, b"")
             .ok()
             .and_then(|_| std::fs::metadata(&probe).ok())
@@ -278,7 +289,8 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     let t = cbom_target(target)?;
 
     // theia 需要可寫 HOME 才不會把警告印到 stdout（T901b 實測）
-    let home = std::env::temp_dir().join(format!("cytrace-theia-home-{}", std::process::id()));
+    // 每次呼叫一個獨立 HOME：併發 job 共用會互相干擾（複審實測 26/80 失敗）
+    let home = unique_temp_path("cytrace-theia-home");
     std::fs::create_dir_all(&home)?;
 
     // 環境隔離：清空繼承環境後只加回必要項，避免 DOCKER_HOST 等變數把子程序指向非預期的
@@ -308,6 +320,7 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
     let skipped = skipped_file_count(&String::from_utf8_lossy(&out.stderr));
 
+    let _ = std::fs::remove_dir_all(&home); // 不殘留；失敗不影響結果
     let stdout = check(out, "cbomkit-theia")?;
     ensure_cbom_json(&stdout)?;
     Ok(Some(CbomOutput {

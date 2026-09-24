@@ -31,6 +31,12 @@ function Cover() {
   const rows: [string, string][] = [
     [t('report.cover'), m.target],
     ['Syft / Grype', `${m.tool_versions.syft} / ${m.tool_versions.grype}`],
+    ...(m.tool_versions.theia
+      ? ([['CBOMkit-theia', m.tool_versions.theia]] as [string, string][])
+      : []),
+    ...(m.scan_identity
+      ? ([[t('report.scan_identity'), m.scan_identity]] as [string, string][])
+      : []),
     ['DB', `${m.db_snapshot.version}（${m.db_snapshot.built}）`],
     ['Generated', m.generated_at],
   ]
@@ -244,13 +250,25 @@ function Crypto() {
             ))}
           </div>
 
-          {crypto && crypto.unscanned_count > 0 && (
-            <p className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
-              ⚠️{' '}
-              {t('report.crypto.unscanned', {
-                count: crypto.unscanned_count,
-              })}
-            </p>
+          {crypto && crypto.unscanned_unreadable + crypto.unscanned_oversize > 0 && (
+            <div className="mb-3 space-y-1 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+              {crypto.unscanned_unreadable > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_unreadable', {
+                    count: crypto.unscanned_unreadable,
+                  })}
+                </p>
+              )}
+              {crypto.unscanned_oversize > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_oversize', {
+                    count: crypto.unscanned_oversize,
+                  })}
+                </p>
+              )}
+            </div>
           )}
 
           {assets.length === 0 ? (

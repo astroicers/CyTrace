@@ -188,9 +188,24 @@ pub struct CryptoInventory {
     pub status: CbomStatus,
     #[serde(default)]
     pub assets: Vec<CryptoAsset>,
-    /// 因權限不可讀而未掃描的項目數（ADR-013 決策 10）——**不得無聲略過**。
+    /// 因**權限不可讀**而未掃描的項目數（ADR-013 決策 10）。
+    ///
+    /// 與 [`CryptoInventory::unscanned_oversize`] 分開記：兩者的處置完全不同——
+    /// 這一項可由操作員調整權限或改以適當身分重跑解決。
     #[serde(default)]
-    pub unscanned_count: u64,
+    pub unscanned_unreadable: u64,
+    /// 因**引擎自身大小門檻**（theia 略過 >1 MiB 的檔案）而未掃描的檔案數。
+    ///
+    /// 操作員**無法**以權限或身分解決；theia 1.1.2 亦無可調門檻的旗標。
+    #[serde(default)]
+    pub unscanned_oversize: u64,
+}
+
+impl CryptoInventory {
+    /// 未掃描項目總數——量子閘門以此判定結論是否完整（ADR-013 決策 9）。
+    pub fn unscanned_total(&self) -> u64 {
+        self.unscanned_unreadable + self.unscanned_oversize
+    }
 }
 
 impl Default for CryptoInventory {
@@ -198,7 +213,8 @@ impl Default for CryptoInventory {
         Self {
             status: CbomStatus::NotRequested,
             assets: Vec::new(),
-            unscanned_count: 0,
+            unscanned_unreadable: 0,
+            unscanned_oversize: 0,
         }
     }
 }
@@ -364,12 +380,15 @@ mod tests {
         // ADR-013 決策 10：因權限未掃描的項目數不得無聲消失
         let inv = CryptoInventory {
             status: CbomStatus::Completed,
-            unscanned_count: 3,
+            unscanned_unreadable: 3,
+            unscanned_oversize: 2,
             ..CryptoInventory::default()
         };
         let j = serde_json::to_string(&inv).expect("序列化");
         let back: CryptoInventory = serde_json::from_str(&j).expect("反序列化");
-        assert_eq!(back.unscanned_count, 3);
-        assert_eq!(CryptoInventory::default().unscanned_count, 0);
+        assert_eq!(back.unscanned_unreadable, 3);
+        assert_eq!(back.unscanned_oversize, 2);
+        assert_eq!(back.unscanned_total(), 5, "兩種成因合計才是閘門的判準");
+        assert_eq!(CryptoInventory::default().unscanned_total(), 0);
     }
 }

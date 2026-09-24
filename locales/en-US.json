@@ -28,7 +28,8 @@
       "done": "Cryptographic asset inventory complete: {{count}} items",
       "engine_absent": "CBOM engine (cbomkit-theia) not installed; cryptographic assets were not inventoried",
       "failed": "CBOM inventory failed: {{reason}} (SBOM and vulnerability results are unaffected)",
-      "unscanned": "Warning: {{count}} items were not scanned due to insufficient permissions; the cryptographic asset list is incomplete"
+      "unscanned_unreadable": "Warning: {{count}} items were not scanned due to insufficient permissions; rerun as an identity that can read the target",
+      "unscanned_oversize": "Warning: {{count}} files exceed the engine's 1 MiB limit and were not scanned; this limit cannot be lifted by permissions or flags"
     },
     "quantum_gate": {
       "vulnerable": "Quantum-vulnerable or undetermined cryptographic assets detected; exiting with code 2",
@@ -185,7 +186,6 @@
       "engine_absent": "CBOM engine not installed; no data in this section",
       "failed": "CBOM inventory failed; no data in this section",
       "empty": "No cryptographic assets detected",
-      "unscanned": "{{count}} items were not scanned due to insufficient permissions; this list is incomplete",
       "scope_note": "Covers certificates, keys and TLS/JCA configuration in the filesystem and image layers; source-code algorithm usage is not detected",
       "col": {
         "name": "Name",
@@ -204,8 +204,11 @@
         "weak_keys": "Weak keys",
         "expired": "Expired certificates"
       },
-      "draft_note": "The 2030/2035 dates in NIST IR 8547 are still a draft"
-    }
+      "draft_note": "The 2030/2035 dates in NIST IR 8547 are still a draft",
+      "unscanned_unreadable": "{{count}} items were not scanned due to insufficient permissions; this list is incomplete (rerun with sufficient privileges)",
+      "unscanned_oversize": "{{count}} files exceed the engine's 1 MiB limit and were not scanned; this list is incomplete (the limit cannot be lifted by permissions or flags)"
+    },
+    "scan_identity": "Scanned as"
   },
   "crypto": {
     "quantum": {

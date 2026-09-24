@@ -28,7 +28,8 @@
       "done": "密碼學資產盤點完成：{{count}} 項",
       "engine_absent": "未安裝 CBOM 引擎（cbomkit-theia），本次未盤點密碼學資產",
       "failed": "CBOM 盤點失敗：{{reason}}（不影響 SBOM 與弱點比對結果）",
-      "unscanned": "警告：有 {{count}} 個項目因權限不足未掃描，密碼學資產清單並不完整"
+      "unscanned_unreadable": "警告：有 {{count}} 個項目因權限不足未掃描；請以能讀取目標的身分重跑",
+      "unscanned_oversize": "警告：有 {{count}} 個檔案超過引擎的 1 MiB 上限而未掃描；此限制無法以權限或參數解除"
     },
     "quantum_gate": {
       "vulnerable": "偵測到量子脆弱或無法判定的密碼學資產，以退出碼 2 結束",
@@ -185,7 +186,6 @@
       "engine_absent": "未安裝 CBOM 引擎，本區段無資料",
       "failed": "CBOM 盤點失敗，本區段無資料",
       "empty": "未偵測到密碼學資產",
-      "unscanned": "有 {{count}} 個項目因權限不足未掃描，本清單並不完整",
       "scope_note": "盤點範圍為檔案系統與映像層的憑證、金鑰與 TLS/JCA 設定；不含原始碼層的演算法使用偵測",
       "col": {
         "name": "名稱",
@@ -204,8 +204,11 @@
         "weak_keys": "弱金鑰",
         "expired": "已過期憑證"
       },
-      "draft_note": "NIST IR 8547 的 2030／2035 年限目前仍為草案"
-    }
+      "draft_note": "NIST IR 8547 的 2030／2035 年限目前仍為草案",
+      "unscanned_unreadable": "有 {{count}} 個項目因權限不足未掃描，本清單並不完整（可由具足夠權限者重跑解決）",
+      "unscanned_oversize": "有 {{count}} 個檔案超過引擎 1 MiB 上限而未掃描，本清單並不完整（此限制無法以權限或參數解除）"
+    },
+    "scan_identity": "掃描身分"
   },
   "crypto": {
     "quantum": {

@@ -409,12 +409,23 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
                 "{}",
                 cat.t("cli.cbom.done", &[("count", &inv.assets.len().to_string())])
             );
-            if inv.unscanned_count > 0 {
+            // 兩種成因的處置不同，訊息也必須分開：把引擎門檻說成「權限不足」，
+            // 操作員會去 chmod 或改用 root 重跑，而數字永遠不變。
+            if inv.unscanned_unreadable > 0 {
                 eprintln!(
                     "{}",
                     cat.t(
-                        "cli.cbom.unscanned",
-                        &[("count", &inv.unscanned_count.to_string())]
+                        "cli.cbom.unscanned_unreadable",
+                        &[("count", &inv.unscanned_unreadable.to_string())]
+                    )
+                );
+            }
+            if inv.unscanned_oversize > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned_oversize",
+                        &[("count", &inv.unscanned_oversize.to_string())]
                     )
                 );
             }

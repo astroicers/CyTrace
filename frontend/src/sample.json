@@ -87,7 +87,6 @@
   },
   "crypto": {
     "status": "Completed",
-    "unscanned_count": 2,
     "assets": [
       {
         "name": "RSA-2048",
@@ -139,6 +138,8 @@
         "location": "app/weak.crt",
         "not_after": "2020-01-01T00:00:00Z"
       }
-    ]
+    ],
+    "unscanned_unreadable": 1,
+    "unscanned_oversize": 1
   }
 }

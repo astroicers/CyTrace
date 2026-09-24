@@ -114,12 +114,13 @@ pub fn collect_cbom_with_raw(
             // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
             //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
             //   2. 引擎門檻：theia 略過 >1 MiB 的檔案，只在 stderr 警告、exit 仍為 0
-            // `raw.skipped` 隨該次呼叫回傳，不經任何共用狀態——server 併發下不會互相污染。
-            unscanned_count: raw.skipped
-                + match engine::cbom_target(target) {
-                    Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
-                    _ => 0,
-                },
+            // 兩種成因分開記：權限可由操作員解決，引擎門檻不行（文案與處置都不同）。
+            // `raw.skipped` 隨該次呼叫回傳，不經共用狀態——server 併發下不會互相污染。
+            unscanned_oversize: raw.skipped,
+            unscanned_unreadable: match engine::cbom_target(target) {
+                Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
+                _ => 0,
+            },
         },
         Err(e) => failed(e),
     };
