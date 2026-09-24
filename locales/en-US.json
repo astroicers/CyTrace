@@ -33,7 +33,8 @@
     "quantum_gate": {
       "vulnerable": "Quantum-vulnerable or undetermined cryptographic assets detected; exiting with code 2",
       "no_result": "--fail-on-quantum-vulnerable was set but no CBOM result was obtained; \"not scanned\" is not \"passed\"; exiting with code 1"
-    }
+    },
+    "schema_ahead": "This file was produced by a newer CyTrace (schema v{{found}}; this build supports v{{supported}}); unknown fields are dropped and the report may be incomplete"
   },
   "server": {
     "listening": "CyTrace server listening on {{addr}}",

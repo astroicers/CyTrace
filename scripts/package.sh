@@ -41,8 +41,14 @@ if command -v cbomkit-theia >/dev/null; then
     echo "${THEIA_LINUX_AMD64_SHA256}  $BUNDLE/bin/cbomkit-theia" | sha256sum -c - \
       || { echo "  ❌ cbomkit-theia SHA256 與 versions.env 不符（非可重現建置之產物）"; exit 1; }
   fi
+elif [ "${WITHOUT_CBOM:-0}" = "1" ]; then
+  echo "  ℹ️  WITHOUT_CBOM=1：本包刻意不含 CBOM 引擎，--cbom 將降級為「未盤點」"
 else
-  echo "  ⚠️  找不到 cbomkit-theia；本包不含 CBOM 引擎，--cbom 將降級為「未盤點」"
+  # fail-hard（比照 syft/grype）：靜默出一個少了引擎的包，交付方不會發現，
+  # 而 NOTICE 仍會宣稱含 CBOM 引擎——寧可打包失敗
+  echo "✗ 找不到 cbomkit-theia（CBOM 引擎）"
+  echo "  先建置：scripts/build-theia.sh；或顯式以 WITHOUT_CBOM=1 打包不含 CBOM 的版本"
+  exit 1
 fi
 
 # 3) grype DB 離線快照
@@ -59,13 +65,9 @@ say "產 CyTrace 自產 SBOM"
 syft scan "dir:$ROOT" --exclude './frontend/node_modules/**' --exclude './target/**' \
   --exclude './delivery/**' -o cyclonedx-json -q > "$BUNDLE/cytrace.sbom.cdx.json"
 
-# 5) NOTICE
-cat > "$BUNDLE/NOTICE" <<NOTICE
-CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
-
-本產品封裝下列工具（未修改）：
-  - Syft          (Anchore, Apache-2.0)  — SBOM 產生
-  - Grype         (Anchore, Apache-2.0)  — 漏洞比對
+# 5) NOTICE（theia 段落依**實際是否收進包內**輸出，避免宣稱不存在的元件）
+if [ -f "$BUNDLE/bin/cbomkit-theia" ]; then
+  THEIA_NOTICE="$(cat <<THEIA
   - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) — 密碼學資產盤點（CBOM；ADR-013）
     自源碼建置（tag v${THEIA_VERSION:-1.1.2}），非上游 release binary。
     其相依含下列非 Apache-2.0 成分：
@@ -73,6 +75,19 @@ CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
       · MPL-2.0（檔案級弱 copyleft）：hashicorp/golang-lru、hashicorp/go-version、
         cyphar/filepath-securejoin
     完整相依清單與授權見上游 vendor 目錄；本產品僅散布建置產物，未修改原始碼。
+THEIA
+)"
+else
+  THEIA_NOTICE="  （本包不含 CBOM 引擎；cytrace --cbom 將降級為「未盤點」）"
+fi
+
+cat > "$BUNDLE/NOTICE" <<NOTICE
+CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
+
+本產品封裝下列工具（未修改）：
+  - Syft          (Anchore, Apache-2.0)  — SBOM 產生
+  - Grype         (Anchore, Apache-2.0)  — 漏洞比對
+${THEIA_NOTICE}
 
 Web 服務模式（cytrace serve，ADR-011）的 TLS 由 rustls + ring 提供：
   - ring — 授權為 ISC 與 OpenSSL/BoringSSL 混合（見 ring crate LICENSE）。

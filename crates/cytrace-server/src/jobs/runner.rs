@@ -8,7 +8,7 @@ use crate::state::AppState;
 use cytrace_core::engine::ScanEngine;
 use cytrace_core::error::CytraceError;
 use cytrace_core::{failon, parse, timefmt};
-use cytrace_types::{DbSnapshot, Meta, Severity, Summary, ToolVersions};
+use cytrace_types::{DbSnapshot, Meta, Severity, Summary};
 use std::path::Path;
 
 /// 送出 job（不清理 input）——掛載目標用。
@@ -137,17 +137,13 @@ fn run_pipeline(
     let findings = parse::parse_grype(&grype)?;
     let meta = Meta {
         target: target.to_string(),
-        tool_versions: ToolVersions {
-            syft: "pinned".into(),
-            grype: "pinned".into(),
-            theia: None,
-        },
+        tool_versions: cytrace_core::engine::tool_versions(cbom),
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),
         },
         generated_at: timefmt::epoch_to_iso(timefmt::epoch_secs()),
-        scan_identity: None,
+        scan_identity: Some(cytrace_core::engine::scan_identity()),
     };
     let result = cytrace_core::assemble_with_crypto(meta, components, findings, crypto);
     std::fs::write(

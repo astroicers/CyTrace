@@ -9,6 +9,24 @@ use cytrace_types::{CbomStatus, QuantumStatus};
 
 struct Engine(Result<Option<String>>);
 
+/// 引擎回報「因大小門檻略過 N 個檔案」的 fake。
+struct SkippingEngine(u64);
+
+impl ScanEngine for SkippingEngine {
+    fn sbom(&self, _t: &str) -> Result<String> {
+        Ok("{}".into())
+    }
+    fn vuln(&self, _s: &str) -> Result<String> {
+        Ok(r#"{"matches":[]}"#.into())
+    }
+    fn cbom(&self, _t: &str) -> Result<Option<String>> {
+        Ok(Some(r#"{"bomFormat":"CycloneDX"}"#.into()))
+    }
+    fn cbom_skipped(&self) -> u64 {
+        self.0
+    }
+}
+
 impl ScanEngine for Engine {
     fn sbom(&self, _t: &str) -> Result<String> {
         Ok("{}".into())
@@ -185,4 +203,69 @@ fn empty_but_valid_cbom_is_completed_with_zero_assets() {
     );
     assert_eq!(inv.status, CbomStatus::Completed);
     assert!(inv.assets.is_empty());
+}
+
+#[test]
+fn engine_skipped_files_are_counted_as_unscanned() {
+    // 複審實測：theia 略過 >1 MiB 的檔案且 exit 0；不併入 unscanned_count 的話，
+    // 量子閘門會對「其實沒掃完」的目標回報 Pass（假通過）。
+    let inv = collect_cbom(&SkippingEngine(3), "dir:/x");
+    assert_eq!(inv.status, CbomStatus::Completed);
+    assert_eq!(
+        inv.unscanned_count, 3,
+        "引擎因大小門檻略過的檔案必須計入 unscanned_count"
+    );
+}
+
+#[test]
+fn quantum_gate_does_not_pass_when_engine_skipped_files() {
+    use cytrace_core::failon::{quantum_gate, QuantumGate};
+    let inv = collect_cbom(&SkippingEngine(1), "dir:/x");
+    assert_eq!(
+        quantum_gate(Some(&inv)),
+        QuantumGate::NoResult,
+        "有檔案沒掃到時閘門不得回報通過"
+    );
+}
+
+// ── schema_version 超前警告（ADR-013 決策 7）──
+
+#[test]
+fn future_schema_version_is_detected() {
+    use cytrace_core::schema_warning;
+    // 舊版 binary 讀到新版檔案會靜默丟棄未知欄位——唯一的提示就是這個警告
+    assert!(schema_warning(3).is_some(), "超前版本須有警告");
+    assert!(schema_warning(2).is_none(), "同版不警告");
+    assert!(schema_warning(1).is_none(), "舊版可讀，不警告");
+}
+
+// ── NFR-03 可稽核：報表須標示真實工具版本與執行身分 ──
+
+#[test]
+fn version_output_is_parsed_from_engine_banner() {
+    use cytrace_core::engine::parse_version_output;
+    assert_eq!(parse_version_output("syft 1.51.1\n"), Some("1.51.1".into()));
+    assert_eq!(
+        parse_version_output("grype 0.114.0"),
+        Some("0.114.0".into())
+    );
+    // 多行輸出取第一行
+    assert_eq!(
+        parse_version_output("grype 0.114.0\nApplication: grype\n"),
+        Some("0.114.0".into())
+    );
+    assert_eq!(parse_version_output(""), None);
+    assert_eq!(parse_version_output("garbage"), None);
+}
+
+#[test]
+fn scan_identity_reports_the_effective_uid() {
+    use cytrace_core::engine::scan_identity;
+    let id = scan_identity();
+    // 權限會決定 dir 模式的偵測完整度，故執行身分必須可稽核（ADR-013 決策 10）
+    assert!(id.starts_with("uid="), "須為 uid=<n> 形式，實得 {id}");
+    assert!(
+        id["uid=".len()..].chars().all(|c| c.is_ascii_digit()),
+        "uid 須為數字，實得 {id}"
+    );
 }

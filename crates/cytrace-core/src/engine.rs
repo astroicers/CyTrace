@@ -29,6 +29,13 @@ pub trait ScanEngine: Send + Sync {
     fn cbom(&self, _target: &str) -> Result<Option<String>> {
         Ok(None)
     }
+
+    /// 引擎因自身門檻（>1 MiB）略過的檔案數；預設 0。
+    ///
+    /// 與 [`ScanEngine::cbom`] 分開，是為了讓既有 fake 引擎無須改動。
+    fn cbom_skipped(&self) -> u64 {
+        0
+    }
 }
 
 /// 以子程序呼叫釘選版 syft/grype 的真實引擎。
@@ -43,6 +50,9 @@ impl ScanEngine for RealEngine {
     }
     fn cbom(&self, target: &str) -> Result<Option<String>> {
         cbom(target)
+    }
+    fn cbom_skipped(&self) -> u64 {
+        last_skipped_count()
     }
 }
 
@@ -71,6 +81,63 @@ pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
     let _ = std::fs::remove_file(&tmp);
     let out = out.map_err(|e| CytraceError::Engine(format!("grype: {e}")))?;
     check(out, "grype")
+}
+
+/// 由引擎的 `--version` 輸出取出版本號（`syft 1.51.1` → `1.51.1`）。
+pub fn parse_version_output(out: &str) -> Option<String> {
+    let first = out.lines().next()?.trim();
+    let v = first.split_whitespace().nth(1)?;
+    // 版本號須以數字起頭，避免把 help 文字誤認為版本
+    v.chars().next().filter(char::is_ascii_digit)?;
+    Some(v.to_string())
+}
+
+fn query_version(bin: &str) -> Option<String> {
+    let out = Command::new(bin).arg("--version").output().ok()?;
+    parse_version_output(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// 掃描當下的**真實**引擎版本（NFR-03 可稽核）。
+///
+/// 以執行期查詢取代編譯期常數：交付包若被換過引擎，報表須反映實際跑的那一個。
+/// 查不到（引擎缺席）→ `unknown`，不謊稱版本。theia 1.1.2 無 `--version`，
+/// 故取建置期由 `versions.env` 帶入的釘選值；未帶入時回 `None`（報表不顯示該列）。
+pub fn tool_versions(include_theia: bool) -> cytrace_types::ToolVersions {
+    cytrace_types::ToolVersions {
+        syft: query_version("syft").unwrap_or_else(|| "unknown".into()),
+        grype: query_version("grype").unwrap_or_else(|| "unknown".into()),
+        theia: include_theia
+            .then(|| option_env!("CYTRACE_THEIA_VERSION").map(str::to_string))
+            .flatten(),
+    }
+}
+
+/// 執行掃描的身分（ADR-013 決策 10）。
+///
+/// `dir` 模式的偵測完整度取決於權限，故報表須標示當時是誰在跑。
+/// 以「建立暫存檔後讀其 owner」取得 effective uid——零額外相依。
+pub fn scan_identity() -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let probe = std::env::temp_dir().join(format!("cytrace-uid-probe-{}", std::process::id()));
+        let uid = std::fs::write(&probe, b"")
+            .ok()
+            .and_then(|_| std::fs::metadata(&probe).ok())
+            .map(|m| m.uid());
+        let _ = std::fs::remove_file(&probe);
+        match uid {
+            Some(u) => format!("uid={u}"),
+            None => "uid=unknown".into(),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows 無 uid 概念；以使用者名稱標示（ADR-010 雙平台）
+        std::env::var("USERNAME")
+            .map(|u| format!("user={u}"))
+            .unwrap_or_else(|_| "user=unknown".into())
+    }
 }
 
 // ─── CBOM（cbomkit-theia；ADR-013）─────────────────────────────────
@@ -136,12 +203,34 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
     }
 
     // 可讀性前檢：實際開檔
-    std::fs::File::open(path).map_err(|_| {
+    let mut f = std::fs::File::open(path).map_err(|_| {
         CytraceError::Config(format!(
             "cbom.err.target_unreadable（檔案不可讀）：{target}"
         ))
     })?;
+
+    // 格式驗證：**不可僅憑「讀得到」就當成映像**。
+    // theia 的 image 子命令會把無法解析的路徑當成**映像參照**：實測以純文字檔命名為
+    // `nginx` 時，它成功載入本機真正的 nginx 映像並輸出 10,807 項資產——那會把別的
+    // 映像的盤點結果寫進使用者的報表（報表造假）；daemon 不可用時則回退打 registry（NFR-01）。
+    if !is_archive(&mut f) {
+        return Err(CytraceError::Config(format!(
+            "cbom.err.target_not_archive（非 tar / gzip 封存檔，拒絕當成映像）：{target}"
+        )));
+    }
     Ok(CbomTarget::Image(path.to_path_buf()))
+}
+
+/// 以 magic bytes 辨識 tar / gzip（與 server 的 `archive::detect_kind` 同一組判準）。
+///
+/// gzip=`\x1f\x8b`；tar=offset 257 的 `ustar`。副檔名不予採信。
+fn is_archive(f: &mut std::fs::File) -> bool {
+    use std::io::Read;
+    let mut head = [0u8; 262];
+    let Ok(n) = f.read(&mut head) else {
+        return false;
+    };
+    (n >= 2 && head[0..2] == [0x1f, 0x8b]) || (n >= 262 && &head[257..262] == b"ustar")
 }
 
 /// 以 cbomkit-theia 對目標產生 CycloneDX CBOM（ADR-013）。
@@ -159,10 +248,21 @@ pub fn cbom(target: &str) -> Result<Option<String>> {
     let home = std::env::temp_dir().join(format!("cytrace-theia-home-{}", std::process::id()));
     std::fs::create_dir_all(&home)?;
 
+    // 環境隔離：清空繼承環境後只加回必要項。
+    // theia 的 image 模式會讀 DOCKER_HOST 等變數尋找 daemon；失敗時再回退 registry。
+    // 目標已於 cbom_target 驗過格式，此處是第二道防線（縱深防禦，NFR-01）。
     let out = Command::new("cbomkit-theia")
         .arg(t.subcommand())
         .arg(t.path())
+        .env_clear()
         .env("HOME", &home)
+        .env("TMPDIR", std::env::temp_dir())
+        // PATH 必須沿用繼承值：離線交付包的 wrapper 正是靠 PATH 指向包內 bin/，
+        // 寫死路徑會讓交付版找不到引擎（實測：theia 在 ~/.local/bin 時被誤判為缺席）
+        .env(
+            "PATH",
+            std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
+        )
         .output();
 
     let out = match out {
@@ -172,9 +272,39 @@ pub fn cbom(target: &str) -> Result<Option<String>> {
         Err(e) => return Err(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
     };
 
+    // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
+    let skipped = skipped_file_count(&String::from_utf8_lossy(&out.stderr));
+    LAST_SKIPPED.store(skipped, std::sync::atomic::Ordering::Relaxed);
+
     let stdout = check(out, "cbomkit-theia")?;
     ensure_cbom_json(&stdout)?;
     Ok(Some(stdout))
+}
+
+/// 最近一次 [`cbom`] 執行中被引擎略過的檔案數。
+///
+/// 以行程內原子變數承接，避免改動 [`ScanEngine::cbom`] 的簽章（既有 fake 引擎不必動）。
+/// 單一掃描流程內序列執行，故不會交錯。
+static LAST_SKIPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 讀取最近一次 CBOM 掃描被引擎略過的檔案數。
+pub fn last_skipped_count() -> u64 {
+    LAST_SKIPPED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 清點 theia 因**自身大小門檻**而略過的檔案數（ADR-013 決策 10）。
+///
+/// 複審實測：theia 1.1.2 對超過 1 MiB 的檔案直接略過，只在 **stderr** 印
+/// `Skipping large file: <name> (exceeds limit of 1048576 bytes)`，**exit 仍為 0**。
+/// 不清點的話 `unscanned_count` 會是 0，量子閘門就會對「其實沒掃完」的目標回報通過。
+/// 受影響的恰是最要緊的目標：串接的 CA 憑證鏈 bundle、大型 PEM 匯出。
+///
+/// 該門檻在 1.1.2 無旗標可調，故只能在 CyTrace 側清點並顯性標示。
+pub fn skipped_file_count(stderr: &str) -> u64 {
+    stderr
+        .lines()
+        .filter(|l| l.contains("Skipping large file"))
+        .count() as u64
 }
 
 /// 驗證 theia stdout 為合法 JSON（ADR-013 決策 10）。
@@ -251,19 +381,83 @@ mod tests {
         assert!(matches!(t2, CbomTarget::Dir(_)));
     }
 
+    /// 產生一個最小但合法的 uncompressed tar（單一 manifest.json 條目）。
+    fn write_minimal_tar(path: &std::path::Path) {
+        let mut buf = vec![0u8; 512];
+        let name = b"manifest.json";
+        buf[..name.len()].copy_from_slice(name);
+        buf[100..108].copy_from_slice(b"0000644\0"); // mode
+        buf[108..116].copy_from_slice(b"0000000\0"); // uid
+        buf[116..124].copy_from_slice(b"0000000\0"); // gid
+        buf[124..136].copy_from_slice(b"00000000002\0"); // size = 2
+        buf[136..148].copy_from_slice(b"00000000000\0"); // mtime
+        buf[148..156].copy_from_slice(b"        "); // checksum 佔位
+        buf[156] = b'0'; // typeflag = 一般檔
+        buf[257..263].copy_from_slice(b"ustar\0");
+        buf[263..265].copy_from_slice(b"00");
+        let sum: u32 = buf[..512].iter().map(|b| *b as u32).sum();
+        let chk = format!("{sum:06o}\0 ");
+        buf[148..156].copy_from_slice(chk.as_bytes());
+        buf.extend_from_slice(b"[]"); // 內容
+        buf.extend_from_slice(&vec![0u8; 510]); // 補滿 block
+        buf.extend_from_slice(&vec![0u8; 1024]); // 結尾雙空 block
+        fs::write(path, &buf).unwrap();
+    }
+
     #[test]
-    fn existing_tar_maps_to_image_mode() {
+    fn valid_tar_maps_to_image_mode() {
         let d = tmpdir("tar");
         let tar = d.join("image.tar");
-        fs::write(&tar, b"not really a tar").unwrap();
+        write_minimal_tar(&tar);
         assert!(matches!(
-            cbom_target(tar.to_str().unwrap()).expect("tar"),
+            cbom_target(tar.to_str().unwrap()).expect("合法 tar"),
             CbomTarget::Image(_)
         ));
         assert!(matches!(
             cbom_target(&format!("docker-archive:{}", tar.display())).expect("前綴"),
             CbomTarget::Image(_)
         ));
+    }
+
+    #[test]
+    fn gzip_archive_maps_to_image_mode() {
+        let d = tmpdir("targz");
+        let tgz = d.join("image.tar.gz");
+        // gzip magic + 任意內容（內層無法在不解壓的情況下驗證，故僅憑 magic）
+        fs::write(&tgz, [0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0]).unwrap();
+        assert!(matches!(
+            cbom_target(tgz.to_str().unwrap()).expect("gzip"),
+            CbomTarget::Image(_)
+        ));
+    }
+
+    #[test]
+    fn non_archive_file_is_rejected_instead_of_guessed_as_image() {
+        // 複審實測：任何「可讀」檔案都被當成 image 交給 theia 時，
+        // theia 會把檔名當成映像參照——曾載入本機真正的 nginx 映像並輸出 10,807 項資產，
+        // 當成使用者目標的盤點結果寫進報表（報表造假），daemon 不可用時則回退打 registry（NFR-01）。
+        // 故非封存檔一律拒絕，不猜測。
+        let d = tmpdir("notarchive");
+        for (name, bytes) in [
+            ("nginx", &b"just some text"[..]),
+            ("firmware.bin", &[0u8, 1, 2, 3][..]),
+            ("image.tar", &b"not really a tar"[..]),
+        ] {
+            let f = d.join(name);
+            fs::write(&f, bytes).unwrap();
+            assert!(
+                cbom_target(f.to_str().unwrap()).is_err(),
+                "非封存檔 {name} 必須被拒絕，不得交給 theia"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_name_is_rejected_even_if_a_file_with_that_name_exists_in_cwd() {
+        // 原測試只因 CWD 恰好沒有同名檔而通過——語意須由「檔案不存在」改為「非封存格式」
+        for bare in ["nginx:latest", "ghcr.io/foo/bar:1.0", "alpine"] {
+            assert!(cbom_target(bare).is_err(), "裸映像名 {bare} 必須被拒絕");
+        }
     }
 
     #[test]
@@ -275,17 +469,6 @@ mod tests {
             cbom_target(d.to_str().unwrap()).expect("OCI layout"),
             CbomTarget::Image(_)
         ));
-    }
-
-    #[test]
-    fn bare_image_reference_is_rejected() {
-        // ADR-013 決策 2：裸映像名會讓 theia 走 registry，零外連鐵則下一律拒絕
-        for bare in ["nginx:latest", "ghcr.io/foo/bar:1.0", "alpine"] {
-            assert!(
-                cbom_target(bare).is_err(),
-                "裸映像名 {bare} 必須被拒絕，不得交給 theia"
-            );
-        }
     }
 
     #[test]

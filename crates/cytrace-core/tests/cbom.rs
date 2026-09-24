@@ -219,3 +219,29 @@ fn certificate_quantum_resolves_via_signature_algorithm_ref() {
         "簽章為 ML-DSA 的憑證應判為後量子安全"
     );
 }
+
+// ── 引擎級靜默漏檢：theia 跳過 >1 MiB 的檔案（複審實測）──
+
+#[test]
+fn skipped_large_files_are_counted_from_stderr() {
+    use cytrace_core::engine::skipped_file_count;
+
+    // theia 對超過 1 MiB 的檔案直接略過，只在 stderr 印一行 warning、exit 仍為 0。
+    // 不清點的話 unscanned_count 會是 0，量子閘門就會回報「假 Pass」。
+    let stderr = concat!(
+        "time=\"2026-09-23T01:00:00Z\" level=info msg=\"=> Running Certificate Plugin\"\n",
+        "time=\"2026-09-23T01:00:00Z\" level=warning msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "time=\"2026-09-23T01:00:00Z\" level=warning msg=\"Skipping large file: bundle.pem (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(stderr), 2);
+}
+
+#[test]
+fn clean_stderr_counts_zero_skipped() {
+    use cytrace_core::engine::skipped_file_count;
+    assert_eq!(skipped_file_count(""), 0);
+    assert_eq!(
+        skipped_file_count("time=\"...\" level=info msg=\"Certificate Plugin completed\"\n"),
+        0
+    );
+}

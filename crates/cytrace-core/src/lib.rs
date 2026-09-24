@@ -26,6 +26,14 @@ pub fn assemble(
     assemble_with_crypto(meta, components, findings, None)
 }
 
+/// 檢查 ScanResult 的 `schema_version` 是否超前本 binary 支援的版本（ADR-013 決策 7）。
+///
+/// 超前代表該檔由**更新版**的 CyTrace 產生：serde 會靜默丟棄未知欄位，
+/// 使用者會拿到一份少了東西卻看起來正常的報表。回傳 i18n 鍵讓呼叫端顯性警告。
+pub fn schema_warning(schema_version: u32) -> Option<&'static str> {
+    (schema_version > cytrace_types::SCHEMA_VERSION).then_some("cli.schema_ahead")
+}
+
 /// 遞迴清點目錄下**開檔失敗**的檔案數（ADR-013 決策 10）。
 ///
 /// T901b 實測：`dir` 模式下 theia 讀不到的檔案會被**靜默跳過**——無錯誤、無警告、exit 0。
@@ -83,12 +91,14 @@ pub fn collect_cbom(
             Ok(assets) => CryptoInventory {
                 status: CbomStatus::Completed,
                 assets,
-                // dir 模式讀不到的檔案會被 theia 靜默跳過，故自行清點讓缺口可見（決策 10）。
-                // image 模式讀 layer 內容，不受宿主權限影響 → 不適用。
-                unscanned_count: match engine::cbom_target(target) {
-                    Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
-                    _ => 0,
-                },
+                // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
+                //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
+                //   2. 引擎門檻：theia 略過 >1 MiB 的檔案，只在 stderr 警告、exit 仍為 0
+                unscanned_count: engine.cbom_skipped()
+                    + match engine::cbom_target(target) {
+                        Ok(engine::CbomTarget::Dir(p)) => unreadable_count(&p),
+                        _ => 0,
+                    },
             },
             Err(e) => failed(e),
         },

@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
 use cytrace_core::{engine, failon, parse};
 use cytrace_i18n::Catalog;
-use cytrace_types::{DbSnapshot, Meta, Severity, ToolVersions};
+use cytrace_types::{DbSnapshot, Meta, Severity};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -123,6 +123,19 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
         Command::Report { input, out } => {
             let json = std::fs::read_to_string(input)?;
             let result: cytrace_types::ScanResult = serde_json::from_str(&json)?;
+            // 檔案來自更新版 CyTrace → serde 會靜默丟棄未知欄位，必須顯性警告
+            if let Some(key) = cytrace_core::schema_warning(result.schema_version) {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        key,
+                        &[
+                            ("found", &result.schema_version.to_string()),
+                            ("supported", &cytrace_types::SCHEMA_VERSION.to_string()),
+                        ]
+                    )
+                );
+            }
             let html = cytrace_report::render(&result)?;
             let path = out.clone().unwrap_or_else(|| default_report_path(input));
             std::fs::write(&path, html)?;
@@ -261,6 +274,25 @@ fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
 }
 
 /// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。
+/// 單一目標內的雙閘門彙整（ADR-013 決策 9）。
+///
+/// `EXIT_ERR`（1）優先於 `EXIT_FAILON`（2）：exit 2 在本產品有明確語意——政策閘觸發、
+/// 可由人裁定豁免（ADR-006）；exit 1 則是**工具沒跑成功**。量子閘門的 `NoResult`
+/// 代表「根本沒掃到」，若被 `--fail-on` 的 2 蓋掉，CI 會誤讀為「有脆弱資產但掃描成功」。
+fn combine_gates(failon_triggered: bool, quantum: Option<failon::QuantumGate>) -> u8 {
+    let quantum_code = match quantum {
+        Some(failon::QuantumGate::NoResult) => EXIT_ERR,
+        Some(failon::QuantumGate::Vulnerable) => EXIT_FAILON,
+        Some(failon::QuantumGate::Pass) | None => EXIT_OK,
+    };
+    let failon_code = if failon_triggered {
+        EXIT_FAILON
+    } else {
+        EXIT_OK
+    };
+    worst_exit([quantum_code, failon_code])
+}
+
 /// 批次退出碼彙整（ADR-013 決策 9）。
 ///
 /// 優先序：**任一目標 `EXIT_ERR` → 整批 1（優先於 2）**；否則任一 `EXIT_FAILON` → 2；否則 0。
@@ -299,7 +331,12 @@ fn run_one(
     if let Some(inv) = &crypto {
         report_cbom_status(inv, cat);
     }
-    let result = cytrace_core::assemble_with_crypto(meta_for(target), components, findings, crypto);
+    let result = cytrace_core::assemble_with_crypto(
+        meta_for(target, opts.enabled),
+        components,
+        findings,
+        crypto,
+    );
     let html = cytrace_report::render(&result)?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
     std::fs::write(&path, html)?;
@@ -321,31 +358,34 @@ fn run_one(
             &[("path", &path.display().to_string())]
         )
     );
-    if let Some(threshold) = fail_on {
+    // 兩個閘門各自判定後再合併——不可提前 return，否則 fail-on 的 2 會遮蔽量子的 1
+    let failon_triggered = fail_on.is_some_and(|threshold| {
         let th = Severity::from_grype_str(threshold);
-        if failon::triggered(&result.findings, th) {
+        let hit = failon::triggered(&result.findings, th);
+        if hit {
             eprintln!(
                 "{}",
                 cat.t("cli.fail_on_triggered", &[("threshold", threshold)])
             );
-            return Ok(EXIT_FAILON);
         }
-    }
-    if opts.fail_on_quantum {
-        match failon::quantum_gate(result.crypto.as_ref()) {
+        hit
+    });
+
+    let quantum = opts.fail_on_quantum.then(|| {
+        let gate = failon::quantum_gate(result.crypto.as_ref());
+        match gate {
             failon::QuantumGate::Pass => {}
             failon::QuantumGate::Vulnerable => {
-                eprintln!("{}", cat.t("cli.quantum_gate.vulnerable", &[]));
-                return Ok(EXIT_FAILON);
+                eprintln!("{}", cat.t("cli.quantum_gate.vulnerable", &[]))
             }
-            // fail-closed：沒掃到絕不等於通過（ADR-013 決策 9）
             failon::QuantumGate::NoResult => {
-                eprintln!("{}", cat.t("cli.quantum_gate.no_result", &[]));
-                return Ok(EXIT_ERR);
+                eprintln!("{}", cat.t("cli.quantum_gate.no_result", &[]))
             }
         }
-    }
-    Ok(EXIT_OK)
+        gate
+    });
+
+    Ok(combine_gates(failon_triggered, quantum))
 }
 
 /// CBOM 相關旗標（ADR-013）。
@@ -382,20 +422,16 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
     }
 }
 
-fn meta_for(target: &str) -> Meta {
+fn meta_for(target: &str, cbom: bool) -> Meta {
     Meta {
         target: target.to_string(),
-        tool_versions: ToolVersions {
-            syft: "pinned".into(),
-            grype: "pinned".into(),
-            theia: None,
-        },
+        tool_versions: engine::tool_versions(cbom),
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),
         },
         generated_at: epoch_to_iso(epoch_secs()),
-        scan_identity: None,
+        scan_identity: Some(engine::scan_identity()),
     }
 }
 
@@ -414,6 +450,52 @@ fn sanitize(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 單一目標內的雙閘門彙整（複審 finding：fail_on 先行 return 會遮蔽量子 exit 1）──
+
+    #[test]
+    fn quantum_no_result_outranks_failon_within_one_target() {
+        // exit 2 = 政策閘（可豁免）；exit 1 = 工具沒跑成功。
+        // 兩者同時成立時必須回 1，否則 CI 會把「根本沒掃到」讀成「有脆弱資產但掃描成功」。
+        assert_eq!(
+            combine_gates(true, Some(failon::QuantumGate::NoResult)),
+            EXIT_ERR
+        );
+    }
+
+    #[test]
+    fn failon_alone_is_exit_failon() {
+        assert_eq!(combine_gates(true, None), EXIT_FAILON);
+        assert_eq!(
+            combine_gates(true, Some(failon::QuantumGate::Pass)),
+            EXIT_FAILON
+        );
+    }
+
+    #[test]
+    fn quantum_vulnerable_alone_is_exit_failon() {
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::Vulnerable)),
+            EXIT_FAILON
+        );
+    }
+
+    #[test]
+    fn quantum_no_result_alone_is_exit_err() {
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::NoResult)),
+            EXIT_ERR
+        );
+    }
+
+    #[test]
+    fn no_gate_triggered_is_ok() {
+        assert_eq!(combine_gates(false, None), EXIT_OK);
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::Pass)),
+            EXIT_OK
+        );
+    }
 
     // ── T905：batch 退出碼彙整（ADR-013 決策 9）──
 

@@ -33,7 +33,8 @@
     "quantum_gate": {
       "vulnerable": "偵測到量子脆弱或無法判定的密碼學資產，以退出碼 2 結束",
       "no_result": "已指定 --fail-on-quantum-vulnerable 但未取得 CBOM 結果；「沒掃到」不等於「通過」，以退出碼 1 結束"
-    }
+    },
+    "schema_ahead": "此檔由較新版 CyTrace 產生（schema v{{found}}，本版支援 v{{supported}}）；未知欄位會被略過，報表可能不完整"
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",
