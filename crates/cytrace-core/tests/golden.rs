@@ -75,6 +75,7 @@ fn scanresult_with_crypto_matches_golden_baseline() {
         assets,
         unscanned_unreadable: 2,
         unscanned_oversize: 0,
+        unscanned_undetermined: 0,
     });
     let result = cytrace_core::assemble_with_crypto(meta, components, findings, crypto);
     let actual = serde_json::to_string_pretty(&result).unwrap();

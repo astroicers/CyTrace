@@ -82,6 +82,7 @@ mod tests {
             assets,
             unscanned_unreadable: 0,
             unscanned_oversize: 0,
+            unscanned_undetermined: 0,
         }
     }
 

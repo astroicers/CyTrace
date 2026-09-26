@@ -39,6 +39,7 @@ impl ScanEngine for FakeEngine {
         Ok(Some(cytrace_core::engine::CbomOutput {
             json: CBOM.into(),
             skipped: 0,
+            admitted: 0,
         }))
     }
 }

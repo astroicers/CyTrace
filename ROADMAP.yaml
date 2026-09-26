@@ -896,6 +896,11 @@ milestones:
           不可讀 tar 斷言未 spawn theia 且 stderr 無 registry 字串、
           cbom.cdx.json 不含金鑰內容斷言、v1→v2 相容與 schema_version 超前警告；
           server fake engine 加 cbom 路徑；--network none 離線 E2E + vendored CycloneDX 1.6 schema 驗證。
+          【四輪複審後補強】新增真引擎整合測試層 crates/cytrace-core/tests/real_engine.rs
+          （九案例：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、
+          OpenSSH 金鑰、殘檔映像名、非封存檔）+ make test-real-engine + CI job real-engine。
+          理由：四輪複審打出 14 項阻斷級，後兩輪全部只有真引擎跑得出來，fixture 與
+          fake engine 測不到引擎怪癖。
       - id: T908
         title: "治理文件對齊第三引擎（ADR-013 升 Accepted 後才執行）"
         type: MODIFICATION

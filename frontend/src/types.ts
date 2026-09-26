@@ -82,6 +82,8 @@ export interface CryptoInventory {
   unscanned_unreadable: number
   /** 因**引擎 1 MiB 大小門檻**而未掃描的檔案數——操作員無法以權限或參數解除。 */
   unscanned_oversize: number
+  /** 引擎**自承偵測到但未能建模輸出**的資產數——引擎覆蓋率限制。 */
+  unscanned_undetermined: number
 }
 
 export interface ScanResult {

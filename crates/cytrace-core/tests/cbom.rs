@@ -274,3 +274,70 @@ fn skipped_count_never_undercounts_regardless_of_filename() {
     );
     assert_eq!(skipped_file_count(repeated), 1, "同一檔案不得重複計數");
 }
+
+// ── 真實引擎對零資產目標的輸出（第四輪複審實測）──
+
+#[test]
+fn null_components_is_zero_assets_not_a_parse_failure() {
+    // fixture 為釘選版 theia 對「無任何密碼學資產的目錄」的**真實輸出**：
+    // components 是 JSON null，而非缺鍵或空陣列。
+    // 判成解析失敗的話，最常見的輸入（乾淨來源樹）會在交件報表上寫「盤點失敗」，
+    // 且 --fail-on-quantum-vulnerable 恆 exit 1，使用者只能把護欄整條關掉。
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cbom-empty.json"
+    ))
+    .expect("讀取 fixture");
+    let assets = parse_cbom(&raw).expect("null components 須視為零資產");
+    assert!(assets.is_empty());
+}
+
+#[test]
+fn non_cyclonedx_json_is_rejected() {
+    use cytrace_core::engine::ensure_cbom_json;
+    // 放寬 null 的同時必須收緊「是不是 CBOM」，否則 `{}` 會走成 Completed + 0 資產，
+    // 換來一個新的 fail-open。
+    assert!(ensure_cbom_json("{}").is_err(), "缺 bomFormat 須拒絕");
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"SPDX","specVersion":"2.3"}"#).is_err(),
+        "非 CycloneDX 須拒絕"
+    );
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"CycloneDX"}"#).is_err(),
+        "缺 specVersion 須拒絕"
+    );
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"CycloneDX","specVersion":"1.6","components":null}"#)
+            .is_ok(),
+        "合法 CBOM（零資產）須通過"
+    );
+}
+
+#[test]
+fn engine_admitted_but_unmodelled_findings_are_counted() {
+    use cytrace_core::engine::undetermined_count;
+
+    // theia 對「偵測到但無法建模」的資產只在 stderr 留痕，stdout 零元件、exit 0。
+    // 實測：OpenSSH 格式私鑰 → stderr 有 "Found 1 private key(s)"，
+    // 但 CBOM 的 components 是 null；同一把金鑰換成 PKCS#8 PEM 則會產生資產。
+    // 引擎自己講得出口的漏檢若不計數，報表會宣稱清單完整而閘門回 Pass。
+    let stderr = concat!(
+        "msg=\"Secret detected\" file=etc/ssh/ssh_host_ed25519_key type=private-key\n",
+        "msg=\"Found 1 private key(s) in etc/ssh/ssh_host_ed25519_key\"\n",
+    );
+    assert_eq!(
+        undetermined_count(stderr, 0),
+        1,
+        "引擎自承偵測到 1 把私鑰但 stdout 零資產 → 須計為未確定 1 項"
+    );
+
+    // stdout 已如實產出對應資產時不重複計數
+    assert_eq!(undetermined_count(stderr, 1), 0);
+    assert_eq!(undetermined_count(stderr, 5), 0, "不得出現負數或溢位");
+
+    // 沒有自承漏檢時為 0
+    assert_eq!(
+        undetermined_count("msg=\"Certificate Plugin completed\"\n", 0),
+        0
+    );
+}

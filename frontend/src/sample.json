@@ -140,6 +140,7 @@
       }
     ],
     "unscanned_unreadable": 1,
-    "unscanned_oversize": 1
+    "unscanned_oversize": 1,
+    "unscanned_undetermined": 0
   }
 }

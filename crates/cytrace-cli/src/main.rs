@@ -420,6 +420,15 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
                     )
                 );
             }
+            if inv.unscanned_undetermined > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned_undetermined",
+                        &[("count", &inv.unscanned_undetermined.to_string())]
+                    )
+                );
+            }
             if inv.unscanned_oversize > 0 {
                 eprintln!(
                     "{}",

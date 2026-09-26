@@ -41,24 +41,56 @@ pub fn schema_warning(schema_version: u32) -> Option<&'static str> {
 ///
 /// 讀不到的**目錄**本身也計為一項（其下內容無從得知）。
 pub fn unreadable_count(root: &std::path::Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let mut visited = std::collections::HashSet::new();
+    unreadable_count_inner(root, &mut visited, 0)
+}
+
+/// [`unreadable_count`] 的遞迴本體。
+///
+/// **追隨 symlink**（與 theia 的 dir 模式一致）：symlink 是引擎的實際掃描對象，
+/// 一律 `continue` 會把整個類別排除在缺口帳外——解開的容器 rootfs 上
+/// `/etc/ssl/certs/*.pem` 多為絕對 symlink，逃根後讀不到卻不被計數，
+/// 於是報表宣稱清單完整、閘門回 Pass（fail-open）。
+///
+/// 以已訪問的 canonical 路徑集合防循環，並設遞迴深度上限。
+fn unreadable_count_inner(
+    dir: &std::path::Path,
+    visited: &mut std::collections::HashSet<std::path::PathBuf>,
+    depth: usize,
+) -> u64 {
+    const MAX_DEPTH: usize = 64;
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    // 同一個實體目錄只走一次（symlink 循環防護）
+    match std::fs::canonicalize(dir) {
+        Ok(real) => {
+            if !visited.insert(real) {
+                return 0;
+            }
+        }
+        Err(_) => return 1, // 連 canonicalize 都失敗：內容無從得知
+    }
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return 1; // 目錄不可讀：內容無從得知，整體計為一項缺口
     };
     let mut n = 0;
     for entry in entries.flatten() {
         let path = entry.path();
-        // symlink 不追（避免循環與重複計數）
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+        // 追隨 symlink：用 metadata（非 symlink_metadata）判定型別。
+        // 斷鏈或指向不可讀處時 metadata 本身就會失敗 → 計為缺口。
+        let Ok(meta) = std::fs::metadata(&path) else {
             n += 1;
             continue;
         };
-        if meta.is_symlink() {
-            continue;
-        }
         if meta.is_dir() {
-            n += unreadable_count(&path);
-        } else if std::fs::File::open(&path).is_err() {
-            n += 1;
+            n += unreadable_count_inner(&path, visited, depth + 1);
+        } else if meta.is_file() {
+            // 只對一般檔開檔：FIFO / socket / device 開下去會阻塞
+            if std::fs::File::open(&path).is_err() {
+                n += 1;
+            }
         }
     }
     n
@@ -86,11 +118,16 @@ pub fn collect_cbom_with_raw(
 ) -> (cytrace_types::CryptoInventory, Option<String>) {
     use cytrace_types::{CbomStatus, CryptoInventory};
 
-    let failed = |e: CytraceError| CryptoInventory {
+    // 解析失敗不得把已算出的漏檢成因歸零——那是操作員唯一的處置線索
+    // （唯一的資產可能就在那個被略過的 CA bundle 裡）。
+    let failed = |e: CytraceError, oversize: u64| CryptoInventory {
         status: CbomStatus::Failed {
             reason_key: e.to_string(),
         },
-        ..Default::default()
+        assets: Vec::new(),
+        unscanned_oversize: oversize,
+        unscanned_unreadable: 0,
+        unscanned_undetermined: 0,
     };
 
     let raw = match engine.cbom(target) {
@@ -104,12 +141,13 @@ pub fn collect_cbom_with_raw(
             )
         }
         Ok(Some(out)) => out,
-        Err(e) => return (failed(e), None),
+        Err(e) => return (failed(e, 0), None),
     };
 
     let inv = match parse::parse_cbom(&raw.json) {
         Ok(assets) => CryptoInventory {
             status: CbomStatus::Completed,
+            unscanned_undetermined: raw.admitted.saturating_sub(assets.len() as u64),
             assets,
             // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
             //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
@@ -122,7 +160,7 @@ pub fn collect_cbom_with_raw(
                 _ => 0,
             },
         },
-        Err(e) => failed(e),
+        Err(e) => failed(e, raw.skipped),
     };
     (inv, Some(raw.json))
 }

@@ -309,6 +309,14 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 不完整不遮蔽脆弱 | 有脆弱資產時，漏掃不得把判定改成 `NoResult` | 單元測試 `incomplete_scan_does_not_mask_*` | 每次 CI |
 | 併發不互相污染 | 暫存路徑（theia HOME / SBOM）每次呼叫唯一；unscanned 不跨 job 串 | 併發測試 ×3 | 每次 CI |
 | 無暫存殘留 | 所有離開路徑（含引擎缺席）皆不留暫存目錄 | `engine_leaves_no_temp_home_behind` | 每次 CI |
+| **真引擎 × 真實輸入形態** | 九個案例全綠：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、OpenSSH 金鑰、殘檔映像名、非封存檔 | `make test-real-engine`（CI job `real-engine`，以 Dockerfile theia-builder stage 建引擎） | 每次 CI |
+
+> **為何需要獨立的真引擎測試層**（四輪複審的共同教訓）：M9 共經四輪獨立複審、
+> 打出 14 項阻斷級，而**後兩輪的全部缺陷都只有真引擎跑得出來**——零資產目標輸出
+> `components: null`、`dir` 模式追隨 symlink、FIFO 導致永久掛死、OpenSSH 格式私鑰
+> 只在 stderr 留痕。fixture 與 fake engine 對這些**一個都測不到**：fixture 的形狀是
+> 我們自己寫的（於是寫成我們以為的樣子），fake engine 的行為是我們自己定義的
+> （於是不會有引擎的怪癖）。此層存在的目的就是補上這個盲區。
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 

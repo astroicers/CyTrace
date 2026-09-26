@@ -189,6 +189,8 @@ pub struct CbomOutput {
     pub json: String,
     /// 引擎因自身大小門檻略過的**檔案數**（去重後）。
     pub skipped: u64,
+    /// 引擎自承偵測到的資產數（`Found N ...`）——供呼叫端與實際產出對帳。
+    pub admitted: u64,
 }
 
 /// theia 的輸入形態。**只接受本地路徑**——registry 參照一律在此層拒絕（決策 2）。
@@ -317,7 +319,28 @@ fn is_archive(f: &mut std::fs::File) -> bool {
 /// - stdout 須通過 [`ensure_cbom_json`]，空白或非 JSON 一律視為失敗。
 ///
 /// 回傳 `Ok(None)` 僅代表**引擎不存在**（降級）；其餘失敗回 `Err`。
+/// CBOM 子程序的逾時上限（秒）。可經 `CYTRACE_CBOM_TIMEOUT_SECS` 覆寫。
+///
+/// 無逾時的後果（實測）：目標樹含一個 FIFO 即永久阻塞——CLI 無聲掛住、
+/// server 的 permit 永不釋放且 Running job 不可取消，預設併發 2 時兩個卡住
+/// 就讓掃描服務停擺到重啟。真實 root filesystem 本身就含 FIFO，屬普通輸入。
+const CBOM_TIMEOUT_SECS_DEFAULT: u64 = 600;
+
+fn cbom_timeout() -> std::time::Duration {
+    let secs = std::env::var("CYTRACE_CBOM_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(CBOM_TIMEOUT_SECS_DEFAULT);
+    std::time::Duration::from_secs(secs)
+}
+
 pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
+    cbom_with_timeout(target, cbom_timeout())
+}
+
+/// 同 [`cbom`]，但可指定逾時（供測試注入短逾時，不必操作行程環境變數）。
+pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<Option<CbomOutput>> {
     let t = cbom_target(target)?;
 
     // theia 需要可寫 HOME 才不會把警告印到 stdout（T901b 實測）
@@ -328,9 +351,11 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     // 環境隔離：清空繼承環境後只加回必要項，避免 DOCKER_HOST 等變數把子程序指向非預期的
     // daemon。**注意**：這不是零外連的防線——daemon 走預設 unix socket、registry 也不吃
     // 環境變數。真正關閉回退鏈的是 cbom_target 的絕對路徑正規化。
-    let out = Command::new("cbomkit-theia")
+    let mut child = match Command::new("cbomkit-theia")
         .arg(t.subcommand())
         .arg(t.path())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env_clear()
         .env("HOME", home.path())
         .env("TMPDIR", std::env::temp_dir())
@@ -340,23 +365,49 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
             "PATH",
             std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
         )
-        .output();
-
-    let out = match out {
-        Ok(o) => o,
+        .spawn()
+    {
+        Ok(c) => c,
         // 引擎不存在 → 降級（決策 4）；其餘 I/O 錯誤仍為失敗
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
     };
 
+    // 逾時輪詢：逾時即 kill，歸為 Failed（fail-closed，不中止主流程）
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(CytraceError::Engine(format!(
+                        "cbom.err.timeout（引擎逾時 {} 秒，已終止；目標可能含具名管線或特殊檔案）",
+                        timeout.as_secs()
+                    )));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
+        }
+    }
+    let out = child
+        .wait_with_output()
+        .map_err(|e| CytraceError::Engine(format!("cbomkit-theia: {e}")))?;
+
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
-    let skipped = skipped_file_count(&String::from_utf8_lossy(&out.stderr));
+    let stderr_text = String::from_utf8_lossy(&out.stderr).into_owned();
+    let skipped = skipped_file_count(&stderr_text);
+    // 引擎自承偵測到的數量（尚未扣除 stdout 實際產出，由呼叫端對帳）
+    let admitted = undetermined_count(&stderr_text, 0);
 
     let stdout = check(out, "cbomkit-theia")?;
     ensure_cbom_json(&stdout)?;
     Ok(Some(CbomOutput {
         json: stdout,
         skipped,
+        admitted,
     }))
 }
 
@@ -396,6 +447,35 @@ pub fn skipped_file_count(stderr: &str) -> u64 {
     files.len() as u64
 }
 
+/// 清點「引擎自承偵測到、但未出現在 stdout 的資產數」（ADR-013 決策 10）。
+///
+/// theia 對它偵測到卻無法建模的資產只在 **stderr** 留痕
+/// （`Found N private key(s) in <path>`），stdout 零元件、exit 0。
+/// 實測：OpenSSH 格式私鑰走這條路；同一把金鑰改存 PKCS#8 PEM 則會產生資產——
+/// **換個檔案格式，閘門答案就從「有脆弱」變成「通過」**。
+/// 原則與 oversize 相同：引擎講得出口的漏檢一律要出現在計數裡，寧可多算。
+///
+/// `modelled` 傳入 stdout 實際產出的資產數，用以扣除已如實回報的部分。
+pub fn undetermined_count(stderr: &str, modelled: u64) -> u64 {
+    let mut admitted = 0u64;
+    for line in stderr.lines() {
+        let Some(rest) = line.split("Found ").nth(1) else {
+            continue;
+        };
+        if !rest.contains("private key") && !rest.contains("certificate") {
+            continue;
+        }
+        // 取 "Found " 之後的第一個整數
+        let n: u64 = rest
+            .split_whitespace()
+            .next()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or(1); // 認不得數字也算一項：寧可多算
+        admitted = admitted.saturating_add(n);
+    }
+    admitted.saturating_sub(modelled)
+}
+
 /// 驗證 theia stdout 為合法 JSON（ADR-013 決策 10）。
 ///
 /// `HOME` 不可寫時 theia 會把警告印到 **stdout** 汙染輸出；輸入不可讀時則 **stdout 空白且 exit 0**。
@@ -406,9 +486,18 @@ pub fn ensure_cbom_json(stdout: &str) -> Result<&str> {
             "cbom.err.empty_output（引擎輸出空白，非「零資產」）".into(),
         ));
     }
-    serde_json::from_str::<serde_json::Value>(stdout).map_err(|e| {
+    let v: serde_json::Value = serde_json::from_str(stdout).map_err(|e| {
         CytraceError::Parse(format!("cbom.err.stdout_not_json（輸出非合法 JSON）：{e}"))
     })?;
+    // 光是「合法 JSON」不夠：`{}` 也會通過，然後被當成「掃到 0 項」——又是一個 fail-open。
+    // 必須確認這確實是一份 CycloneDX BOM。
+    let is_cyclonedx = v.get("bomFormat").and_then(|b| b.as_str()) == Some("CycloneDX")
+        && v.get("specVersion").is_some();
+    if !is_cyclonedx {
+        return Err(CytraceError::Parse(
+            "cbom.err.not_cyclonedx（輸出不是 CycloneDX BOM）".into(),
+        ));
+    }
     Ok(stdout)
 }
 

@@ -35,6 +35,29 @@ jobs:
       - name: i18n 鍵一致（NFR-06）
         run: python3 scripts/i18n-check.py
 
+  real-engine:
+    name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain（釘選於 rust-toolchain.toml）
+        run: rustup show
+      - name: 讀引擎釘選版本
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+      # 與交付鏈同一條建置路徑（Dockerfile theia-builder stage），確保測的是會出貨的那支
+      - name: 建置 cbomkit-theia（自源碼，驗 SHA256）
+        run: |
+          docker build --target theia-builder -t theia-builder .
+          cid=$(docker create theia-builder)
+          docker cp "$cid:/out/cbomkit-theia" /usr/local/bin/cbomkit-theia
+          docker rm "$cid"
+          chmod +x /usr/local/bin/cbomkit-theia
+          echo "${THEIA_LINUX_AMD64_SHA256}  /usr/local/bin/cbomkit-theia" | sha256sum -c -
+      # M9 四輪複審中，後兩輪的全部阻斷級都只有真引擎跑得出來
+      # （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕）
+      - name: 真引擎 × 真實輸入形態
+        run: make test-real-engine
+
   supply-chain:
     name: 供應鏈（cargo-deny：license / 來源白名單）
     runs-on: ubuntu-latest

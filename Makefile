@@ -7,7 +7,7 @@
 
 -include $(HOME)/.claude/asp/Makefile.inc
 
-.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check frontend-console package docker-build docker-smoke docker-save
+.PHONY: info build test test-real-engine lint clippy fmt fmt-check coverage clean-rs frontend frontend-check frontend-console package docker-build docker-smoke docker-save
 
 info:
 	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace + 報表前端）"
@@ -39,6 +39,17 @@ build:
 
 test:
 	cargo test --workspace
+
+# 真引擎 × 真實輸入形態的整合測試（ADR-013）。
+# 需要 cbomkit-theia 在 PATH；air-gapped CI 無引擎時這些案例為 #[ignore]，
+# 故 `make test` 不會跑到，須顯式呼叫本 target。
+#
+# 存在理由：M9 四輪複審中，後兩輪的全部阻斷級都是「真引擎在常見輸入上的實際行為」
+# （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕），
+# 用 fixture 與 fake engine 一個都測不到。
+test-real-engine:
+	@command -v cbomkit-theia >/dev/null || { echo "✗ 找不到 cbomkit-theia；先跑 scripts/build-theia.sh"; exit 1; }
+	cargo test -p cytrace-core --test real_engine -- --ignored
 
 fmt:
 	cargo fmt --all

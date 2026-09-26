@@ -250,7 +250,10 @@ function Crypto() {
             ))}
           </div>
 
-          {crypto && crypto.unscanned_unreadable + crypto.unscanned_oversize > 0 && (
+          {crypto && crypto.unscanned_unreadable +
+            crypto.unscanned_oversize +
+            crypto.unscanned_undetermined >
+            0 && (
             <div className="mb-3 space-y-1 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
               {crypto.unscanned_unreadable > 0 && (
                 <p>
@@ -265,6 +268,14 @@ function Crypto() {
                   ⚠️{' '}
                   {t('report.crypto.unscanned_oversize', {
                     count: crypto.unscanned_oversize,
+                  })}
+                </p>
+              )}
+              {crypto.unscanned_undetermined > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_undetermined', {
+                    count: crypto.unscanned_undetermined,
                   })}
                 </p>
               )}

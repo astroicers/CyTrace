@@ -199,12 +199,17 @@ pub struct CryptoInventory {
     /// 操作員**無法**以權限或身分解決；theia 1.1.2 亦無可調門檻的旗標。
     #[serde(default)]
     pub unscanned_oversize: u64,
+    /// 引擎**自承偵測到、但未出現在輸出**的資產數（例如 OpenSSH 格式私鑰）。
+    ///
+    /// 操作員同樣無法以權限或參數解決；屬引擎建模覆蓋率的缺口。
+    #[serde(default)]
+    pub unscanned_undetermined: u64,
 }
 
 impl CryptoInventory {
     /// 未掃描項目總數——量子閘門以此判定結論是否完整（ADR-013 決策 9）。
     pub fn unscanned_total(&self) -> u64 {
-        self.unscanned_unreadable + self.unscanned_oversize
+        self.unscanned_unreadable + self.unscanned_oversize + self.unscanned_undetermined
     }
 }
 
@@ -215,6 +220,7 @@ impl Default for CryptoInventory {
             assets: Vec::new(),
             unscanned_unreadable: 0,
             unscanned_oversize: 0,
+            unscanned_undetermined: 0,
         }
     }
 }

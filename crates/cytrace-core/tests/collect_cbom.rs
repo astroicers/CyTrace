@@ -14,6 +14,7 @@ fn out(json: &str, skipped: u64) -> CbomOutput {
     CbomOutput {
         json: json.into(),
         skipped,
+        admitted: 0,
     }
 }
 
@@ -46,6 +47,9 @@ impl ScanEngine for Engine {
         }
     }
 }
+
+/// 會觸碰共用 temp 目錄的測試需序列化執行——否則彼此的暫存 HOME 會互相計入。
+static TEMP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn cbom_json() -> String {
     std::fs::read_to_string(concat!(
@@ -391,6 +395,8 @@ fn engine_leaves_no_temp_home_behind() {
     use cytrace_core::engine::cbom;
     use std::fs;
 
+    let _guard = TEMP_LOCK.lock().expect("temp 鎖");
+
     // 所有離開路徑都要清理（含引擎缺席、spawn 失敗的 early return）。
     // 以「呼叫前後 temp 目錄中 cytrace-theia-home-* 的數量不變」驗證。
     let count = || {
@@ -415,4 +421,100 @@ fn engine_leaves_no_temp_home_behind() {
     }
     let _ = fs::remove_dir_all(&dir);
     assert_eq!(count(), before, "暫存 HOME 目錄不得殘留");
+}
+
+// ── symlink 必須與引擎行為一致（第四輪複審實測）──
+
+#[test]
+#[cfg(unix)]
+fn unreadable_symlink_target_is_counted() {
+    use cytrace_core::unreadable_count;
+    use std::fs;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    // theia 的 dir 模式**會追隨 symlink**，所以 symlink 是引擎的實際掃描對象。
+    // CyTrace 原本一律 continue，把整個類別排除在缺口帳外——
+    // 解開的容器 rootfs 上 /etc/ssl/certs/*.pem 多為絕對 symlink，這是常態而非對抗性輸入。
+    let base = std::env::temp_dir().join(format!("cytrace-symlink-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("outside")).expect("建立目錄");
+    fs::create_dir_all(base.join("target")).expect("建立目標");
+    let secret = base.join("outside/secret.key");
+    fs::write(&secret, b"x").expect("寫檔");
+    fs::set_permissions(&secret, fs::Permissions::from_mode(0o000)).expect("chmod");
+    symlink(&secret, base.join("target/tls.key")).expect("建立 symlink");
+    // 斷鏈 symlink 同樣無從得知內容
+    symlink(
+        base.join("outside/missing"),
+        base.join("target/dangling.key"),
+    )
+    .expect("斷鏈");
+
+    let readable = fs::File::open(&secret).is_ok();
+    let n = unreadable_count(&base.join("target"));
+    let _ = fs::remove_dir_all(&base);
+
+    if readable {
+        // root 讀得到不可讀檔，只剩斷鏈那一個
+        assert_eq!(n, 1, "斷鏈 symlink 須計入");
+    } else {
+        assert_eq!(n, 2, "不可讀的 symlink 目標與斷鏈 symlink 都須計入");
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn symlink_loops_do_not_hang_the_count() {
+    use cytrace_core::unreadable_count;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+
+    // 追隨 symlink 後必須防循環，否則清點會無限遞迴
+    let base = std::env::temp_dir().join(format!("cytrace-symloop-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    fs::create_dir_all(base.join("d")).expect("建立目錄");
+    symlink(&base, base.join("d/loop")).expect("建立循環 symlink");
+    let n = unreadable_count(&base); // 不得掛死
+    let _ = fs::remove_dir_all(&base);
+    assert!(n < 1000, "循環不得造成計數爆炸，實得 {n}");
+}
+
+// ── 子程序逾時（第四輪複審實測：FIFO 導致永久掛死）──
+
+#[test]
+#[cfg(unix)]
+fn fifo_in_target_does_not_hang_the_scan() {
+    use cytrace_core::engine::cbom_with_timeout;
+    use std::fs;
+    use std::time::{Duration, Instant};
+
+    let _guard = TEMP_LOCK.lock().expect("temp 鎖");
+
+    // 實測：目標樹含一個 FIFO 時 theia 永久阻塞，CLI 只印「掃描中」再也不返回；
+    // server 端 permit 永不釋放、Running job 不可取消，預設併發 2 → 兩個卡住即服務停擺。
+    // 真實 root filesystem 本身就含 FIFO（/run/initctl 之類），屬普通輸入。
+    let dir = std::env::temp_dir().join(format!("cytrace-fifo-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("建立目錄");
+    let fifo = dir.join("pipe.key");
+    let ok = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        let _ = fs::remove_dir_all(&dir);
+        return; // 無 mkfifo 的環境跳過
+    }
+
+    let started = Instant::now();
+    // 注入短逾時：驗的是「會返回」，不是預設值多長
+    let _ = cbom_with_timeout(dir.to_str().unwrap(), Duration::from_secs(5));
+    let elapsed = started.elapsed();
+    let _ = fs::remove_dir_all(&dir);
+
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "含 FIFO 的目標必須在逾時內返回，實耗 {elapsed:?}"
+    );
 }

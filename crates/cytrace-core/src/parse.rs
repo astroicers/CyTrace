@@ -150,11 +150,14 @@ pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
 
 #[derive(Deserialize)]
 struct CbomDoc {
+    /// theia 對**零資產目標**輸出的是 `"components": null`（非缺鍵、非空陣列），
+    /// 故必須容忍 null——否則最常見的輸入（乾淨來源樹）會被判成解析失敗，
+    /// 交件報表上寫「盤點失敗」，`--fail-on-quantum-vulnerable` 也恆 exit 1。
     #[serde(default)]
-    components: Vec<CbomComponent>,
+    components: Option<Vec<CbomComponent>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct CbomComponent {
     #[serde(default, rename = "bom-ref")]
     bom_ref: Option<String>,
@@ -168,19 +171,19 @@ struct CbomComponent {
     evidence: Option<CbomEvidence>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct CbomEvidence {
     #[serde(default)]
     occurrences: Vec<CbomOccurrence>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct CbomOccurrence {
     #[serde(default)]
     location: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct CryptoProps {
     #[serde(default, rename = "assetType")]
     asset_type: String,
@@ -192,7 +195,7 @@ struct CryptoProps {
     material: Option<MaterialProps>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct AlgorithmProps {
     #[serde(default)]
     primitive: Option<String>,
@@ -202,7 +205,7 @@ struct AlgorithmProps {
     nist_level: Option<u8>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct CertificateProps {
     #[serde(default, rename = "notValidAfter")]
     not_valid_after: Option<String>,
@@ -214,7 +217,7 @@ struct CertificateProps {
     subject_public_key_ref: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct MaterialProps {
     #[serde(default, rename = "type")]
     kind: Option<String>,
@@ -231,25 +234,26 @@ pub fn parse_cbom(json: &str) -> Result<Vec<CryptoAsset>> {
 
     // 先建 bom-ref → (名稱, 曲線, NIST 等級) 索引：憑證的量子狀態由其
     // signatureAlgorithmRef / subjectPublicKeyRef 指向的元件決定，而非憑證的 subject 名稱。
-    let index: std::collections::HashMap<&str, (&str, Option<&str>, Option<u8>)> = doc
-        .components
-        .iter()
-        .filter_map(|c| {
-            let r = c.bom_ref.as_deref()?;
-            let alg = c.crypto_properties.as_ref()?.algorithm.as_ref();
-            Some((
-                r,
-                (
-                    c.name.as_str(),
-                    alg.and_then(|a| a.curve.as_deref()),
-                    alg.and_then(|a| a.nist_level),
-                ),
-            ))
-        })
-        .collect();
+    let components_for_index = doc.components.clone().unwrap_or_default();
+    let index: std::collections::HashMap<&str, (&str, Option<&str>, Option<u8>)> =
+        components_for_index
+            .iter()
+            .filter_map(|c| {
+                let r = c.bom_ref.as_deref()?;
+                let alg = c.crypto_properties.as_ref()?.algorithm.as_ref();
+                Some((
+                    r,
+                    (
+                        c.name.as_str(),
+                        alg.and_then(|a| a.curve.as_deref()),
+                        alg.and_then(|a| a.nist_level),
+                    ),
+                ))
+            })
+            .collect();
 
-    Ok(doc
-        .components
+    let components = doc.components.unwrap_or_default();
+    Ok(components
         .iter()
         .filter(|c| c.kind == "cryptographic-asset")
         .filter_map(|c| {
