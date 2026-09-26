@@ -385,3 +385,34 @@ fn vuln_temp_paths_are_unique_per_call() {
     let uniq: HashSet<_> = all.iter().collect();
     assert_eq!(uniq.len(), all.len(), "暫存 SBOM 路徑不得重複");
 }
+
+#[test]
+fn engine_leaves_no_temp_home_behind() {
+    use cytrace_core::engine::cbom;
+    use std::fs;
+
+    // 所有離開路徑都要清理（含引擎缺席、spawn 失敗的 early return）。
+    // 以「呼叫前後 temp 目錄中 cytrace-theia-home-* 的數量不變」驗證。
+    let count = || {
+        fs::read_dir(std::env::temp_dir())
+            .map(|d| {
+                d.flatten()
+                    .filter(|e| {
+                        e.file_name()
+                            .to_string_lossy()
+                            .starts_with("cytrace-theia-home-")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    };
+
+    let before = count();
+    let dir = std::env::temp_dir().join(format!("cytrace-leak-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("建立目標");
+    for _ in 0..5 {
+        let _ = cbom(dir.to_str().unwrap()); // 成功或失敗都不得殘留
+    }
+    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(count(), before, "暫存 HOME 目錄不得殘留");
+}

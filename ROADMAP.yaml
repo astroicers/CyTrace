@@ -806,7 +806,8 @@ milestones:
           型別先行（core/src/lib.rs:3 規定型別只住 cytrace-types，故必須早於 core 實作）：
           CryptoInventory / CryptoAsset / CbomStatus（NotRequested/EngineAbsent/Failed/Completed）/
           QuantumStatus / weak_key、Summary crypto 計數、ToolVersions theia 欄位、
-          CryptoInventory.unscanned_count（因權限未掃描項目數）、Meta.scan_identity（執行身分），全標 serde default；
+          CryptoInventory.unscanned_unreadable（權限）／unscanned_oversize（引擎 1 MiB 門檻）、
+          Meta.scan_identity（執行身分），全標 serde default；
           SCHEMA_VERSION 1→2 + schema_version 超前時警告；frontend/src/types.ts 同步；
           v1 ScanResult 以 report 子命令仍可重建。不依賴打包（T902），以 fixture 驗。
       - id: T904
@@ -828,7 +829,7 @@ milestones:
           engine::cbom 自由函式層（CLI 不經 RealEngine）實作目標轉譯：目錄→dir、tar/OCI→image、
           裸映像名或無法判定→拒絕；**可讀性前檢兩模式皆適用（須實際開檔成功才轉譯，不可讀即拒絕且不得 spawn
           theia——不可讀的 tar 會讓 theia 回退嘗試 registry）**；以專用可寫 HOME 啟動；解析前先驗 stdout 為
-          合法 JSON，空輸出或非 JSON 一律歸 Failed（不得當成「0 項」）；不可讀項目計入 unscanned_count。
+          合法 JSON，空輸出或非 JSON 一律歸 Failed（不得當成「0 項」）；不可讀項目計入 unscanned_unreadable、引擎略過的大檔計入 unscanned_oversize。
           回傳 Result<Option<String>>（NotFound→Ok(None)，其餘失敗→Err 且不中止主流程）。
           parse_cbom 解析 cryptographic-asset 子集（容忍 1.6/1.7）；quantum.rs 移植 cbomkit quantum_safe.rego
           + 金鑰長度規則，量子狀態與 weak_key 分軸、ECC 依曲線名稱判定。純函式以 fixture 測，不依賴 T902。
@@ -869,7 +870,8 @@ milestones:
         sla_hours: 72
         imported_at: ""
         description: |
-          報表須顯示「因權限未掃描 N 項」（unscanned_count）與執行身分（scan_identity）。
+          報表須依成因分別顯示未掃描項目（unscanned_unreadable / unscanned_oversize——前者換身分可解、
+          後者為引擎硬門檻）、theia 版本與執行身分（scan_identity）。
           App.tsx 新增 #crypto 區段；locales report.crypto.* 雙語鍵；Notes 註明不含原始碼演算法偵測、
           NIST IR 8547 年限為草案；零外連檢查與列印 CSS 沿用。
       - id: T907
@@ -890,7 +892,7 @@ milestones:
         description: |
           tests/fixtures/cbom.json（含過期憑證、RSA-2048、RSA-4096、Ed25519、ML-DSA、未知曲線、假私鑰）+ golden 更新；
           降級整合測試（引擎缺席 / 執行失敗兩情境主流程不受影響）、閘門 fail-closed 測試（run 與 batch 皆驗）、
-          污染 stdout 歸 Failed、0600 fixture 以非 owner 身分掃出 unscanned_count、
+          污染 stdout 歸 Failed、0600 fixture 以非 owner 身分掃出 unscanned_unreadable、stderr 解析得出 unscanned_oversize、
           不可讀 tar 斷言未 spawn theia 且 stderr 無 registry 字串、
           cbom.cdx.json 不含金鑰內容斷言、v1→v2 相容與 schema_version 超前警告；
           server fake engine 加 cbom 路徑；--network none 離線 E2E + vendored CycloneDX 1.6 schema 驗證。

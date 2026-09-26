@@ -105,6 +105,29 @@ pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVer
     }
 }
 
+/// 離開作用域即刪除的暫存目錄。
+///
+/// theia 的 HOME 需在**所有**離開路徑上清理——手動 `remove_dir_all` 只會蓋到成功路徑，
+/// 引擎缺席或 spawn 失敗的 early return 會各洩一個空目錄；在 server 上這是每次呼叫累積、無上界。
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new(prefix: &str) -> std::io::Result<Self> {
+        let p = unique_temp_path(prefix);
+        std::fs::create_dir_all(&p)?;
+        Ok(Self(p))
+    }
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0); // 清理失敗不影響掃描結果
+    }
+}
+
 /// 供 [`vuln`] 使用的暫存 SBOM 路徑（**每次呼叫唯一**）。
 ///
 /// server 的 job 跑在同一行程（`spawn_blocking`，預設併發 2）。若是每行程一個固定路徑，
@@ -298,9 +321,9 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     let t = cbom_target(target)?;
 
     // theia 需要可寫 HOME 才不會把警告印到 stdout（T901b 實測）
-    // 每次呼叫一個獨立 HOME：併發 job 共用會互相干擾（複審實測 26/80 失敗）
-    let home = unique_temp_path("cytrace-theia-home");
-    std::fs::create_dir_all(&home)?;
+    // 每次呼叫一個獨立 HOME：併發 job 共用會互相干擾（複審實測 26/80 失敗）。
+    // 以 guard 承接，確保引擎缺席 / spawn 失敗等 early return 也會清理。
+    let home = TempDir::new("cytrace-theia-home")?;
 
     // 環境隔離：清空繼承環境後只加回必要項，避免 DOCKER_HOST 等變數把子程序指向非預期的
     // daemon。**注意**：這不是零外連的防線——daemon 走預設 unix socket、registry 也不吃
@@ -309,7 +332,7 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
         .arg(t.subcommand())
         .arg(t.path())
         .env_clear()
-        .env("HOME", &home)
+        .env("HOME", home.path())
         .env("TMPDIR", std::env::temp_dir())
         // PATH 必須沿用繼承值：離線交付包的 wrapper 正是靠 PATH 指向包內 bin/，
         // 寫死路徑會讓交付版找不到引擎（實測：theia 在 ~/.local/bin 時被誤判為缺席）
@@ -329,7 +352,6 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
     let skipped = skipped_file_count(&String::from_utf8_lossy(&out.stderr));
 
-    let _ = std::fs::remove_dir_all(&home); // 不殘留；失敗不影響結果
     let stdout = check(out, "cbomkit-theia")?;
     ensure_cbom_json(&stdout)?;
     Ok(Some(CbomOutput {

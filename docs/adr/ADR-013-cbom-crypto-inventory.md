@@ -94,9 +94,23 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
    **目標字串轉譯規則**：CyTrace 目標語法沿用 syft（`dir:`、`docker-archive:`、單檔路徑、裸映像名）；
    轉譯時 —— 既有目錄 → `dir`；既有 tar / OCI layout 目錄 → `image`；
    **裸映像名或任何無法在本地判定的形態 → 拒絕（回報 i18n 錯誤鍵，不猜測）**。
-   **可讀性前置條件（兩模式皆適用）**：轉譯**不得只做存在性判定**——目標必須**實際開檔成功**才轉譯，
-   不可讀即拒絕並回 i18n 錯誤鍵，**不得 spawn theia**。理由：存在但不可讀的 tar 會被 theia 當成
-   「本地取得失敗」而回退嘗試 registry（見「新發現二」），屆時請求已送出，事後偵測來不及。
+   **決定性防線：一律正規化為絕對路徑**（`std::fs::canonicalize`，2026-09-24 修訂）。
+   理由與來歷：theia 解析輸入失敗後會把**字串當成映像參照**，依序回退
+   docker daemon → podman → containerd → **registry**。實測一個 8 bytes 的 gzip 殘檔
+   命名為 `nginx`，它會載入本機真正的 nginx 映像並輸出 10,807 個元件，當成使用者目標寫進報表
+   （報表造假）；截斷的 tar 則會發出 `GET https://index.docker.io/...`（違反 NFR-01）。
+   改傳絕對路徑後 theia 直接 `could not parse reference`，**兩條回退鏈整條關閉**。
+
+   **先前版本的錯誤判斷（留作來歷，勿再走回頭路）**：原以「可讀性前檢（實際開檔成功）」
+   為防線，第二輪複審證明無效——`File::open` 成功只代表讀得到，擋不住名稱解析回退；
+   其後改以 magic bytes 驗 tar/gzip 亦無效，因為殘檔同樣通得過格式檢查。
+   **`env_clear()` 也不是零外連防線**（daemon 走預設 unix socket、registry 不吃環境變數），
+   它只避免 `DOCKER_HOST` 指向非預期 daemon。
+
+   **輔助驗證**：非目錄目標須通過 magic bytes（tar `ustar` @257 / gzip `1f 8b`）；
+   OCI layout 目錄須**實質有效**（`oci-layout` 為含 `imageLayoutVersion` 的合法 JSON，
+   且 `index.json` 與 `blobs/` 齊備）——只判標記檔存在的話，一個空檔就能讓任意目錄被當成映像。
+   可讀性前檢保留（不可讀即拒絕、不 spawn），但定位為輔助而非主防線。
 3. **範圍**：第一階段只盤點**檔案系統 / 映像層**密碼資產（憑證、金鑰、TLS/JCA 設定）。
    **原始碼層演算法使用偵測列為範圍外**（無符合單包離線的方案），報表需明示此限制。
 4. **預設關閉與降級語意**：CLI `run` / `scan` / `batch` 以 `--cbom` 開啟；console 以勾選項開啟。
@@ -124,7 +138,9 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
    `CryptoInventory` 內含 `status: CbomStatus`（`NotRequested` / `EngineAbsent` / `Failed` / `Completed`），
    故「CBOM 有跑但 0 資產」與「未執行」可區分。`SCHEMA_VERSION` 1 → 2。
    - **決策 10 所需的兩個欄位一併入契約**（否則報表顯示不出來，且 `report` 子命令無法從存檔重建）：
-     `CryptoInventory.unscanned_count`（因權限未掃描的項目數）與 `Meta.scan_identity`（執行身分）。
+     `CryptoInventory.unscanned_unreadable`（因權限未掃描）與 `CryptoInventory.unscanned_oversize`
+     （因**引擎自身 1 MiB 門檻**未掃描；theia 1.1.2 無旗標可調，操作員無法以權限或參數解除）
+     ——兩者處置相反故分欄，閘門以 `unscanned_total()` 判定；以及 `Meta.scan_identity`（執行身分）。
      `Meta` 為 ADR-009 凍結的封閉 struct（`crates/cytrace-types/src/lib.rs:102-107`），
      新增欄位只能經本決策這個修訂出口；兩者皆標 `#[serde(default)]`，
      並把「未執行」情境下的序列化形態納入 golden 釘死。
@@ -143,6 +159,14 @@ CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `crypto
    - **fail-closed**：指定本旗標時，若 CBOM 因引擎缺席 / 失敗 / 未請求而**未取得結果**，
      一律 **exit 1（錯誤）並說明原因**，不得回 0——「沒掃到」絕不等於「通過」。
    - `Unknown` 視為**未通過**（exit 2）；理由：軍規場域寧可誤報不可漏報。
+   - **判定順序（2026-09-26 修訂；兩條軸不可互相遮蔽）**：
+     (1) 引擎缺席 / 失敗 / 未請求 → exit 1；
+     (2) 有 `Vulnerable` 或 `Unknown` 資產 → exit 2；
+     (3) 無脆弱資產但 `unscanned_total() > 0`（清單不完整）→ exit 1；
+     (4) 完成、無脆弱、無漏掃 → exit 0。
+     **清單不完整只能否定「通過」，不能否定「已偵測到脆弱」**——先前版本把
+     `unscanned_total() > 0` 排在脆弱判定之前，導致真實映像（必含 >1 MiB 的
+     libcrypto/libstdc++）恆回 exit 1、三態塌縮，報表裡數千項脆弱資產反被訊息說成「沒掃到」。
    - CVE 閘門與量子閘門共用 exit 2 時，**輸出須指明是哪一個觸發**（CI 需可區分）。
    - **批次語意（必須明訂，否則 fail-closed 會被吞掉）**：現行 `batch` 的彙整只認 `EXIT_FAILON`
      （`crates/cytrace-cli/src/main.rs:143-149`：`worst` 初值 `EXIT_OK`，僅 `== EXIT_FAILON` 會抬高），
@@ -280,6 +304,11 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 零外連（失敗路徑） | 以**不可讀 tar** 觸發：斷言 theia **未被 spawn**、stderr 無任何 registry 嘗試字串 | 整合測試（T907） | 每次 CI |
 | 版本可稽核（NFR-03） | 報表標示 theia 版本 | 報表欄位檢查 | 每次 CI |
 | CycloneDX 合規 | `cbom.cdx.json` 通過 vendored 1.6 schema 驗證 | 離線 schema 驗證 | 每次 CI |
+| 不得退回映像參照 | 交給 theia 的路徑必為絕對路徑（殘檔命名為 `nginx` 不得載入他人映像） | 單元測試 `target_path_is_always_absolute` | 每次 CI |
+| 漏掃計數 fail-closed | 解析不出檔名時**寧可多算不可少算**（惡意檔名不得使計數歸零） | 單元測試 `skipped_count_never_undercounts_*` | 每次 CI |
+| 不完整不遮蔽脆弱 | 有脆弱資產時，漏掃不得把判定改成 `NoResult` | 單元測試 `incomplete_scan_does_not_mask_*` | 每次 CI |
+| 併發不互相污染 | 暫存路徑（theia HOME / SBOM）每次呼叫唯一；unscanned 不跨 job 串 | 併發測試 ×3 | 每次 CI |
+| 無暫存殘留 | 所有離開路徑（含引擎缺席）皆不留暫存目錄 | `engine_leaves_no_temp_home_behind` | 每次 CI |
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 
