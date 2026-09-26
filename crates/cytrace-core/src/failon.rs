@@ -15,16 +15,22 @@ pub enum QuantumGate {
 
 /// 量子閘門：**fail-closed**——「沒掃到」絕不等於「通過」。
 ///
-/// - 引擎缺席 / 執行失敗 / 未請求 / 無 `crypto` 區段 → [`QuantumGate::NoResult`]（退出碼 1）
-/// - 有項目未掃描（權限或引擎門檻，`unscanned_total() > 0`）→ 結論不完整，同樣 `NoResult`
-/// - 任一資產為 `Vulnerable` 或 `Unknown` → [`QuantumGate::Vulnerable`]（退出碼 2）
-///   （`Unknown` 視為未通過：軍規場域寧可誤報不可漏報）
-/// - 掃描完成且資產為空 → [`QuantumGate::Pass`]（與「沒掃到」必須區分）
+/// 判定順序（兩條獨立的軸，不可互相遮蔽）：
+///
+/// 1. 引擎缺席 / 執行失敗 / 未請求 / 無 `crypto` 區段 → [`QuantumGate::NoResult`]（退出碼 1）
+/// 2. 任一資產為 `Vulnerable` 或 `Unknown` → [`QuantumGate::Vulnerable`]（退出碼 2）
+///    （`Unknown` 視為未通過：軍規場域寧可誤報不可漏報）
+/// 3. 無脆弱資產、但有項目未掃描（`unscanned_total() > 0`）→ [`QuantumGate::NoResult`]
+/// 4. 掃描完成、無脆弱資產、無漏掃 → [`QuantumGate::Pass`]（與「沒掃到」必須區分）
+///
+/// **清單不完整只能否定「通過」，不能否定「已偵測到脆弱」**：真實映像幾乎必然含
+/// 超過 1 MiB 的 libcrypto/libstdc++；若把不完整一律壓成 `NoResult`，本閘門在 image
+/// 目標上會三態塌縮為恆 `NoResult`，報表裡數千項脆弱資產反而被說成「沒掃到」。
 pub fn quantum_gate(crypto: Option<&CryptoInventory>) -> QuantumGate {
     let Some(inv) = crypto else {
         return QuantumGate::NoResult;
     };
-    if !matches!(inv.status, CbomStatus::Completed) || inv.unscanned_total() > 0 {
+    if !matches!(inv.status, CbomStatus::Completed) {
         return QuantumGate::NoResult;
     }
     let flagged = inv.assets.iter().any(|a| {
@@ -34,7 +40,11 @@ pub fn quantum_gate(crypto: Option<&CryptoInventory>) -> QuantumGate {
         )
     });
     if flagged {
+        // 已經抓到脆弱資產——漏掃只會讓實際情況更糟，不可因此改判
         QuantumGate::Vulnerable
+    } else if inv.unscanned_total() > 0 {
+        // 沒抓到，但清單不完整 → 不宣告通過
+        QuantumGate::NoResult
     } else {
         QuantumGate::Pass
     }
@@ -138,6 +148,32 @@ mod tests {
             quantum_gate(Some(&inventory(CbomStatus::Completed, vec![]))),
             QuantumGate::Pass
         );
+    }
+
+    #[test]
+    fn incomplete_scan_does_not_mask_detected_vulnerabilities() {
+        // 清單不完整只能否定「通過」，**不能否定「已偵測到脆弱」**。
+        // 真實映像必然含 >1 MiB 的 libcrypto/libstdc++，oversize>0 幾乎必然；
+        // 若一律壓成 NoResult，--fail-on-quantum-vulnerable 在 image 目標上三態塌縮、
+        // 永遠拿不到 Vulnerable，報表裡幾千項脆弱資產反而被說成「沒掃到」。
+        let mut inv = inventory(
+            CbomStatus::Completed,
+            vec![asset(QuantumStatus::Vulnerable)],
+        );
+        inv.unscanned_oversize = 26;
+        assert_eq!(
+            quantum_gate(Some(&inv)),
+            QuantumGate::Vulnerable,
+            "已偵測到脆弱資產時，不完整不得改判為 NoResult"
+        );
+    }
+
+    #[test]
+    fn incomplete_scan_without_findings_is_no_result() {
+        // 沒偵測到脆弱、但有東西沒掃到 → 不得宣告通過
+        let mut inv = inventory(CbomStatus::Completed, vec![asset(QuantumStatus::Safe)]);
+        inv.unscanned_oversize = 1;
+        assert_eq!(quantum_gate(Some(&inv)), QuantumGate::NoResult);
     }
 
     #[test]

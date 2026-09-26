@@ -60,7 +60,7 @@ pub fn sbom(target: &str) -> Result<String> {
 /// 注意：grype 的 `sbom:-`（stdin）在部分版本不穩，故將 SBOM 寫入暫存檔以 `sbom:<path>` 餵入，
 /// 亦避免 stdin/stdout pipe 滿載 deadlock。暫存檔用後即刪。
 pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
-    let tmp = std::env::temp_dir().join(format!("cytrace-sbom-{}.cdx.json", std::process::id()));
+    let tmp = sbom_temp_path();
     std::fs::write(&tmp, sbom_cyclonedx_json)?;
     let out = Command::new("grype")
         .arg(format!("sbom:{}", tmp.display()))
@@ -103,6 +103,15 @@ pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVer
             .then(|| option_env!("CYTRACE_THEIA_VERSION").map(str::to_string))
             .flatten(),
     }
+}
+
+/// 供 [`vuln`] 使用的暫存 SBOM 路徑（**每次呼叫唯一**）。
+///
+/// server 的 job 跑在同一行程（`spawn_blocking`，預設併發 2）。若是每行程一個固定路徑，
+/// 兩個 job 會互寫互刪——最糟的情形是 A 的元件配到 B 的 CVE，
+/// 而 grype 退出碼 0、輸出合法 JSON，`check()` 完全攔不到，報表安靜地描述錯的目標。
+pub fn sbom_temp_path() -> std::path::PathBuf {
+    unique_temp_path("cytrace-sbom").with_extension("cdx.json")
 }
 
 /// 行程內唯一的暫存路徑（`<prefix>-<pid>-<seq>`）。
@@ -341,17 +350,24 @@ pub fn skipped_file_count(stderr: &str) -> u64 {
     // theia 的**每個 plugin** 對同一個檔案各印一行 → 直接數行數會是檔案數的數倍。
     // 取訊息中的檔名去重，才符合「被略過的檔案數」語意。
     let mut files = std::collections::BTreeSet::new();
-    for line in stderr.lines() {
+    for (i, line) in stderr.lines().enumerate() {
         let Some(rest) = line.split("Skipping large file:").nth(1) else {
             continue;
         };
+        // 去重只為修正「每 plugin 各印一行」的膨脹；**解析不出檔名時寧可多算也不能少算**，
+        // 否則檔名以分隔字串開頭（可由上游或上傳者控制）就能把整行吃掉，
+        // 使 oversize 歸零、閘門與報表警示同時失效——fail-open。
         let name = rest
-            .split(" (exceeds")
-            .next()
+            .rsplit_once(" (exceeds limit of ")
+            .map(|(head, _)| head)
             .unwrap_or(rest)
             .trim()
-            .trim_end_matches('"');
-        if !name.is_empty() {
+            .trim_end_matches('"')
+            .trim();
+        if name.is_empty() {
+            // 認不得就以行序當唯一鍵：計數只會偏高，不會偏低
+            files.insert(format!("<unnamed-{i}>"));
+        } else {
             files.insert(name.to_string());
         }
     }

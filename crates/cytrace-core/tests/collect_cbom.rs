@@ -365,3 +365,23 @@ fn scan_identity_is_concurrency_safe() {
         );
     }
 }
+
+#[test]
+fn vuln_temp_paths_are_unique_per_call() {
+    use cytrace_core::engine::sbom_temp_path;
+    use std::collections::HashSet;
+    use std::thread;
+
+    // server 的 job 跑在同一行程（spawn_blocking，預設併發 2）。
+    // 暫存 SBOM 若是每行程一個固定路徑，兩個 job 會互寫互刪——
+    // 最糟的情形是 A 的元件配到 B 的 CVE，grype 退出碼 0、JSON 合法，攔不到。
+    let hs: Vec<_> = (0..8)
+        .map(|_| thread::spawn(|| (0..100).map(|_| sbom_temp_path()).collect::<Vec<_>>()))
+        .collect();
+    let mut all = Vec::new();
+    for h in hs {
+        all.extend(h.join().expect("執行緒"));
+    }
+    let uniq: HashSet<_> = all.iter().collect();
+    assert_eq!(uniq.len(), all.len(), "暫存 SBOM 路徑不得重複");
+}

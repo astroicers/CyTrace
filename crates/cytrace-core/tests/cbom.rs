@@ -245,3 +245,32 @@ fn clean_stderr_counts_zero_skipped() {
         0
     );
 }
+
+#[test]
+fn skipped_count_never_undercounts_regardless_of_filename() {
+    use cytrace_core::engine::skipped_file_count;
+
+    // fail-closed 的底線：解析不出檔名時**寧可多算也不能少算**。
+    // 去重是為了修正「每 plugin 各印一行」的膨脹，不是可以把一行整個丟掉的理由。
+    // 檔名可由供應鏈上游或 console 上傳者控制。
+    let tricky = "level=warning msg=\"Skipping large file: (exceeds limit of 1048576 bytes) (exceeds limit of 1048576 bytes)\"\n";
+    assert!(
+        skipped_file_count(tricky) >= 1,
+        "檔名以分隔字串開頭時仍須計入"
+    );
+
+    // 不同檔名共用前綴，不得被吃掉
+    let prefix = concat!(
+        "msg=\"Skipping large file: a (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: a (exceeds) b (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(prefix), 2, "兩個不同檔名須各算一次");
+
+    // 同一檔名多行（多 plugin）仍只算一次
+    let repeated = concat!(
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(repeated), 1, "同一檔案不得重複計數");
+}
