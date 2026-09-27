@@ -79,6 +79,11 @@ lint: fmt-check clippy
 	@# 只呼叫這一支而非整個 frontend-check：pnpm 在部分環境會先做 deps check 並要求
 	@# 互動核准 build script（esbuild），會讓整條 lint 壞掉；typecheck 仍由 CI 與
 	@# make frontend-check 承接。
+	@# 前置缺席時給明確訊息並**仍然失敗**（fail-closed）——直接讓 node 報 MODULE_NOT_FOUND
+	@# 會被當成環境雜訊而被忽略，那等於這道檢查在該機器上靜默消失（第九輪複審）。
+	@command -v node >/dev/null || { echo "✗ 找不到 node（CBOM 成因渲染檢查需 Node ≥ 22 的型別剝離）"; exit 1; }
+	@node -e 'const [maj]=process.versions.node.split(".").map(Number); if (maj < 22) { console.error("✗ Node " + process.versions.node + " 過舊：--experimental-strip-types 需 22+"); process.exit(1) }'
+	@test -d frontend/node_modules/i18next || { echo "✗ 缺 frontend/node_modules/i18next（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染，零 warning）"
 

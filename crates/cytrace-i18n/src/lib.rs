@@ -56,11 +56,7 @@ impl Catalog {
         } else {
             "cbom.err.engine"
         };
-        let var = if key == "cbom.err.timeout" {
-            "secs"
-        } else {
-            "target"
-        };
+        let var = var_for_cbom_key(key);
         // **無細節時仍須插值**：`t(key, &[])` 對未填變數原樣保留，於是含 `{{target}}`
         // 的四個鍵會把佔位符印給使用者——第六輪已修過一次的畫面。
         // `reason_detail: None` 是實際可達狀態（序列化時可省略，舊報表重建時也會是 None），
@@ -103,6 +99,23 @@ impl Catalog {
         } else {
             ("（", "）")
         }
+    }
+}
+
+/// 鍵 → 細節的變數名。**明表，非「只有某一個鍵」的單一比較。**
+///
+/// 原本寫成 `key == "cbom.err.timeout"`。第八輪新增 `cbom.err.drain_timeout`
+/// （文案用 `{{secs}}`）時它落到 else 拿到 `target`，於是插值不發生、`{{secs}}`
+/// 原樣印給使用者——第六輪已修過一次的同一個畫面（第九輪複審）。
+/// 以秒數為細節的鍵不只一個，故列表；`frontend/src/cbom.ts` 的 `SECS_KEYS` 是同一份，
+/// 由 `every_message_uses_the_placeholder_its_rule_assigns` 與跨語言契約測試共同釘住。
+pub const SECS_KEYS: &[&str] = &["cbom.err.timeout", "cbom.err.drain_timeout"];
+
+pub fn var_for_cbom_key(key: &str) -> &'static str {
+    if SECS_KEYS.contains(&key) {
+        "secs"
+    } else {
+        "target"
     }
 }
 

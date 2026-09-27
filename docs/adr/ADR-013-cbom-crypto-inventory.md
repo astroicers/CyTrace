@@ -329,7 +329,12 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 抽不到引擎輸出即失敗 | `recv_timeout` 的 `Err` 不得被吞成空 buffer——否則 `skipped` / `admitted_*` 歸零、閘門對沒掃完的目標回 Pass | `drain_or_fail` + 四支單元測試（永不送值的 channel、已就緒、真的空、reader 掛掉）＋ real_engine 案例 14 釘住正常路徑確實抽到 stderr | 每次 CI |
 | `detail = None` 不漏佔位符 | 兩側同規則插 `?`；`reason_detail` 序列化時可省略，故此狀態實際可達 | `none_detail_never_leaks_placeholders`（8 鍵 × 2 語系） | 每次 CI |
 | 未知鍵兩側同規則 | 一律回退 `cbom.err.engine` 並保留細節，不得把裸鍵印給交件對象 | `unknown_keys_fall_back_instead_of_printing_the_raw_key` | 每次 CI |
-| NOTICE 哨兵自身有效 | 白列的防線是**結構性檢查**（區段數、OUTSIDE needle、空值），`--verify-sentinels` 對它們注入故障 | 實測：拿掉 `OUTSIDE_PS1` 或區段數檢查皆轉紅，而「逐列變異」在同一情境下是綠的 | 每次 CI（亦在 `make lint`） |
+| NOTICE 哨兵自身有效 | 四個結構性檢查（區段數、抽取過寬、空值、inline）**各自**都有會紅的哨兵，每組斷言該檢查的特徵訊息而非「有任何問題」 | 實測逐一拿掉四個檢查，哨兵四次皆轉紅。前一版只斷言「有問題」，實測拿掉 OUTSIDE 迴圈或空值檢查**仍為 exit 0**（第九輪複審 finding 3/4），因為同一輸入會觸發別的檢查而互相頂替 | 每次 CI（亦在 `make lint`） |
+| NOTICE 按**產出組合**驗 | 對「含 theia」與「不含 theia」兩種實際 NOTICE 各驗一次，而非驗兩者聯集 | 實測把 Apache-2.0 §4(b) 聲明移回 theia 條件段，檢查精確指出「不含 theia 的包」缺該兩列 | 每次 CI |
+| 鍵清單由 catalog 推導 | `cbom.err.*` 的三處清單（Rust 測試、前端、CLI 測試）不得手抄，須與 catalog 的命名空間逐鍵相符 | `key_lists_are_derived_from_the_catalog_not_hand_copied`；本測試在加入前是**紅的**——第八輪新增 `drain_timeout` 時三處全漏，於是前端回退成「引擎錯誤」、成因靜默消失，而契約測試比的是兩份都漏的手抄清單（第九輪複審 blocker 1） | 每次 CI |
+| 文案佔位符與規則一致 | catalog 中每個鍵的文案所用佔位符，必須是變數名規則指派給它的那一個 | `every_message_uses_the_placeholder_its_rule_assigns`；本測試在加入前是**紅的**——`drain_timeout` 文案用 `{{secs}}` 而規則給 `target`，`{{secs}}` 原樣印給使用者（第九輪複審 blocker 2，第六輪修過的同一個畫面） | 每次 CI |
+| 變數名規則為明表 | `SECS_KEYS`（兩側各一份）取代「只有 `cbom.err.timeout` 用 secs」的單一比較 | `frontend_secs_key_table_matches_this_one` 比對**清單內容**而非原始碼字串形狀（前一版釘的是寫法，規則改寫成明表它就紅） | 每次 CI |
+| zh-TW 字形也釘住 | 附加括號在 zh-TW 須為全角、en-US 須為半角，**雙向**皆有斷言 | 實測把 zh-TW 括號改半角即轉紅（原本只檢查 en-US，字形規則只守住一半） | 每次 CI |
 | en-US 不夾全角標點 | 附加括號依語系選用（半角 / 全角），**含括號分支** | `english_messages_never_use_fullwidth_punctuation`（原測試只覆蓋插值分支故漏了一輪） | 每次 CI |
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |

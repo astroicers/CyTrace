@@ -74,7 +74,6 @@ if [ -f "$BUNDLE/bin/cbomkit-theia" ]; then
       · gitleaks v8（MIT）、gitleaks/go-gitdiff（MIT）— 內嵌之機密偵測規則
       · MPL-2.0（檔案級弱 copyleft）：hashicorp/golang-lru、hashicorp/go-version、
         cyphar/filepath-securejoin
-    完整相依清單與授權見上游 vendor 目錄；本產品僅散布建置產物，未修改原始碼。
 THEIA
 )"
 else
@@ -84,7 +83,8 @@ fi
 cat > "$BUNDLE/NOTICE" <<NOTICE
 CyTrace $VERSION — 第三方元件授權聲明（NOTICE）
 
-本產品封裝下列工具（未修改）：
+本產品封裝下列工具（未修改）。完整相依清單與授權見各上游 vendor 目錄；
+本產品僅散布建置產物，未修改原始碼（Apache-2.0 §4(b)）：
   - Syft          (Anchore, Apache-2.0)  — SBOM 產生
   - Grype         (Anchore, Apache-2.0)  — 漏洞比對
 ${THEIA_NOTICE}

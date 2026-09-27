@@ -108,8 +108,6 @@ if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
       * gitleaks v8 (MIT), gitleaks/go-gitdiff (MIT) - embedded secret detection rules
       * MPL-2.0 (file-level weak copyleft): hashicorp/golang-lru, hashicorp/go-version,
         cyphar/filepath-securejoin
-    See the upstream vendor directory for the full dependency and license list.
-    This product distributes build artifacts only; the source was not modified.
 "@
 } else {
   $TheiaNotice = "  (This bundle does not include the CBOM engine; cytrace --cbom degrades to `"not inventoried`".)"
@@ -117,7 +115,9 @@ if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
 
 @"
 CyTrace $Version - Third-party NOTICE
-Bundled tools (unmodified):
+Bundled tools (unmodified). See each upstream vendor directory for the full
+dependency and license list; this product distributes build artifacts only
+and the source was not modified (Apache-2.0 section 4(b)):
   - Syft  (Anchore, Apache-2.0) - SBOM generation
   - Grype (Anchore, Apache-2.0) - vulnerability matching
 $TheiaNotice

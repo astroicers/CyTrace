@@ -13,6 +13,7 @@ const CBOM_ERR_KEYS: &[(&str, &[(&str, &str)])] = &[
     ("cbom.err.target_unreadable", &[("target", "/x")]),
     ("cbom.err.target_not_archive", &[("target", "/x")]),
     ("cbom.err.timeout", &[("secs", "600")]),
+    ("cbom.err.drain_timeout", &[("secs", "5")]),
     ("cbom.err.empty_output", &[]),
     ("cbom.err.stdout_not_json", &[]),
     ("cbom.err.not_cyclonedx", &[]),
@@ -112,33 +113,51 @@ fn frontend_cbom_key_list_matches_this_one() {
     );
 }
 
-/// 前端的變數名規則必須與此處一致：逾時是 `secs`，其餘皆 `target`。
+/// 前端的 `SECS_KEYS` 明表必須與 Rust 的 [`cytrace_i18n::SECS_KEYS`] 逐項相同。
 ///
-/// 規則漂開的後果不是崩潰而是**靜默**：變數名不符時 i18next 不插值，
-/// 佔位符原樣印在報表上（第六輪那個已修過一次的畫面）。
+/// 規則漂開的後果不是崩潰而是**靜默**：變數名不符時 i18next 不插值，佔位符原樣印在
+/// 報表上（第六輪修過一次、第八輪新增 `drain_timeout` 時又犯一次）。
+/// 原本這支測試比對的是原始碼裡 `key === '…' ? 'secs'` 這個字串形狀，於是規則一改寫成
+/// 明表它就紅——它釘的是**寫法**而非**內容**。改為比對清單本身。
 #[test]
-fn frontend_var_name_rule_matches_this_one() {
+fn frontend_secs_key_table_matches_this_one() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../frontend/src/cbom.ts");
     let src = std::fs::read_to_string(path).expect("讀不到前端渲染實作");
 
-    // Rust 側：哪些鍵需要 secs、哪些需要 target
-    for (key, vars) in CBOM_ERR_KEYS {
-        let expected = match vars.first() {
-            Some(("secs", _)) => Some("secs"),
-            Some(("target", _)) => Some("target"),
-            _ => None,
-        };
-        if expected == Some("secs") {
-            assert!(
-                src.contains(&format!("key === '{key}' ? 'secs'")),
-                "前端未把 {key} 對到 secs——佔位符會原樣印在報表上"
-            );
-        }
-    }
-    // 其餘一律 target（前端以三元運算的 else 分支承接）
+    // 起點取 `= [` 之後：從 `SECS_KEYS: readonly string[] = [` 找起的話，
+    // 型別註記裡的 `string[]` 那個 `]` 會先被命中，抽出空清單（本測試初版即如此，
+    // 幸好 assert_eq 的 left 是 `[]` 當場現形）。
+    let decl = src
+        .find("SECS_KEYS")
+        .expect("前端未定義 SECS_KEYS 明表——變數名規則可能又退回單一比較");
+    let start = src[decl..]
+        .find("= [")
+        .map(|i| decl + i + 3)
+        .expect("SECS_KEYS 宣告形式已變");
+    let body = &src[start..];
+    let end = body.find(']').expect("SECS_KEYS 陣列未閉合");
+    let mut ts: Vec<String> = body[..end]
+        .split('\'')
+        .filter(|s| s.starts_with("cbom.err."))
+        .map(|s| s.to_string())
+        .collect();
+    ts.sort();
+
+    let mut rs: Vec<String> = cytrace_i18n::SECS_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
+    rs.sort();
+
+    assert_eq!(
+        ts, rs,
+        "前端與 Rust 的「以秒數為細節」鍵表不一致。\n\
+         不一致的那個鍵會拿到 target 而非 secs，於是插值不發生、\
+         `{{{{secs}}}}` 原樣印在報表與 console 上。"
+    );
     assert!(
-        src.contains("'secs' : 'target'"),
-        "前端的預設變數名不是 target——非逾時類的細節會插不進去"
+        !rs.is_empty() && !ts.is_empty(),
+        "任一側明表抽取為空——斷言在空轉"
     );
 }
 
@@ -184,5 +203,106 @@ fn unknown_keys_fall_back_instead_of_printing_the_raw_key() {
         // 完全空的鍵名同樣不得漏出
         let out = cat.render_cbom("", Some("/x"));
         assert!(!out.is_empty() && !out.contains("{{"), "空鍵名：{out}");
+    }
+}
+
+// ── 鍵清單必須由 catalog 推導，不得手抄 ──
+
+/// 三份 `cbom.err.*` 清單必須完全一致：catalog、本檔的 `CBOM_ERR_KEYS`、前端的 `CBOM_ERROR_KEYS`。
+///
+/// **手抄清單的漏法是靜默的。** 第八輪新增 `cbom.err.drain_timeout` 時只加進 locale，
+/// 三份清單一份都沒加，於是（第九輪複審實測）：
+/// - 前端的成員判定不中 → `renderCbomFailure` 回退 `cbom.err.engine` → 報表與 console
+///   顯示「引擎錯誤 (5)」，「抽取逾時」這個成因**靜默消失**；
+/// - 跨語言契約測試不紅，因為它比的是兩份手抄清單，而兩份都漏了同一個鍵；
+/// - locale 裡那兩句新文案跟著產物出貨，卻永遠渲染不到。
+///
+/// 故清單的事實源是 **catalog**：新增鍵只要沒同步，這支測試就紅。
+#[test]
+fn key_lists_are_derived_from_the_catalog_not_hand_copied() {
+    // catalog 的 cbom.err 命名空間全部葉鍵
+    let zh: serde_json::Value = serde_json::from_str(include_str!("../../../locales/zh-TW.json"))
+        .expect("zh-TW 應為合法 JSON");
+    let mut catalog_keys: Vec<String> = zh
+        .get("cbom")
+        .and_then(|c| c.get("err"))
+        .and_then(|e| e.as_object())
+        .expect("catalog 應有 cbom.err 命名空間")
+        .keys()
+        .map(|k| format!("cbom.err.{k}"))
+        .collect();
+    catalog_keys.sort();
+
+    let mut rust_keys: Vec<String> = CBOM_ERR_KEYS.iter().map(|(k, _)| k.to_string()).collect();
+    rust_keys.sort();
+    assert_eq!(
+        rust_keys, catalog_keys,
+        "CBOM_ERR_KEYS 與 catalog 的 cbom.err.* 不一致。\n\
+         catalog 多出來的鍵不會被任何渲染測試涵蓋；少掉的鍵表示 locale 有死字串。"
+    );
+
+    // 前端清單
+    let ts_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../frontend/src/cbom.ts");
+    let src = std::fs::read_to_string(ts_path).expect("讀不到前端渲染實作");
+    let start = src
+        .find("CBOM_ERROR_KEYS = [")
+        .expect("前端未匯出 CBOM_ERROR_KEYS");
+    let body = &src[start..];
+    let end = body.find(']').expect("陣列未閉合");
+    let mut ts_keys: Vec<String> = body[..end]
+        .split('\'')
+        .filter(|s| s.starts_with("cbom.err."))
+        .map(|s| s.to_string())
+        .collect();
+    ts_keys.sort();
+    ts_keys.dedup();
+    assert_eq!(
+        ts_keys, catalog_keys,
+        "前端 CBOM_ERROR_KEYS 與 catalog 不一致。\n\
+         少掉的鍵會被 renderCbomFailure 回退成泛用「引擎錯誤」，成因在報表上靜默消失。"
+    );
+}
+
+/// 每個鍵的文案所用的佔位符，必須是規則指派給它的那一個。
+///
+/// 規則是「`cbom.err.timeout` 用 `{{secs}}`，其餘用 `{{target}}`」。新增
+/// `cbom.err.drain_timeout` 時文案用了 `{{secs}}`，但它不是 `timeout`，於是規則指派
+/// `target` → 原文不含 `{{target}}` → 走括號分支 → **`{{secs}}` 原樣印給使用者**
+/// （第九輪複審實測；第六輪已修過一次的同一個畫面，這次在 Rust 側）。
+///
+/// 比對「文案裡實際出現的佔位符」與「規則指派的變數名」，是唯一能在新增鍵時
+/// 當場攔住這件事的檢查——逐鍵手寫期望值的測試只會跟著漏。
+#[test]
+fn every_message_uses_the_placeholder_its_rule_assigns() {
+    for (lang, raw) in [
+        ("zh-TW", include_str!("../../../locales/zh-TW.json")),
+        ("en-US", include_str!("../../../locales/en-US.json")),
+    ] {
+        let doc: serde_json::Value = serde_json::from_str(raw).expect("locale 應為合法 JSON");
+        let errs = doc
+            .get("cbom")
+            .and_then(|c| c.get("err"))
+            .and_then(|e| e.as_object())
+            .expect("應有 cbom.err");
+        for (short, val) in errs {
+            let key = format!("cbom.err.{short}");
+            let text = val.as_str().expect("文案應為字串");
+            // 規則不在此重寫一份，直接問事實源（手抄就是下一個漂移點）
+            let assigned = cytrace_i18n::var_for_cbom_key(&key);
+            // 文案中實際出現的佔位符
+            let found: Vec<&str> = text
+                .split("{{")
+                .skip(1)
+                .filter_map(|s| s.split("}}").next())
+                .collect();
+            for var in &found {
+                assert_eq!(
+                    *var, assigned,
+                    "{lang} {key} 的文案用了 {{{{{var}}}}}，但規則指派給它的是 \
+                     {{{{{assigned}}}}}——插值不會發生，佔位符會原樣印給使用者。\n\
+                     文案：{text}"
+                );
+            }
+        }
     }
 }

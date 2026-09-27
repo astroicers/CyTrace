@@ -23,6 +23,7 @@ export const CBOM_ERROR_KEYS = [
   'cbom.err.target_unreadable',
   'cbom.err.target_not_archive',
   'cbom.err.timeout',
+  'cbom.err.drain_timeout',
   'cbom.err.empty_output',
   'cbom.err.stdout_not_json',
   'cbom.err.not_cyclonedx',
@@ -31,9 +32,19 @@ export const CBOM_ERROR_KEYS = [
 
 export type CbomErrorKey = (typeof CBOM_ERROR_KEYS)[number]
 
-/** 鍵 → 細節的變數名。與 Rust 側同一條規則：逾時是秒數，其餘皆為目標路徑。 */
+/**
+ * 鍵 → 細節的變數名。與 Rust `Catalog::var_for_cbom_key` 同一份明表。
+ *
+ * 原本寫成 `key === 'cbom.err.timeout' ? 'secs' : 'target'`。第八輪新增
+ * `cbom.err.drain_timeout`（文案用 `{{secs}}`）時，它落到 else 分支拿到 `target`，
+ * 於是插值不發生、`{{secs}}` 原樣印在畫面上——第六輪已修過一次的同一個畫面
+ * （第九輪複審）。**以秒數為細節的鍵不只一個**，故列成明表而非單一比較；
+ * 新增鍵時 `every_message_uses_the_placeholder_its_rule_assigns` 會當場攔住不一致。
+ */
+const SECS_KEYS: readonly string[] = ['cbom.err.timeout', 'cbom.err.drain_timeout']
+
 function varNameFor(key: string): 'secs' | 'target' {
-  return key === 'cbom.err.timeout' ? 'secs' : 'target'
+  return SECS_KEYS.includes(key) ? 'secs' : 'target'
 }
 
 /**

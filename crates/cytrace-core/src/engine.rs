@@ -360,7 +360,7 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
 ///
 /// 上界的依據：子程序已結束（或已被 kill），寫端唯一可能還開著的情形是有孫程序
 /// 繼承了它；5 秒足以涵蓋正常的 EOF 傳遞，又不會讓呼叫端實質卡住。
-pub const DRAIN_GRACE_DEFAULT: std::time::Duration = std::time::Duration::from_secs(5);
+const DRAIN_GRACE_DEFAULT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// 抽乾一條 reader channel。**抽不到就是失敗，不得當成「空的」。**
 ///
@@ -383,10 +383,12 @@ fn drain_or_fail(
 
 /// 同 [`cbom_with_timeout`]，但另可指定**抽乾寬限**。
 ///
-/// `drain_grace` 開放注入只有一個用途：讓「抽不到輸出」這條路徑**可被測試觸發**。
-/// 少了它，該路徑只有在上游哪天 spawn 孫程序時才會走到，而那時沒有任何東西會轉紅
-/// （第八輪複審 finding D 的附帶要求）。
-pub fn cbom_with_timeouts(
+/// 保持私有：抽乾的 fail-closed 語意由 [`drain_or_fail`] 的四支單元測試直接覆蓋
+/// （以永不送值的 channel 觸發），不需要從這裡注入——實測注入 0ms 寬限根本觸發不到，
+/// 因為 `recv_timeout` 對已就緒的 channel 立即返回。原本的 doc 聲稱「開放注入只為
+/// 讓該路徑可被測試觸發」，而零測試經由它，那句話不成立（第九輪複審）。
+/// 穩定優先鐵則下不留無人使用的公開面。
+fn cbom_with_timeouts(
     target: &str,
     timeout: std::time::Duration,
     drain_grace: std::time::Duration,

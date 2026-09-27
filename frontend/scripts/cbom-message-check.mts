@@ -53,6 +53,10 @@ function check(label: string, out: string, expect: { detail?: string; lng: strin
   if (out.includes('{{')) problems.push(`${label}: 殘留佔位符 → ${out}`)
   if (out.trim().startsWith('cbom.err.')) problems.push(`${label}: 渲染出裸鍵 → ${out}`)
   if (lng === 'en-US' && FULLWIDTH.test(out)) problems.push(`${label}: 夾全角字元 → ${out}`)
+  // 反方向同樣要釘：zh-TW 的附加括號必須是全角，否則中文訊息裡混半角括號。
+  // 原本只檢查 en-US，等於字形規則只有一半被守住（第九輪複審）。
+  if (lng === 'zh-TW' && / \(.+\)$/.test(out))
+    problems.push(`${label}: zh-TW 應用全角括號「（）」→ ${out}`)
   if (detail) {
     if (!out.includes(detail)) problems.push(`${label}: 細節消失 → ${out}`)
     else if (out.split(detail).length - 1 > 1) problems.push(`${label}: 細節重複 → ${out}`)

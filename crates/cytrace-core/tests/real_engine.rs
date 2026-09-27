@@ -615,24 +615,37 @@ fn certificate_admitted_count_tracks_the_real_engine() {
     let single = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(120));
 
     // (b) 同樣三張，但連成一個 PEM bundle：計數應仍為 3（不是 1 個檔案）
+    //
+    // 這一段的每個 unwrap 都在清理之前，失敗即殘留含未加密私鑰的暫存目錄
+    // （第九輪複審 finding：finding J 只修了斷言側，I/O 這側還在）。
+    // 以 closure 收束，讓任何失敗都經同一條清理路徑。
     let bundle_dir = workspace("certbundle");
-    let mut bundle = Vec::new();
-    for i in 1..=3 {
-        bundle.extend(fs::read(d.join(format!("c{i}.crt"))).unwrap());
-    }
-    fs::write(bundle_dir.join("bundle.pem"), &bundle).unwrap();
-    let bundled = cbom_with_timeout(bundle_dir.to_str().unwrap(), Duration::from_secs(120));
-
-    // (c) 零憑證目標不得憑空生出自承數（否則會造成常態假警報）
     let empty = workspace("certzero");
-    fs::write(empty.join("openssl.cnf"), b"[system_default_sect]\n").unwrap();
+    let dirs = [d.clone(), bundle_dir.clone(), empty.clone()];
+    let cleanup = || {
+        for dir in &dirs {
+            let _ = fs::remove_dir_all(dir);
+        }
+    };
+    let prepared = (|| -> std::io::Result<()> {
+        let mut bundle = Vec::new();
+        for i in 1..=3 {
+            bundle.extend(fs::read(d.join(format!("c{i}.crt")))?);
+        }
+        fs::write(bundle_dir.join("bundle.pem"), &bundle)?;
+        fs::write(empty.join("openssl.cnf"), b"[system_default_sect]\n")?;
+        Ok(())
+    })();
+    if let Err(e) = prepared {
+        cleanup();
+        panic!("準備 fixture 失敗：{e}");
+    }
+    let bundled = cbom_with_timeout(bundle_dir.to_str().unwrap(), Duration::from_secs(120));
     let zero = cbom_with_timeout(empty.to_str().unwrap(), Duration::from_secs(120));
 
     // **先清理再斷言**：斷言失敗時 panic 會跳過其後的清理，留下含憑證與私鑰的暫存目錄
     // （同檔前面的案例已建立此慣例；第八輪複審 finding J 指出本案例沒沿用）。
-    for dir in [&d, &bundle_dir, &empty] {
-        let _ = fs::remove_dir_all(dir);
-    }
+    cleanup();
 
     let single = single
         .expect("盤點應成功")

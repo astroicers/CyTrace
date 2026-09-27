@@ -112,11 +112,20 @@ export function JobDetailPage({ id }: { id: string }) {
             {t('console.job.error_title')}
           </h2>
           {/* CBOM 失敗的 i18n_key 是 cbom.err.*，其文案含 {{target}}/{{secs}}；
-              用 t() 直接渲染會把佔位符原樣印出，故走與報表同一支 renderCbomFailure。 */}
+              用 t() 直接渲染會把佔位符原樣印出，故走與報表同一支 renderCbomFailure。
+              i18n_key 為空或查不到時（t() 會回傳鍵本身）退回顯示 detail 原文——
+              操作員拿到裸鍵或空白都等於沒有訊息（第九輪複審）。 */}
           <p className="mt-1 text-sm">
-            {job.error.i18n_key.startsWith('cbom.err.')
-              ? renderCbomFailure(t, job.error.i18n_key, job.error.detail, i18n.language)
-              : t(job.error.i18n_key)}
+            {(() => {
+              const key = job.error.i18n_key
+              if (key.startsWith('cbom.err.')) {
+                return renderCbomFailure(t, key, job.error.detail, i18n.language)
+              }
+              const msg = key ? t(key) : ''
+              // t() 查不到時回傳鍵本身；那對操作員沒有意義
+              if (!msg || msg === key) return job.error.detail || t('console.common.error')
+              return msg
+            })()}
           </p>
           {job.error.detail && !job.error.i18n_key.startsWith('cbom.err.') && (
             <pre className="mt-2 overflow-x-auto text-xs text-gray-500">

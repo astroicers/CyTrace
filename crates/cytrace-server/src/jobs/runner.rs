@@ -246,7 +246,14 @@ mod tests {
                 "{name}: detail 不得是裸 i18n 鍵：{}",
                 je.detail
             );
-            assert!(!je.detail.is_empty(), "{name}: detail 不得為空");
+            // 刻意不斷言 detail 非空：`Cbom { key: "cbom.err.empty_output", detail: None }`
+            // 是可達狀態，經 `unwrap_or_default()` 就是空字串（同檔下一支測試正是斷言它為 ""）。
+            // 原本這裡寫 `assert!(!je.detail.is_empty())`，對所選輸入恆真、且與那條規範
+            // 互相矛盾（第九輪複審）。detail 可空，**但此時 i18n_key 必須自帶成因**：
+            assert!(
+                !je.i18n_key.is_empty(),
+                "{name}: detail 可為空，但 i18n_key 必須自帶成因，否則前端無話可說"
+            );
 
             // i18n_key 必須在兩語系都查得到（t() 回傳鍵本身即代表查不到）
             for lang in ["zh-TW", "en-US"] {

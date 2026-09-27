@@ -514,23 +514,48 @@ mod tests {
         // locale 字串帶 {{target}} / {{secs}}；以 t(key, &[]) 渲染會原樣印出佔位符，
         // 實測輸出「非 tar / gzip 封存檔，拒絕當成映像：{{target}}（/path/…）」——
         // 路徑還重複出現在括號裡。
-        let cat = Catalog::load("zh-TW");
-        for (key, detail) in [
-            ("cbom.err.target_not_archive", Some("/tmp/x.bin")),
-            ("cbom.err.target_not_local", Some("/tmp/nope")),
-            ("cbom.err.target_unreadable", Some("/tmp/locked")),
-            ("cbom.err.timeout", Some("600")),
-            ("cbom.err.empty_output", None),
-        ] {
-            let e = cytrace_core::CytraceError::Cbom {
-                key,
-                detail: detail.map(str::to_string),
-            };
-            let out = render_cbom_error(&e, &cat);
-            assert!(!out.contains("{{"), "{key} 渲染後殘留佔位符：{out}");
-            if let Some(d) = detail {
-                assert!(out.contains(d), "{key} 須含細節 {d}：{out}");
-                assert_eq!(out.matches(d).count(), 1, "{key} 的細節不得重複出現：{out}");
+        //
+        // **鍵清單由 catalog 推導，不手抄**：原本這裡列了 5 個鍵，於是第八輪新增
+        // `cbom.err.drain_timeout` 時它不在清單內，這支測試對新鍵零覆蓋（第九輪複審）。
+        let locale: serde_json::Value =
+            serde_json::from_str(include_str!("../../../locales/zh-TW.json")).expect("locale");
+        let keys: Vec<String> = locale["cbom"]["err"]
+            .as_object()
+            .expect("cbom.err 命名空間")
+            .keys()
+            .map(|k| format!("cbom.err.{k}"))
+            .collect();
+        assert!(keys.len() >= 8, "抽到 {} 個鍵，疑似抽取失效", keys.len());
+
+        for lang in ["zh-TW", "en-US"] {
+            let cat = Catalog::load(lang);
+            for key in &keys {
+                // 依規則給該鍵一個合適的細節；兩種 detail 形態都要走過
+                let detail = if cytrace_i18n::var_for_cbom_key(key) == "secs" {
+                    "600"
+                } else {
+                    "/tmp/x.bin"
+                };
+                for d in [Some(detail.to_string()), None] {
+                    let e = cytrace_core::CytraceError::Cbom {
+                        key: Box::leak(key.clone().into_boxed_str()),
+                        detail: d.clone(),
+                    };
+                    let out = render_cbom_error(&e, &cat);
+                    assert!(!out.contains("{{"), "{lang} {key} 渲染後殘留佔位符：{out}");
+                    assert!(
+                        !out.trim().starts_with("cbom.err."),
+                        "{lang} {key} 渲染出裸鍵：{out}"
+                    );
+                    if let Some(d) = &d {
+                        assert!(out.contains(d.as_str()), "{lang} {key} 須含細節 {d}：{out}");
+                        assert_eq!(
+                            out.matches(d.as_str()).count(),
+                            1,
+                            "{lang} {key} 的細節不得重複出現：{out}"
+                        );
+                    }
+                }
             }
         }
     }
