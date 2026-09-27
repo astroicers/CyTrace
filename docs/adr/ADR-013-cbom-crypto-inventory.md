@@ -322,6 +322,10 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並抽乾兩條 reader | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
 | 抽乾不得無上限阻塞 | 以 channel `recv_timeout`（5s 寬限）取代 `JoinHandle::join`：`kill` 只殺直接子程序，孫程序持有管線寫端時 `join` 永不返回＝逾時形同失效 | `large_output_does_not_deadlock_the_pipe`（285 KB 仍不塞管線）；theia v1.1.2 實測不 spawn 子程序，此路徑目前不可達，屬防上游變更 | 每次 CI |
 | CBOM 訊息渲染邊界 | 依**原文是否含佔位符**決定插值或括號（非事後猜細節有無出現）；空細節不留懸空分隔符 | `cytrace-i18n` 四支 `render_cbom_*` 測試 | 每次 CI |
+| 報表顯示失敗成因 | `#crypto` 區段除四態訊息外，`Failed` 另顯示依當前語系渲染的成因（含目標路徑 / 逾時秒數） | `frontend/src/cbom.ts` + 端到端實跑（報表內嵌 `reason_key` / `reason_detail`） | 每次 release |
+| 兩份渲染實作不得漂開 | 前端是 `Catalog::render_cbom` 的第二份實作（報表有執行期語言切換器，不能在 Rust 端預渲染）；鍵清單與變數名規則須一致 | `frontend_cbom_key_list_matches_this_one` / `frontend_var_name_rule_matches_this_one`（實測：任一側少一鍵或改規則即轉紅） | 每次 CI |
+| 成因文字的行為把關 | 契約測試比對不到**行為**差異，故另有實地渲染檢查：8 鍵 × 2 語系 + 空細節 + 未知鍵 = 20 案 | `frontend/scripts/cbom-message-check.mjs`（實測抓到兩個真差異：空細節漏 `{{target}}`、en-US 夾全角括號） | 每次 CI |
+| en-US 不夾全角標點 | 附加括號依語系選用（半角 / 全角），**含括號分支** | `english_messages_never_use_fullwidth_punctuation`（原測試只覆蓋插值分支故漏了一輪） | 每次 CI |
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 

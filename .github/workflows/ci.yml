@@ -91,6 +91,11 @@ jobs:
         run: cd frontend && pnpm install --frozen-lockfile
       - name: typecheck
         run: cd frontend && pnpm typecheck
+      # frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作。Rust 側契約測試比對
+      # 鍵清單與變數名規則，擋不到行為差異——實際漂開過兩次（空細節漏佔位符、en-US 夾全角），
+      # 兩次都是報表會把該字面印給交件對象看。
+      - name: CBOM 成因渲染（雙語 × 邊界，ADR-013）
+        run: node frontend/scripts/cbom-message-check.mjs
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）

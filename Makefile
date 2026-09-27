@@ -23,6 +23,9 @@ frontend:
 
 frontend-check:
 	cd frontend && pnpm typecheck
+	@# frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作；Rust 側的契約測試比對
+	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
+	node frontend/scripts/cbom-message-check.mjs
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。

@@ -13,16 +13,20 @@ const EN_US: &str = include_str!("../../../locales/en-US.json");
 pub struct Catalog {
     lang: Value,
     fallback: Value,
+    /// 是否為英文語系。用於選擇標點字形（半角 vs 全角），不靠猜譯文內容。
+    is_en: bool,
 }
 
 impl Catalog {
     /// 依語言碼載入（"en-US"/"en" → 英文，其餘 → zh-TW）。fallback 永遠是 zh-TW。
     pub fn load(lang: &str) -> Self {
         let l = lang.to_ascii_lowercase();
-        let primary = if l.starts_with("en") { EN_US } else { ZH_TW };
+        let is_en = l.starts_with("en");
+        let primary = if is_en { EN_US } else { ZH_TW };
         Catalog {
             lang: serde_json::from_str(primary).expect("內嵌 locale 應為合法 JSON"),
             fallback: serde_json::from_str(ZH_TW).expect("內嵌 zh-TW 應為合法 JSON"),
+            is_en,
         }
     }
 
@@ -65,8 +69,23 @@ impl Catalog {
         if raw.contains(&format!("{{{{{var}}}}}")) {
             interpolate(&raw, &[(var, d)])
         } else {
-            // 鍵的文案沒有該變數的位置 → 細節補在括號內，不讓它消失
-            format!("{}（{d}）", interpolate(&raw, &[]))
+            // 鍵的文案沒有該變數的位置 → 細節補在括號內，不讓它消失。
+            // **括號依語系選用**：寫死全角「（）」會讓 en-US 訊息夾全角標點
+            // （node 實測抓到：`Engine error（/path）`）。
+            let (open, close) = self.parens();
+            format!("{}{open}{d}{close}", interpolate(&raw, &[]))
+        }
+    }
+
+    /// 附加括號的字形。en-US 用半角，zh-TW 用全角。
+    ///
+    /// 依 `load()` already 算出的語系旗標，不靠探測譯文內容——用「某個鍵是否全 ASCII」
+    /// 猜語系的話，英文文案哪天加個破折號就會誤判成中文。
+    fn parens(&self) -> (&'static str, &'static str) {
+        if self.is_en {
+            (" (", ")")
+        } else {
+            ("（", "）")
         }
     }
 }
@@ -131,6 +150,51 @@ mod tests {
         let out = c.render_cbom("cbom.err.empty_output", Some("/tmp/x"));
         assert!(out.contains("/tmp/x"), "細節不得被丟棄：{out}");
         assert!(!out.contains("{{"), "不得殘留佔位符：{out}");
+    }
+
+    /// en-US 訊息不得夾全角標點——**包含括號分支**。
+    ///
+    /// 原本括號寫死成「（）」（U+FF08/FF09，屬全角範圍）。既有的
+    /// `cbom_error_detail_follows_request_language` 測的是 `target_not_archive`，
+    /// 那個鍵有 `{{target}}` 故走插值分支、產不出括號，於是這條漏了一輪
+    /// ——是 node 實測前端渲染時才看見 `Engine error（/path）`。
+    #[test]
+    fn english_messages_never_use_fullwidth_punctuation() {
+        let c = Catalog::load("en-US");
+        // 逐鍵掃，兩種分支都要走到
+        for key in [
+            "cbom.err.target_not_local",
+            "cbom.err.target_unreadable",
+            "cbom.err.target_not_archive",
+            "cbom.err.timeout",
+            "cbom.err.empty_output",
+            "cbom.err.stdout_not_json",
+            "cbom.err.not_cyclonedx",
+            "cbom.err.engine",
+        ] {
+            let out = c.render_cbom(key, Some("/mnt/target/firmware.bin"));
+            let bad: Vec<char> = out
+                .chars()
+                .filter(
+                    |ch| matches!(*ch as u32, 0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF),
+                )
+                .collect();
+            assert!(
+                bad.is_empty(),
+                "{key} 的 en-US 訊息夾全角字元 {bad:?}：{out}"
+            );
+            assert!(
+                out.contains("/mnt/target/firmware.bin"),
+                "{key}: 細節消失：{out}"
+            );
+        }
+        // zh-TW 反過來要用全角括號（否則中文訊息裡混半角括號）
+        let zh = Catalog::load("zh-TW");
+        let out = zh.render_cbom("cbom.err.engine", Some("/x"));
+        assert!(
+            out.contains('（') && out.contains('）'),
+            "zh-TW 應用全角括號：{out}"
+        );
     }
 
     #[test]
