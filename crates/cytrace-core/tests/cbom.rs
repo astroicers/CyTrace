@@ -319,10 +319,13 @@ fn admitted_counts_are_parsed_per_category() {
 
     // theia 對偵測到但無法建模的資產只在 stderr 留痕，stdout 零元件、exit 0。
     // 自承數必須**分類別**記錄，否則混合資產目標會被跨類別相減抵銷成 0。
+    //
+    // 兩類的訊息格式不同（見下一支測試的實地樣本）：私鑰走 `Found N private key(s)`，
+    // 憑證走結構化欄位 `numberOfDetectedCertificates=N`。
     let stderr = concat!(
         "msg=\"Secret detected\" file=etc/ssh/ssh_host_ed25519_key type=private-key\n",
         "msg=\"Found 1 private key(s) in etc/ssh/ssh_host_ed25519_key\"\n",
-        "msg=\"Found 3 certificate(s) in etc/ssl/bundle.pem\"\n",
+        "msg=\"Certificate searching done\" numberOfDetectedCertificates=3\n",
     );
     assert_eq!(admitted_counts(stderr), (1, 3), "私鑰與憑證須分開計");
 
@@ -336,6 +339,33 @@ fn admitted_counts_are_parsed_per_category() {
     assert_eq!(
         admitted_counts("msg=\"Found some private key(s)\"\n"),
         (1, 0)
+    );
+}
+
+/// 憑證**只認**結構化欄位，不得同時認 `Found N certificate(s)`。
+///
+/// 原實作留了一條自承「目前不會命中」的 `Found … certificate` 分支當前瞻相容。
+/// 它是唯一一條會讓同一行被計兩次的路徑：上游若哪天兩種都印，憑證數變成兩倍，
+/// 於是「自承 6 建模 3」憑空生出 3 項未確定、閘門回 NoResult 假警報
+/// ——為了接一個不存在的格式，換來一個假警報的入口（第七輪複審 finding）。
+#[test]
+fn certificate_count_is_never_double_counted() {
+    use cytrace_core::engine::admitted_counts;
+
+    let both_formats =
+        "msg=\"Found 3 certificate(s) in bundle.pem\" numberOfDetectedCertificates=3\n";
+    assert_eq!(
+        admitted_counts(both_formats),
+        (0, 3),
+        "同一行兩種格式並存時，憑證數不得翻倍（3 而非 6）"
+    );
+
+    // 只有想像格式、沒有真實欄位時：計 0，並由 real_engine 案例 13 當場抓到欄位漂移。
+    // 這裡刻意**不**接受它——接了就等於容忍上面那條重複計數路徑存在。
+    assert_eq!(
+        admitted_counts("msg=\"Found 3 certificate(s) in bundle.pem\"\n"),
+        (0, 0),
+        "theia 不印此格式；憑證一律只認 numberOfDetectedCertificates"
     );
 }
 

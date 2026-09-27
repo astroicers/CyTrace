@@ -68,7 +68,9 @@ clippy:
 lint: fmt-check clippy
 	python3 scripts/i18n-check.py
 	python3 scripts/notice-parity-check.py
-	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致 + NOTICE 兩平台對帳，零 warning）"
+	@# 變異測試：證明上一行的 13 列沒有白列（初版對整檔比對，NOTICE 可以錯而它仍綠）
+	python3 scripts/notice-parity-check.py --self-test
+	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致 + NOTICE 對帳且無白列，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

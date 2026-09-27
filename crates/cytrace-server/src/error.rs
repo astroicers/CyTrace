@@ -183,13 +183,21 @@ impl ApiError {
         };
         // Cbom 的 Display 是「鍵：細節」——直接當 detail 就是把裸鍵送出 API。
         // 改以請求語系渲染，與 CLI 共用 Catalog::render_cbom（單一實作）。
+        //
+        // 其餘變體的 Display 各帶一段中文前綴（「引擎子程序錯誤：」…），直接當 detail
+        // 會讓 `--lang en-US` 的 API 回應夾中文（第七輪複審：與 collect_cbom 同一種錯法，
+        // 只是位置在 server）。故一律走 CytraceError::untranslatable_detail。
         let detail = match err {
             CytraceError::Cbom { key, detail } => {
-                lang.catalog().render_cbom(key, detail.as_deref())
+                Some(lang.catalog().render_cbom(key, detail.as_deref()))
             }
-            other => other.to_string(),
+            other => other.untranslatable_detail(),
         };
-        ApiError::new(lang, kind).with_detail(detail)
+        let api = ApiError::new(lang, kind);
+        match detail {
+            Some(d) => api.with_detail(d),
+            None => api,
+        }
     }
 }
 

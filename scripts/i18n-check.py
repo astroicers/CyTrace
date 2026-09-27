@@ -28,11 +28,15 @@ def leaf_keys(obj, prefix=""):
 # 只比對兩語系對稱抓不到「根本沒進 catalog 的鍵」——第五輪複審即因此漏掉 cbom.err.* 七鍵。
 # 排除檔名等非鍵字面值（.html/.json/.js/.css 結尾）
 _NS = r"(?:cbom\.err|cli|report|crypto|severity|server|console)"
-_NOT_FILE = r"(?!html|json|js|css|md)"
+# 排除「命名空間 + 副檔名」形態的非鍵字面值（`console.log`、`report.pdf`…）。
+# **收尾須有界定**：第六輪把 `(?!html"|json"…)` 的引號拿掉後失去錨點，於是合法鍵只要
+# 第二段以 html/json/js/css/md 起頭（如 `cli.json_export`）就被靜默略過（第七輪複審）。
+_NOT_FILE = r"(?!(?:html|json|js|css|md|log|pdf)['\"`])"
 # 雙引號（Rust）、單引號與反引號（前端）皆須涵蓋——前端一律單引號，
 # 只認雙引號等於對前端零覆蓋（第六輪複審 finding F）。
+# 開閉引號以反向參照配對，避免 `'key"` 這種跨引號誤命中。
 KEY_LITERAL = re.compile(
-    rf"""['"`]({_NS}\.{_NOT_FILE}[a-z0-9_.]+)['"`]"""
+    rf"""(['"`])({_NS}\.{_NOT_FILE}[a-z0-9_.]+)\1"""
 )
 # 模板字串組鍵：t(`report.crypto.col.${{c}}`) → 取前綴，要求 catalog 有該前綴下的葉鍵
 KEY_PREFIX = re.compile(rf"`({_NS}(?:\.[a-z0-9_]+)*)\.\$\{{")
@@ -48,7 +52,7 @@ def keys_used_in_code(root: pathlib.Path) -> tuple[set[str], set[str]]:
             if "/tests/" in str(f) or f.name.endswith("_test.rs"):
                 continue
             text = f.read_text(encoding="utf-8")
-            keys |= set(KEY_LITERAL.findall(text))
+            keys |= {m.group(2) for m in KEY_LITERAL.finditer(text)}
             prefixes |= set(KEY_PREFIX.findall(text))
     return keys, prefixes
 

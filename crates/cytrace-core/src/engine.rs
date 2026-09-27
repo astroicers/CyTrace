@@ -325,14 +325,20 @@ fn is_archive(f: &mut std::fs::File) -> bool {
 /// 就讓掃描服務停擺到重啟。真實 root filesystem 本身就含 FIFO，屬普通輸入。
 const CBOM_TIMEOUT_SECS_DEFAULT: u64 = 600;
 
-/// 解析逾時設定值。**刻意不提供「無逾時」**：`0`、負值、非數字一律回退預設。
+/// 逾時的上限（24 小時）。**上界與下界同樣必要**：`Instant::now() + timeout` 在結果
+/// 無法表示時依定義 **panic**，故 `u64::MAX` 秒這種值不是「很大的逾時」而是崩潰
+/// ——server 模式下是 job thread 直接炸掉，不是設計中的降級（第七輪複審 finding）。
+const CBOM_TIMEOUT_SECS_MAX: u64 = 86_400;
+
+/// 解析逾時設定值。**刻意不提供「無逾時」**：`0`、負值、非數字一律回退預設；
+/// 超過 [`CBOM_TIMEOUT_SECS_MAX`] 者同樣回退。
 ///
 /// 「0 = 無限制」是常見慣例，這裡明確不採用——無逾時正是上述 FIFO 永久阻塞的成因，
 /// 給得出這個值就等於給得出讓 server 停擺的開關。回退而非報錯，是因為本變數僅供
 /// 測試與除錯（未列於 CLI help 與交付文件），打錯字不該讓整趟掃描失敗。
 fn parse_timeout_secs(raw: Option<&str>) -> u64 {
     raw.and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|n| *n > 0)
+        .filter(|n| (1..=CBOM_TIMEOUT_SECS_MAX).contains(n))
         .unwrap_or(CBOM_TIMEOUT_SECS_DEFAULT)
 }
 
@@ -384,24 +390,41 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
     // 實測（第五輪複審）：60 組憑證的目標輸出 285 KB，theia 單獨跑 5 秒完成，
     // 但改用「輪詢 try_wait 且不讀管線」後卡滿逾時——那是第四輪逾時修補引入的迴歸。
     // 舊實作 `.output()` 內部以 read2 併發抽乾兩條管線，正是防死鎖的機制。
+    //
+    // 抽乾用 channel 而非 `JoinHandle::join`，因為 **join 沒有上限**：`kill()` 只殺直接
+    // 子程序，若有孫程序繼承了管線寫端，`read_to_end` 不會返回、join 就不會返回
+    // ——那是把第四輪那個「FIFO 永久掛死」從輪詢處搬到 join 處而已，逾時形同失效
+    // （第七輪複審 finding）。改以 `recv_timeout` 給寬限：拿不到就放棄那份 buffer。
+    // 阻塞呼叫端（server 的 permit 永不釋放、job 不可取消）遠比洩漏一條讀取執行緒嚴重，
+    // 而該執行緒最終會隨孫程序結束而收尾。
+    // 實測（2026-09-27）：theia v1.1.2 為靜態 Go binary，dir 模式不 spawn 子程序，
+    // 故此路徑目前不可達；此處是防上游行為改變，不是修一個當下的缺陷。
+    let (tx_out, rx_out) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (tx_err, rx_err) = std::sync::mpsc::channel::<Vec<u8>>();
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
-    let stdout_handle = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(p) = stdout_pipe.as_mut() {
             use std::io::Read;
             let _ = p.read_to_end(&mut buf);
         }
-        buf
+        let _ = tx_out.send(buf);
     });
-    let stderr_handle = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         if let Some(p) = stderr_pipe.as_mut() {
             use std::io::Read;
             let _ = p.read_to_end(&mut buf);
         }
-        buf
+        let _ = tx_err.send(buf);
     });
+
+    /// 子程序結束後等管線 EOF 的寬限。正常情況下 buffer 已就緒，此值只在異常時生效。
+    const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+    let drain = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| -> Vec<u8> {
+        rx.recv_timeout(DRAIN_GRACE).unwrap_or_default()
+    };
 
     // 逾時輪詢：逾時即 kill，歸為 Failed（fail-closed，不中止主流程）
     //
@@ -411,21 +434,22 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
     // 逾時與 try_wait 失敗兩條路徑共用同一套清理，避免只修一邊（第六輪複審 finding I：
     // Err 分支原本直接 return，既不 kill 也不 join）。
     let deadline = std::time::Instant::now() + timeout;
-    let mut reap = Some((child, stdout_handle, stderr_handle));
+    let mut reap = Some(child);
     macro_rules! reap_and_fail {
         ($err:expr) => {{
-            if let Some((mut c, so, se)) = reap.take() {
+            if let Some(mut c) = reap.take() {
                 let _ = c.kill();
                 let _ = c.wait();
-                // kill 後管線關閉，兩條 reader 會自行結束
-                let _ = so.join();
-                let _ = se.join();
+                // kill 後管線關閉，兩條 reader 會自行結束並送出 buffer；
+                // 送不出來（孫程序持有寫端）時由寬限逾時放行，不阻塞呼叫端
+                let _ = drain(&rx_out);
+                let _ = drain(&rx_err);
             }
             return Err($err);
         }};
     }
     let status = loop {
-        let Some((child, _, _)) = reap.as_mut() else {
+        let Some(child) = reap.as_mut() else {
             unreachable!("reap 只在 early return 時取走");
         };
         match child.try_wait() {
@@ -443,12 +467,15 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
             Err(e) => reap_and_fail!(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
         }
     };
-    let (_child, stdout_handle, stderr_handle) = reap.take().expect("正常結束路徑上 reap 必然還在");
+    // `try_wait` 回 `Ok(Some(_))` 時已經收割過，這次 `wait` 會立即返回；
+    // 顯式寫出來是為了讓「不留 zombie」由程式碼本身表明，而非靠讀者推論。
+    let mut child = reap.take().expect("正常結束路徑上 reap 必然還在");
+    let _ = child.wait();
 
     let out = std::process::Output {
         status,
-        stdout: stdout_handle.join().unwrap_or_default(),
-        stderr: stderr_handle.join().unwrap_or_default(),
+        stdout: drain(&rx_out),
+        stderr: drain(&rx_err),
     };
 
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
@@ -538,10 +565,12 @@ pub fn admitted_counts(stderr: &str) -> (u64, u64) {
                 .unwrap_or(1); // 認不得數字也算一項：寧可多算
             if rest.contains("private key") {
                 keys = keys.saturating_add(n);
-            } else if rest.contains("certificate") {
-                // 上游若哪天改成這個格式，這條仍接得住（目前不會命中）
-                certs = certs.saturating_add(n);
             }
+            // 刻意**不**在此接 `Found N certificate(s)`：theia 不印該格式，而留著它會製造
+            // 一條唯一的重複計數路徑——若上游哪天同時印兩種（`msg="Found 3 certificate(s)"
+            // numberOfDetectedCertificates=3`），憑證數會變成 6，於是「自承 6 建模 3」
+            // 憑空生出 3 項未確定、閘門回 NoResult 假警報（第七輪複審 finding）。
+            // 憑證一律只認下方的結構化欄位；欄位改名由 real_engine 案例 13 當場抓到。
         }
         // 憑證：logrus 結構化欄位 `numberOfDetectedCertificates=N`
         if let Some(rest) = line.split("numberOfDetectedCertificates=").nth(1) {
@@ -621,6 +650,25 @@ mod tests {
     fn timeout_accepts_positive_values() {
         assert_eq!(parse_timeout_secs(Some("30")), 30);
         assert_eq!(parse_timeout_secs(Some(" 45 ")), 45);
+        assert_eq!(parse_timeout_secs(Some("86400")), CBOM_TIMEOUT_SECS_MAX);
+    }
+
+    #[test]
+    fn timeout_rejects_values_that_would_panic_on_instant_add() {
+        // u64::MAX 秒能通過 parse 與 >0，但 `Instant::now() + Duration` 依定義會 panic
+        // ——那不是「很大的逾時」而是 job thread 崩潰（第七輪複審 finding）
+        assert_eq!(
+            parse_timeout_secs(Some("18446744073709551615")),
+            CBOM_TIMEOUT_SECS_DEFAULT
+        );
+        assert_eq!(
+            parse_timeout_secs(Some("86401")),
+            CBOM_TIMEOUT_SECS_DEFAULT,
+            "超過上限須回退，不得放行"
+        );
+        // 上限值本身仍可加到 Instant 上而不 panic（釘住上限選得夠保守）
+        let d = std::time::Duration::from_secs(CBOM_TIMEOUT_SECS_MAX);
+        assert!(std::time::Instant::now().checked_add(d).is_some());
     }
 
     /// fake 引擎可經 `dyn ScanEngine` 注入——驗證測試縫成立（server 整合測試依賴此性質）。

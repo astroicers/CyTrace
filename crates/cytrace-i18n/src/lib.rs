@@ -46,16 +46,27 @@ impl Catalog {
         let Some(d) = detail else {
             return self.t(key, &[]);
         };
-        let vars: &[(&str, &str)] = if key == "cbom.err.timeout" {
-            &[("secs", d)]
+        let var = if key == "cbom.err.timeout" {
+            "secs"
         } else {
-            &[("target", d)]
+            "target"
         };
-        let rendered = self.t(key, vars);
-        if rendered.contains("{{") || !rendered.contains(d) {
-            format!("{}（{d}）", self.t(key, &[]))
+        // 以**原文是否含該佔位符**決定走插值或括號，而非事後猜「細節有沒有出現在結果裡」。
+        // 舊版用 `!rendered.contains(d)` 判斷，有兩個錯法（第七輪複審 finding）：
+        // 細節恰為譯文子字串時會被誤判為「已插值」而**靜默丟棄**；`detail = Some("")`
+        // （`cbom_target("")` 可達）則渲染出結尾懸空的「：」。
+        let raw = lookup(&self.lang, key)
+            .or_else(|| lookup(&self.fallback, key))
+            .unwrap_or_else(|| key.to_string());
+        if d.is_empty() {
+            // 空細節不帶任何資訊，附上只會留一個懸空的分隔符
+            return interpolate(&raw, &[(var, "?")]);
+        }
+        if raw.contains(&format!("{{{{{var}}}}}")) {
+            interpolate(&raw, &[(var, d)])
         } else {
-            rendered
+            // 鍵的文案沒有該變數的位置 → 細節補在括號內，不讓它消失
+            format!("{}（{d}）", interpolate(&raw, &[]))
         }
     }
 }
@@ -81,6 +92,58 @@ fn interpolate(template: &str, vars: &[(&str, &str)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── render_cbom 的兩個邊界（第七輪複審 finding）──
+
+    #[test]
+    fn render_cbom_keeps_detail_even_when_it_matches_the_message_text() {
+        // 舊版以 `!rendered.contains(detail)` 判斷是否已插值。當細節恰為譯文的子字串時，
+        // 該判斷成立而細節被**靜默丟棄**——操作員失去唯一的處置線索。
+        let c = Catalog::load("zh-TW");
+        // 取一個文案含 {{target}} 的鍵，餵一個必然出現在譯文裡的短字串
+        let msg = c.t("cbom.err.target_not_archive", &[]);
+        let needle: String = msg.chars().take(2).collect();
+        let out = c.render_cbom("cbom.err.target_not_archive", Some(&needle));
+        assert!(!out.contains("{{"), "不得殘留佔位符：{out}");
+        assert!(
+            out.matches(&needle).count() >= 2,
+            "細節須出現在插值位置（訊息本身已含該字串，故總數 ≥ 2）：{out}"
+        );
+    }
+
+    #[test]
+    fn render_cbom_handles_empty_detail_without_dangling_separator() {
+        // `cbom_target("")` 會產生 detail = Some("")；直接插值會留下懸空的分隔符
+        let c = Catalog::load("zh-TW");
+        let out = c.render_cbom("cbom.err.target_not_archive", Some(""));
+        assert!(!out.contains("{{"), "不得殘留佔位符：{out}");
+        assert!(
+            !out.ends_with('：') && !out.ends_with("（）"),
+            "不得留懸空分隔符：{out}"
+        );
+        assert!(!out.is_empty());
+    }
+
+    #[test]
+    fn render_cbom_falls_back_to_parentheses_when_the_key_has_no_placeholder() {
+        // 文案沒有變數位置時，細節仍不得消失
+        let c = Catalog::load("zh-TW");
+        let out = c.render_cbom("cbom.err.empty_output", Some("/tmp/x"));
+        assert!(out.contains("/tmp/x"), "細節不得被丟棄：{out}");
+        assert!(!out.contains("{{"), "不得殘留佔位符：{out}");
+    }
+
+    #[test]
+    fn render_cbom_uses_secs_for_timeout_and_target_otherwise() {
+        for lang in ["zh-TW", "en-US"] {
+            let c = Catalog::load(lang);
+            let t = c.render_cbom("cbom.err.timeout", Some("600"));
+            assert!(t.contains("600") && !t.contains("{{"), "{lang}: {t}");
+            let a = c.render_cbom("cbom.err.target_not_archive", Some("/tmp/f.bin"));
+            assert!(a.contains("/tmp/f.bin") && !a.contains("{{"), "{lang}: {a}");
+            assert_eq!(a.matches("/tmp/f.bin").count(), 1, "路徑不得重複：{a}");
+        }
+    }
 
     #[test]
     fn nested_key_lookup_works() {

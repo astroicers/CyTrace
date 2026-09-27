@@ -311,11 +311,19 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 無暫存殘留 | 所有離開路徑（含引擎缺席）皆不留暫存目錄 | `engine_leaves_no_temp_home_behind` | 每次 CI |
 | **真引擎 × 真實輸入形態** | **十二**個案例全綠：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、OpenSSH 金鑰、殘檔映像名、非封存檔、**大輸出不塞管線**、**混合目標量綱**、**raw JSON 無私鑰材料** | `make test-real-engine`（CI job `real-engine`，以 Dockerfile theia-builder stage 建引擎） | 每次 CI |
 | 缺工具不得假綠燈 | real_engine 層缺 theia / openssl / ssh-keygen / mkfifo 時**測試失敗**，不得靜默 `return` 後回報通過 | `require_theia()` 與各案例的 `panic!`（實測：移出 PATH 後該案例轉紅） | 每次 CI |
-| 憑證自承計數對帳 | 憑證數取自 theia 的 `numberOfDetectedCertificates=N`（**它從不印** `Found N certificate(s)`），否則憑證類未建模缺口恆為 0 → fail-open | `certificate_count_is_parsed_from_the_real_logrus_field`（stderr 為 v1.1.2 實地輸出，未經改寫） | 每次 CI |
+| 憑證自承計數對帳 | 憑證數取自 theia 的 `numberOfDetectedCertificates=N`（**它從不印** `Found N certificate(s)`），否則憑證類未建模缺口恆為 0 → fail-open | `certificate_count_is_parsed_from_the_real_logrus_field`（凍結的 v1.1.2 實地 stderr）**＋** real_engine 案例 13 直接對真引擎斷言 `admitted_certs`（欄位改名當場轉紅；實測改名後確實 FAILED） | 每次 CI |
+| 憑證不得重複計數 | 同一行同時出現兩種格式時憑證數不得翻倍（否則憑空生出未確定項、假 NoResult） | `certificate_count_is_never_double_counted` | 每次 CI |
+| NOTICE gate 無白列 | 對帳只看 NOTICE 區段（非整個腳本檔），且每一列抹去後都必須轉紅 | `notice-parity-check.py --self-test`（26 個變異全數轉紅；實證：ps1 的 NOTICE 刪掉 Syft 段後初版仍命中 `.PARAMETER SyftVersion` 而放行） | 每次 CI |
+| `reason_detail` 無中文散文 | **全部** `CytraceError` 變體（含 `Io` / `DbMissing`）的細節皆不得夾帶本型別的中文前綴 | `reason_detail_never_carries_chinese_prose_for_any_variant`（逐變體）＋ `CytraceError::untranslatable_detail` 單一出口 | 每次 CI |
+| 逾時無 panic 可達狀態 | 上界 86400s：`u64::MAX` 秒能通過解析但 `Instant + Duration` 依定義 panic | `timeout_rejects_values_that_would_panic_on_instant_add` | 每次 CI |
 | **raw `cbom.cdx.json` 無私鑰材料** | 逐元件斷言 `type: private-key` 不得帶 `value`；raw 無 PEM 標記；並斷言 private-key 元件數 > 0（防空轉） | real_engine 案例 12 `raw_cbom_json_never_carries_private_key_material` | 每次 CI |
 | NOTICE 兩平台對帳 | `package.sh` 與 `package.ps1` 的 NOTICE 皆含 13 項法律必要實體（含 ring 的 ISC + OpenSSL/BoringSSL 混合授權） | `scripts/notice-parity-check.py`（`make lint` 與 CI lint job） | 每次 CI |
 | 逾時無「無限制」可達狀態 | `CYTRACE_CBOM_TIMEOUT_SECS=0` / 負值 / 非數字一律回退預設 600s | `timeout_falls_back_to_default_for_invalid_values` | 每次 CI |
-| 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並 join 兩條 reader thread | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
+| 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並抽乾兩條 reader | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
+| 抽乾不得無上限阻塞 | 以 channel `recv_timeout`（5s 寬限）取代 `JoinHandle::join`：`kill` 只殺直接子程序，孫程序持有管線寫端時 `join` 永不返回＝逾時形同失效 | `large_output_does_not_deadlock_the_pipe`（285 KB 仍不塞管線）；theia v1.1.2 實測不 spawn 子程序，此路徑目前不可達，屬防上游變更 | 每次 CI |
+| CBOM 訊息渲染邊界 | 依**原文是否含佔位符**決定插值或括號（非事後猜細節有無出現）；空細節不留懸空分隔符 | `cytrace-i18n` 四支 `render_cbom_*` 測試 | 每次 CI |
+| stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
+| 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 
 > **為何需要獨立的真引擎測試層**（六輪複審的共同教訓）：M9 共經六輪獨立複審、
 > 打出 16 項阻斷級，而**第四輪之後的全部缺陷都只有真引擎跑得出來**——零資產目標輸出
@@ -340,8 +348,6 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 > **不填 `value`**（只有公鑰帶 base64 值），故原樣落地的 `cbom.cdx.json` 不含私鑰內容。
 > **這是引擎行為，不是本產品的保證**——上游一改，交件報表就會夾帶私鑰而程式碼毫無察覺，
 > 故以案例 12 逐元件斷言作警報。
-| stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
-| 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 
 ## 關聯（Relations）
 

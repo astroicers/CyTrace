@@ -547,3 +547,73 @@ fn failed_status_carries_a_pure_i18n_key_not_prose() {
         other => panic!("應為 Failed，實得 {other:?}"),
     }
 }
+
+// ── reason_detail 不得夾帶本型別的中文散文（NFR-06 / i18n 雙語強制）──
+
+/// 每個 `CytraceError` 變體的 `Display` 都帶一段中文前綴（「引擎子程序錯誤：」…）。
+/// 那段前綴一旦進了 `reason_detail`，就會寫進 `scan-result.json`、經 API 對外，
+/// 且 `--lang en-US` 下照樣吐中文。
+///
+/// 第六輪只在呼叫端 match 了 `Engine|Parse|Config`，`Io` 與 `DbMissing` 落到
+/// `_ => to_string()` 繼續帶中文（第七輪複審指認，可達路徑：`engine::cbom` 的
+/// `TempDir::new()?` io 錯誤經 `#[from]` 變成 `Io`）。本測試逐變體把關。
+/// 錯誤建構子：每個變體一支，供逐變體把關。
+type MakeError = fn() -> CytraceError;
+
+struct FailingEngine(MakeError);
+
+impl ScanEngine for FailingEngine {
+    fn sbom(&self, _t: &str) -> Result<String> {
+        Ok("{}".into())
+    }
+    fn vuln(&self, _s: &str) -> Result<String> {
+        Ok(r#"{"matches":[]}"#.into())
+    }
+    fn cbom(&self, _t: &str) -> Result<Option<CbomOutput>> {
+        Err((self.0)())
+    }
+}
+
+#[test]
+fn reason_detail_never_carries_chinese_prose_for_any_variant() {
+    let variants: Vec<(&str, MakeError)> = vec![
+        ("Engine", || CytraceError::Engine("exit 2: boom".into())),
+        ("Parse", || CytraceError::Parse("expected value".into())),
+        ("Config", || CytraceError::Config("missing flag".into())),
+        ("DbMissing", || {
+            CytraceError::DbMissing("/var/lib/grype/db".into())
+        }),
+        ("Io", || {
+            CytraceError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "permission denied",
+            ))
+        }),
+    ];
+
+    for (name, make) in variants {
+        let inv = collect_cbom(&FailingEngine(make), "/tmp/whatever");
+        let detail = match &inv.status {
+            CbomStatus::Failed { reason_detail, .. } => reason_detail.clone(),
+            other => panic!("{name}: 應為 Failed，實為 {other:?}"),
+        };
+        let detail = detail.unwrap_or_else(|| panic!("{name}: 應帶 detail"));
+        // CJK 統一漢字 + 全角標點：本型別的散文一律落在此範圍
+        let offending: Vec<char> = detail
+            .chars()
+            .filter(|c| matches!(*c as u32, 0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF))
+            .collect();
+        assert!(
+            offending.is_empty(),
+            "{name} 的 reason_detail 夾帶中文散文 {offending:?}：{detail}\n\
+             （後果：--lang en-US 的報表與 API 回應會吐中文）"
+        );
+        assert!(
+            !detail.contains("錯誤")
+                && !detail.contains("缺失")
+                && !detail.contains("：")
+                && !detail.is_empty(),
+            "{name}: detail 應為不可翻譯內容本身，實為 {detail:?}"
+        );
+    }
+}

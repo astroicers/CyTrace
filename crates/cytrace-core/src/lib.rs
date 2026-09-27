@@ -144,17 +144,13 @@ pub fn collect_cbom_with_raw(
                 reason_detail: detail.clone(),
             },
             // 其他錯誤型別沒有對應鍵，以通用鍵承接。
-            // **細節只放不可翻譯的部分**（子程序訊息），不得帶 CytraceError 的中文 Display 前綴
-            // ——否則 --lang en-US 下仍會吐中文（第六輪複審 finding C）。
-            CytraceError::Engine(msg) | CytraceError::Parse(msg) | CytraceError::Config(msg) => {
-                CbomStatus::Failed {
-                    reason_key: "cbom.err.engine".to_string(),
-                    reason_detail: Some(msg.clone()),
-                }
-            }
+            // **細節只放不可翻譯的部分**，不得帶 CytraceError 的中文 Display 前綴
+            // ——否則 --lang en-US 下仍會吐中文（第六輪 finding C）。
+            // 走型別上的單一出口，而非在此逐變體 match：第六輪在這裡只列了三個變體，
+            // Io 與 DbMissing 落到 `_ => to_string()` 繼續帶中文（第七輪複審）。
             other => CbomStatus::Failed {
                 reason_key: "cbom.err.engine".to_string(),
-                reason_detail: Some(other.to_string()),
+                reason_detail: other.untranslatable_detail(),
             },
         },
         assets: Vec::new(),

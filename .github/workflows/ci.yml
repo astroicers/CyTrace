@@ -34,9 +34,13 @@ jobs:
           fi
       - name: i18n 鍵一致（NFR-06）
         run: python3 scripts/i18n-check.py
-      # 兩支打包腳本各寫一份 NOTICE，改一邊忘一邊就出授權聲明不實的交付包
+      # 兩支打包腳本各寫一份 NOTICE，改一邊忘一邊就出授權聲明不實的交付包。
+      # 第二步是變異測試：初版對整檔比對，NOTICE 刪光對應段仍綠（第七輪複審 blocker），
+      # 故要求每一列抹去後都必須轉紅——白列等於假的機械支撐。
       - name: NOTICE 兩平台對帳（ADR-013）
-        run: python3 scripts/notice-parity-check.py
+        run: |
+          python3 scripts/notice-parity-check.py
+          python3 scripts/notice-parity-check.py --self-test
 
   real-engine:
     name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）

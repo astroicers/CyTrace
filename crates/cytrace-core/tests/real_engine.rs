@@ -499,6 +499,25 @@ fn raw_cbom_json_never_carries_private_key_material() {
         let _ = fs::remove_dir_all(&d);
         panic!("openssl 產私鑰失敗：本案例無法驗證任何事，不得回報通過");
     }
+    // OpenSSH 格式：走「偵測到但未建模」那條路（只在 stderr 留痕），
+    // 註解聲稱涵蓋四種格式就得真的有四種——第七輪複審指認此處原只產三種。
+    if !Command::new("ssh-keygen")
+        .args([
+            "-t",
+            "ed25519",
+            "-N",
+            "",
+            "-q",
+            "-f",
+            d.join("ssh_host_ed25519_key").to_str().unwrap(),
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let _ = fs::remove_dir_all(&d);
+        panic!("ssh-keygen 產金鑰失敗：本案例無法驗證任何事，不得回報通過");
+    }
     // 一併放一張憑證，確保輸出裡真的有東西（空輸出會讓斷言變成空轉）
     if !gen_cert(&d, "server", 2048) {
         let _ = fs::remove_dir_all(&d);
@@ -554,10 +573,80 @@ fn raw_cbom_json_never_carries_private_key_material() {
     }
     assert!(
         private_seen > 0,
-        "目標含 3 把私鑰卻沒有任何 private-key 元件——斷言在空轉，\
+        "目標含多把私鑰卻沒有任何 private-key 元件——斷言在空轉，\
          引擎行為或建模路徑已變，須先確認再談通過"
+    );
+    // 未建模路徑也要有警報：ssh-keygen 那把只在 stderr 留痕，故自承數必然高於建模數。
+    // 少了這條，「涵蓋建模與未建模兩種路徑」就只是註解裡的話。
+    assert!(
+        inv.unscanned_undetermined > 0,
+        "OpenSSH 格式金鑰不被建模，其缺口必須出現在 unscanned_undetermined 裡"
     );
 
     // 3) 我們解析後的結構同樣不得含金鑰內容
     assert_no_key_material(&inv);
+}
+
+// ── 案例 13：憑證自承計數的漂移哨兵（第七輪複審 blocker）──
+
+/// **凍結的 stderr fixture 只能證明過去**。
+///
+/// 第六輪修好了憑證計數（theia 走 `numberOfDetectedCertificates=N`，不印
+/// `Found N certificate(s)`），但唯一的把關是 `tests/cbom.rs` 裡一段凍結字串。
+/// 上游下次改欄位名時：`admitted_certs` 靜默回到 0 → 憑證類的「偵測到卻未建模」
+/// 恆算 0 → 閘門一律放行，而全部案例照樣全綠——fail-open 原路返回，
+/// 沒有任何東西會轉紅（第七輪複審指認：12 案中沒有一條斷言碰過 `admitted_certs`）。
+///
+/// 本案例直接對真引擎斷言計數本身，故欄位改名當下就會紅。
+#[test]
+#[ignore = "需要 cbomkit-theia 與 openssl"]
+fn certificate_admitted_count_tracks_the_real_engine() {
+    require_theia();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+    // (a) 三張獨立憑證
+    let d = workspace("certcount");
+    for i in 1..=3 {
+        if !gen_cert(&d, &format!("c{i}"), 2048) {
+            let _ = fs::remove_dir_all(&d);
+            panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
+        }
+    }
+    let out = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(120))
+        .expect("盤點應成功")
+        .expect("theia 存在時不得回報缺席");
+    assert_eq!(
+        out.admitted_certs, 3,
+        "三張憑證的自承數須為 3——若為 0，表示引擎的憑證計數欄位已改名而解析沒跟上，\n\
+         後果是憑證類的未建模缺口恆為 0、量子閘門一律放行（fail-open）"
+    );
+    assert_eq!(out.admitted_keys, 3, "-nodes 產出的三把私鑰亦須計入");
+
+    // (b) 同樣三張，但連成一個 PEM bundle：計數應仍為 3（不是 1 個檔案）
+    let bundle_dir = workspace("certbundle");
+    let mut bundle = Vec::new();
+    for i in 1..=3 {
+        bundle.extend(fs::read(d.join(format!("c{i}.crt"))).unwrap());
+    }
+    fs::write(bundle_dir.join("bundle.pem"), &bundle).unwrap();
+    let _ = fs::remove_dir_all(&d);
+
+    let out = cbom_with_timeout(bundle_dir.to_str().unwrap(), Duration::from_secs(120))
+        .expect("盤點應成功")
+        .expect("theia 存在時不得回報缺席");
+    let _ = fs::remove_dir_all(&bundle_dir);
+    assert_eq!(
+        out.admitted_certs, 3,
+        "3-in-1 bundle 的自承數須為 3（依憑證數而非檔案數）"
+    );
+
+    // (c) 零憑證目標不得憑空生出自承數（否則會造成常態假警報）
+    let empty = workspace("certzero");
+    fs::write(empty.join("openssl.cnf"), b"[system_default_sect]\n").unwrap();
+    let out = cbom_with_timeout(empty.to_str().unwrap(), Duration::from_secs(120))
+        .expect("盤點應成功")
+        .expect("theia 存在時不得回報缺席");
+    let _ = fs::remove_dir_all(&empty);
+    assert_eq!(out.admitted_certs, 0, "無憑證時自承數須為 0");
+    assert_eq!(out.admitted_keys, 0, "無私鑰時自承數須為 0");
 }
