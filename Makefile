@@ -44,11 +44,14 @@ test:
 # 需要 cbomkit-theia 在 PATH；air-gapped CI 無引擎時這些案例為 #[ignore]，
 # 故 `make test` 不會跑到，須顯式呼叫本 target。
 #
-# 存在理由：M9 四輪複審中，後兩輪的全部阻斷級都是「真引擎在常見輸入上的實際行為」
-# （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕），
-# 用 fixture 與 fake engine 一個都測不到。
+# 存在理由：M9 六輪複審中，第四輪之後的全部阻斷級都是「真引擎在常見輸入上的實際行為」
+# （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、
+# 憑證計數走 numberOfDetectedCertificates 而非我們以為的 Found N certificate(s)），
+# 用 fixture 與 fake engine 一個都測不到——連我們自己寫的 fixture 都在說謊。
 test-real-engine:
 	@command -v cbomkit-theia >/dev/null || { echo "✗ 找不到 cbomkit-theia；先跑 scripts/build-theia.sh"; exit 1; }
+	@# 案例缺工具時會 panic（本層不接受靜默略過），故前置一併檢查以給出清楚訊息
+	@for t in openssl ssh-keygen mkfifo; do 		command -v $$t >/dev/null || { echo "✗ 找不到 $$t（真引擎案例需要）"; exit 1; }; 	done
 	cargo test -p cytrace-core --test real_engine -- --ignored
 
 fmt:
@@ -64,7 +67,8 @@ clippy:
 # 需有 recipe 才能覆寫 Makefile.inc 的通用 lint（否則只是追加前置相依）。
 lint: fmt-check clippy
 	python3 scripts/i18n-check.py
-	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致，零 warning）"
+	python3 scripts/notice-parity-check.py
+	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致 + NOTICE 兩平台對帳，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

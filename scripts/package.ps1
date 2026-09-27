@@ -120,12 +120,16 @@ Bundled tools (unmodified):
   - Grype (Anchore, Apache-2.0) - vulnerability matching
 $TheiaNotice
 
-Rust dependency licenses: see cytrace.sbom.cdx.json.
+TLS for the web service mode (cytrace serve, ADR-011) is provided by rustls + ring:
+  - ring - licensed under a mix of ISC and OpenSSL/BoringSSL terms (see the ring crate
+    LICENSE). Licenses and versions of all Rust dependencies (tokio/axum/argon2 and the
+    rest) are in the bundled cytrace.sbom.cdx.json.
 
 Supply chain: no China-sourced dependencies (e.g. OpenSCA-cli).
   Scope of this statement: dependency source domains, copyright notices and maintaining
   organizations; it does not cover the nationality or residence of individual contributors
   (see ADR-013 "scope of the no-China-sourced rule").
+Rust dependencies are gated in CI by cargo-deny (license / source allowlist).
 "@ | Out-File -Encoding utf8 "$Bundle\NOTICE"
 
 # 6) 離線執行 wrapper（固定用包內引擎與 DB、強制離線）

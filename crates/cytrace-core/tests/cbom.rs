@@ -339,6 +339,48 @@ fn admitted_counts_are_parsed_per_category() {
     );
 }
 
+/// **這段 stderr 是 theia v1.1.2 的真實輸出**（2026-09-27 實地抓取，未經改寫）。
+///
+/// 上面那個測試用的 `Found 3 certificate(s)` 是**我們想像的格式**，theia 從不這樣印：
+/// 憑證走 logrus 結構化欄位 `numberOfDetectedCertificates=N`。於是原實作的 certs 恆為 0、
+/// 憑證類的未確定數恆為 0——「偵測到卻沒建模的憑證」一律被吞掉，閘門回 Pass。
+/// 想像的 fixture 會長成想像的樣子，這正是本檔與 real_engine 層要一起存在的理由。
+#[test]
+fn certificate_count_is_parsed_from_the_real_logrus_field() {
+    use cytrace_core::engine::admitted_counts;
+
+    let real = concat!(
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"=> Running Certificate File Plugin\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=warning msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Certificate searching done\" numberOfDetectedCertificates=1\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"=> Running Secret Detection Plugin\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Secret detected\" file=s.key type=private-key\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Found 1 private key(s) in s.key\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Problematic CA detection completed\" checked=0 flagged=0\n",
+    );
+    assert_eq!(
+        admitted_counts(real),
+        (1, 1),
+        "真實輸出：1 把私鑰（Found …）＋ 1 張憑證（numberOfDetectedCertificates）"
+    );
+
+    // 多張憑證
+    assert_eq!(
+        admitted_counts("msg=\"Certificate searching done\" numberOfDetectedCertificates=17\n"),
+        (0, 17)
+    );
+    // 零張不得憑空生出缺口
+    assert_eq!(
+        admitted_counts("msg=\"Certificate searching done\" numberOfDetectedCertificates=0\n"),
+        (0, 0)
+    );
+    // 認不得數字仍計一項（寧可多算，與私鑰同原則）
+    assert_eq!(
+        admitted_counts("msg=\"…\" numberOfDetectedCertificates=NaN\n"),
+        (0, 1)
+    );
+}
+
 #[test]
 fn undetermined_subtracts_within_one_category() {
     use cytrace_core::engine::undetermined_count;

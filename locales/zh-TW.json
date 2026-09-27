@@ -168,6 +168,9 @@
       "cancel": "取消",
       "unauthorized": "登入已逾時，請重新登入",
       "error": "發生錯誤"
+    },
+    "errors": {
+      "network": "無法連線到伺服器，請確認伺服器仍在執行"
     }
   },
   "report": {

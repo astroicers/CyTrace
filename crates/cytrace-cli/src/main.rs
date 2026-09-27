@@ -409,12 +409,21 @@ struct CbomOpts {
 /// 使用者看不懂、且 `--lang en-US` 也不會變英文。
 fn render_cbom_error(e: &cytrace_core::CytraceError, cat: &Catalog) -> String {
     match e {
-        cytrace_core::CytraceError::Cbom { key, detail } => match detail {
-            Some(d) => format!("{}（{d}）", cat.t(key, &[])),
-            None => cat.t(key, &[]),
-        },
+        cytrace_core::CytraceError::Cbom { key, detail } => {
+            render_cbom_key(key, detail.as_deref(), cat)
+        }
         other => other.to_string(),
     }
+}
+
+/// 把 CBOM 錯誤鍵渲染為使用者可讀訊息。
+///
+/// **細節必須以變數插值**，不可只附在括號後：locale 字串帶 `{{target}}` / `{{secs}}`，
+/// 以 `t(key, &[])` 渲染會把佔位符原樣印出（第六輪複審實測：
+/// 「非 tar / gzip 封存檔，拒絕當成映像：{{target}}（/path/…）」——路徑還重複一次）。
+/// 轉呼 [`Catalog::render_cbom`]——渲染邏輯住在 i18n crate，與 server 共用同一份。
+fn render_cbom_key(key: &str, detail: Option<&str>, cat: &Catalog) -> String {
+    cat.render_cbom(key, detail)
 }
 
 /// 把 CBOM 狀態告知使用者——降級與失敗**必須可見**，不得無聲略過（ADR-013 決策 4/10）。
@@ -461,11 +470,8 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
             reason_key,
             reason_detail,
         } => {
-            // reason_key 是純 i18n 鍵，依語系渲染；細節（路徑／秒數）附在後面
-            let reason = match reason_detail {
-                Some(d) => format!("{}（{d}）", cat.t(reason_key, &[])),
-                None => cat.t(reason_key, &[]),
-            };
+            // reason_key 是純 i18n 鍵，依語系渲染；細節以變數插值（見 render_cbom_key）
+            let reason = render_cbom_key(reason_key, reason_detail.as_deref(), cat);
             eprintln!("{}", cat.t("cli.cbom.failed", &[("reason", &reason)]))
         }
         CbomStatus::NotRequested => {}
@@ -500,6 +506,50 @@ fn sanitize(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── CBOM 錯誤渲染（第六輪複審：佔位符原樣印給使用者）──
+
+    #[test]
+    fn cbom_error_rendering_fills_placeholders() {
+        // locale 字串帶 {{target}} / {{secs}}；以 t(key, &[]) 渲染會原樣印出佔位符，
+        // 實測輸出「非 tar / gzip 封存檔，拒絕當成映像：{{target}}（/path/…）」——
+        // 路徑還重複出現在括號裡。
+        let cat = Catalog::load("zh-TW");
+        for (key, detail) in [
+            ("cbom.err.target_not_archive", Some("/tmp/x.bin")),
+            ("cbom.err.target_not_local", Some("/tmp/nope")),
+            ("cbom.err.target_unreadable", Some("/tmp/locked")),
+            ("cbom.err.timeout", Some("600")),
+            ("cbom.err.empty_output", None),
+        ] {
+            let e = cytrace_core::CytraceError::Cbom {
+                key,
+                detail: detail.map(str::to_string),
+            };
+            let out = render_cbom_error(&e, &cat);
+            assert!(!out.contains("{{"), "{key} 渲染後殘留佔位符：{out}");
+            if let Some(d) = detail {
+                assert!(out.contains(d), "{key} 須含細節 {d}：{out}");
+                assert_eq!(out.matches(d).count(), 1, "{key} 的細節不得重複出現：{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn cbom_error_rendering_is_language_aware() {
+        let en = Catalog::load("en-US");
+        let e = cytrace_core::CytraceError::Cbom {
+            key: "cbom.err.empty_output",
+            detail: None,
+        };
+        let out = render_cbom_error(&e, &en);
+        // 只查 CJK：英文訊息本身含破折號與彎引號等非 ASCII 標點，那是正常的
+        assert!(
+            !out.chars().any(|c| matches!(c as u32,
+                0x3000..=0x303F | 0x4E00..=0x9FFF | 0xFF00..=0xFFEF)),
+            "en-US 不得出現中日韓文字（中文散文洩漏）：{out}"
+        );
+    }
 
     // ── 單一目標內的雙閘門彙整（複審 finding：fail_on 先行 return 會遮蔽量子 exit 1）──
 

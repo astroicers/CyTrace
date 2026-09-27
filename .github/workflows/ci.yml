@@ -34,6 +34,9 @@ jobs:
           fi
       - name: i18n 鍵一致（NFR-06）
         run: python3 scripts/i18n-check.py
+      # 兩支打包腳本各寫一份 NOTICE，改一邊忘一邊就出授權聲明不實的交付包
+      - name: NOTICE 兩平台對帳（ADR-013）
+        run: python3 scripts/notice-parity-check.py
 
   real-engine:
     name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）
@@ -53,8 +56,8 @@ jobs:
           docker rm "$cid"
           chmod +x /usr/local/bin/cbomkit-theia
           echo "${THEIA_LINUX_AMD64_SHA256}  /usr/local/bin/cbomkit-theia" | sha256sum -c -
-      # M9 四輪複審中，後兩輪的全部阻斷級都只有真引擎跑得出來
-      # （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕）
+      # M9 六輪複審中，第四輪之後的全部阻斷級都只有真引擎跑得出來（零資產目標輸出 null、
+      # dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、憑證計數欄位名與想像不符）
       - name: 真引擎 × 真實輸入形態
         run: make test-real-engine
 
@@ -127,6 +130,13 @@ jobs:
           $notice = Get-Content (Join-Path $b.FullName "NOTICE") -Raw
           if (-not ($notice -match "does not cover the nationality")) {
             throw "NOTICE 缺少禁中國來源宣告的涵蓋範圍註記"
+          }
+          # ring 為 ISC 與 OpenSSL/BoringSSL 混合授權，須保留聲明；Windows 交付同樣含
+          # cytrace serve 故同樣連結 ring。第六輪複審 finding J：ps1 曾整段漏掉。
+          foreach ($t in @("ring", "rustls", "cargo-deny")) {
+            if (-not ($notice -match [regex]::Escape($t))) {
+              throw "NOTICE 缺 $t 段（Windows 交付同樣連結 ring，授權聲明不得省略）"
+            }
           }
           if (Test-Path (Join-Path $b.FullName "bin\cbomkit-theia.exe")) {
             foreach ($t in @("CBOMkit-theia","MPL-2.0","gitleaks")) {

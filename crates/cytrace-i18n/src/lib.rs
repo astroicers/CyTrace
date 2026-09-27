@@ -33,6 +33,31 @@ impl Catalog {
             .unwrap_or_else(|| key.to_string());
         interpolate(&raw, vars)
     }
+
+    /// 渲染 `CytraceError::Cbom`（純鍵 + 不可翻譯細節）為使用者可見訊息。
+    ///
+    /// 細節的變數名**由鍵決定**：`cbom.err.timeout` 的細節是秒數（`{{secs}}`），
+    /// 其餘皆為目標路徑（`{{target}}`）。插值後若仍殘留佔位符、或細節根本沒被用上
+    /// （鍵的文案未含該變數），才把細節補在括號內——否則會出現「佔位符原樣印出
+    /// 且路徑重複一次」的畫面（第五輪修補造成、第六輪複審抓到的迴歸）。
+    ///
+    /// **CLI 與 server 共用本函式**：兩邊各寫一份渲染邏輯，就會有一邊先退化成裸鍵。
+    pub fn render_cbom(&self, key: &str, detail: Option<&str>) -> String {
+        let Some(d) = detail else {
+            return self.t(key, &[]);
+        };
+        let vars: &[(&str, &str)] = if key == "cbom.err.timeout" {
+            &[("secs", d)]
+        } else {
+            &[("target", d)]
+        };
+        let rendered = self.t(key, vars);
+        if rendered.contains("{{") || !rendered.contains(d) {
+            format!("{}（{d}）", self.t(key, &[]))
+        } else {
+            rendered
+        }
+    }
 }
 
 /// 巢狀路徑查找（"report.notes.title"）。

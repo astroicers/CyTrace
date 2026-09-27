@@ -343,17 +343,46 @@ mod tests {
         assert!(completed_empty.assets.is_empty());
     }
 
+    /// `CbomStatus` 的**序列化形式**是跨語言契約：`frontend/src/types.ts` 宣告
+    /// 單位變體為字串、`Failed` 為 `{ Failed: { reason_key, reason_detail? } }`
+    /// （serde 預設的 externally-tagged 形式）。在 Rust 端加 `#[serde(tag=…)]`、
+    /// 改變體名或改欄位名，前端的 `'Failed' in s` 判定會**靜默**失效——報表把
+    /// 失敗顯示成「掃到 0 項」，正是 ADR-013 決策 4 要防的那件事。
+    ///
+    /// （原測試把 reason_key 放進去再取出來比對，只驗證了 Rust 的 struct literal
+    /// 語意，換成任何欄位名都會通過；第六輪複審 minor。）
     #[test]
-    fn cbom_status_failed_carries_reason_key() {
-        let failed = CbomStatus::Failed {
-            reason_key: "cbom.err.stdout_not_json".into(),
-            reason_detail: None,
-        };
-        match failed {
-            CbomStatus::Failed { reason_key, .. } => {
-                assert_eq!(reason_key, "cbom.err.stdout_not_json")
-            }
-            _ => panic!("須為 Failed"),
+    fn cbom_status_serialization_matches_the_frontend_contract() {
+        use serde_json::json;
+        let cases = [
+            (CbomStatus::NotRequested, json!("NotRequested")),
+            (CbomStatus::EngineAbsent, json!("EngineAbsent")),
+            (CbomStatus::Completed, json!("Completed")),
+            (
+                CbomStatus::Failed {
+                    reason_key: "cbom.err.stdout_not_json".into(),
+                    reason_detail: None,
+                },
+                json!({"Failed": {"reason_key": "cbom.err.stdout_not_json"}}),
+            ),
+            (
+                CbomStatus::Failed {
+                    reason_key: "cbom.err.timeout".into(),
+                    reason_detail: Some("600".into()),
+                },
+                json!({"Failed": {"reason_key": "cbom.err.timeout", "reason_detail": "600"}}),
+            ),
+        ];
+        for (status, expected) in cases {
+            let actual = serde_json::to_value(&status).expect("序列化");
+            assert_eq!(actual, expected, "序列化形式與前端契約不符");
+            // 往返：舊報表重建（cytrace report）依賴反序列化回同一變體
+            let back: CbomStatus = serde_json::from_value(actual).expect("反序列化");
+            assert_eq!(
+                serde_json::to_value(&back).unwrap(),
+                expected,
+                "往返後形式須不變"
+            );
         }
     }
 

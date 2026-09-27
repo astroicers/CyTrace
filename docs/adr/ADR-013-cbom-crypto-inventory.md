@@ -309,14 +309,37 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 不完整不遮蔽脆弱 | 有脆弱資產時，漏掃不得把判定改成 `NoResult` | 單元測試 `incomplete_scan_does_not_mask_*` | 每次 CI |
 | 併發不互相污染 | 暫存路徑（theia HOME / SBOM）每次呼叫唯一；unscanned 不跨 job 串 | 併發測試 ×3 | 每次 CI |
 | 無暫存殘留 | 所有離開路徑（含引擎缺席）皆不留暫存目錄 | `engine_leaves_no_temp_home_behind` | 每次 CI |
-| **真引擎 × 真實輸入形態** | 九個案例全綠：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、OpenSSH 金鑰、殘檔映像名、非封存檔 | `make test-real-engine`（CI job `real-engine`，以 Dockerfile theia-builder stage 建引擎） | 每次 CI |
+| **真引擎 × 真實輸入形態** | **十二**個案例全綠：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、OpenSSH 金鑰、殘檔映像名、非封存檔、**大輸出不塞管線**、**混合目標量綱**、**raw JSON 無私鑰材料** | `make test-real-engine`（CI job `real-engine`，以 Dockerfile theia-builder stage 建引擎） | 每次 CI |
+| 缺工具不得假綠燈 | real_engine 層缺 theia / openssl / ssh-keygen / mkfifo 時**測試失敗**，不得靜默 `return` 後回報通過 | `require_theia()` 與各案例的 `panic!`（實測：移出 PATH 後該案例轉紅） | 每次 CI |
+| 憑證自承計數對帳 | 憑證數取自 theia 的 `numberOfDetectedCertificates=N`（**它從不印** `Found N certificate(s)`），否則憑證類未建模缺口恆為 0 → fail-open | `certificate_count_is_parsed_from_the_real_logrus_field`（stderr 為 v1.1.2 實地輸出，未經改寫） | 每次 CI |
+| **raw `cbom.cdx.json` 無私鑰材料** | 逐元件斷言 `type: private-key` 不得帶 `value`；raw 無 PEM 標記；並斷言 private-key 元件數 > 0（防空轉） | real_engine 案例 12 `raw_cbom_json_never_carries_private_key_material` | 每次 CI |
+| NOTICE 兩平台對帳 | `package.sh` 與 `package.ps1` 的 NOTICE 皆含 13 項法律必要實體（含 ring 的 ISC + OpenSSL/BoringSSL 混合授權） | `scripts/notice-parity-check.py`（`make lint` 與 CI lint job） | 每次 CI |
+| 逾時無「無限制」可達狀態 | `CYTRACE_CBOM_TIMEOUT_SECS=0` / 負值 / 非數字一律回退預設 600s | `timeout_falls_back_to_default_for_invalid_values` | 每次 CI |
+| 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並 join 兩條 reader thread | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
 
-> **為何需要獨立的真引擎測試層**（四輪複審的共同教訓）：M9 共經四輪獨立複審、
-> 打出 14 項阻斷級，而**後兩輪的全部缺陷都只有真引擎跑得出來**——零資產目標輸出
+> **為何需要獨立的真引擎測試層**（六輪複審的共同教訓）：M9 共經六輪獨立複審、
+> 打出 16 項阻斷級，而**第四輪之後的全部缺陷都只有真引擎跑得出來**——零資產目標輸出
 > `components: null`、`dir` 模式追隨 symlink、FIFO 導致永久掛死、OpenSSH 格式私鑰
 > 只在 stderr 留痕。fixture 與 fake engine 對這些**一個都測不到**：fixture 的形狀是
 > 我們自己寫的（於是寫成我們以為的樣子），fake engine 的行為是我們自己定義的
 > （於是不會有引擎的怪癖）。此層存在的目的就是補上這個盲區。
+>
+> **第六輪又添一例，而且是我們自己寫的測試在說謊**：`admitted_counts_are_parsed_per_category`
+> 餵的 stderr 寫著 `Found 3 certificate(s) in etc/ssl/bundle.pem`——**theia 從不這樣印**。
+> 憑證走 logrus 結構化欄位 `numberOfDetectedCertificates=N`，於是實作的 certs 恆為 0、
+> 憑證類的「偵測到卻未建模」恆算出 0，閘門一律放行。一個綠燈的測試把一條 fail-open
+> 鎖在原地將近四輪，因為它驗的是我們想像出來的格式。凡計數依賴引擎的 stderr 文字，
+> 該文字就必須有一份**實地抓取、未經改寫**的樣本進測試（2026-09-27 已補，見 fact-check）。
+>
+> **並非每次實測都會抓到缺陷，這也要照實記**：修好解析後實測四組 dir 目標與一個
+> 475 MB 真實映像（grafana:13.2.2，1071 張憑證），detected 與 modelled **完全相符**，
+> 且該欄位每次掃描只印一行（不會每層累加）。也就是說本修正在 v1.1.2 上**不改變任何
+> 現行結論**；它的價值在於引擎行為漂移時會被抓到，而不是修掉了一個當下的誤判。
+>
+> 同一批實測順帶關掉 NFR-09 的一個證據缺口：theia 對 `type: private-key` 的元件
+> **不填 `value`**（只有公鑰帶 base64 值），故原樣落地的 `cbom.cdx.json` 不含私鑰內容。
+> **這是引擎行為，不是本產品的保證**——上游一改，交件報表就會夾帶私鑰而程式碼毫無察覺，
+> 故以案例 12 逐元件斷言作警報。
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
 

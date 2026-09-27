@@ -168,6 +168,9 @@
       "cancel": "Cancel",
       "unauthorized": "Session expired; please sign in again",
       "error": "Something went wrong"
+    },
+    "errors": {
+      "network": "Cannot reach the server; check that it is still running"
     }
   },
   "report": {

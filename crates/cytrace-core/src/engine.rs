@@ -245,10 +245,9 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
         detail: Some(target.to_string()),
     })?;
     let path = path.as_path();
-    let meta = std::fs::metadata(path).map_err(|_| {
-        CytraceError::Config(format!(
-            "cbom.err.target_not_local（目標非本地可讀路徑，拒絕交給引擎）：{target}"
-        ))
+    let meta = std::fs::metadata(path).map_err(|_| CytraceError::Cbom {
+        key: "cbom.err.target_not_local",
+        detail: Some(target.to_string()),
     })?;
 
     if meta.is_dir() {
@@ -326,13 +325,20 @@ fn is_archive(f: &mut std::fs::File) -> bool {
 /// 就讓掃描服務停擺到重啟。真實 root filesystem 本身就含 FIFO，屬普通輸入。
 const CBOM_TIMEOUT_SECS_DEFAULT: u64 = 600;
 
-fn cbom_timeout() -> std::time::Duration {
-    let secs = std::env::var("CYTRACE_CBOM_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
+/// 解析逾時設定值。**刻意不提供「無逾時」**：`0`、負值、非數字一律回退預設。
+///
+/// 「0 = 無限制」是常見慣例，這裡明確不採用——無逾時正是上述 FIFO 永久阻塞的成因，
+/// 給得出這個值就等於給得出讓 server 停擺的開關。回退而非報錯，是因為本變數僅供
+/// 測試與除錯（未列於 CLI help 與交付文件），打錯字不該讓整趟掃描失敗。
+fn parse_timeout_secs(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|n| *n > 0)
-        .unwrap_or(CBOM_TIMEOUT_SECS_DEFAULT);
-    std::time::Duration::from_secs(secs)
+        .unwrap_or(CBOM_TIMEOUT_SECS_DEFAULT)
+}
+
+fn cbom_timeout() -> std::time::Duration {
+    let raw = std::env::var("CYTRACE_CBOM_TIMEOUT_SECS").ok();
+    std::time::Duration::from_secs(parse_timeout_secs(raw.as_deref()))
 }
 
 pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
@@ -398,27 +404,46 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
     });
 
     // 逾時輪詢：逾時即 kill，歸為 Failed（fail-closed，不中止主流程）
+    //
+    // **每一條 early-return 都必須先收屍**：kill + wait 讓子程序離開，管線關閉後兩條
+    // reader 才會結束、才 join 得動。漏掉任一步在 server 長駐情境即為洩漏——theia
+    // 變成孤兒繼續吃 CPU/IO，兩條 thread 抱著管線活到它自然結束為止。
+    // 逾時與 try_wait 失敗兩條路徑共用同一套清理，避免只修一邊（第六輪複審 finding I：
+    // Err 分支原本直接 return，既不 kill 也不 join）。
     let deadline = std::time::Instant::now() + timeout;
+    let mut reap = Some((child, stdout_handle, stderr_handle));
+    macro_rules! reap_and_fail {
+        ($err:expr) => {{
+            if let Some((mut c, so, se)) = reap.take() {
+                let _ = c.kill();
+                let _ = c.wait();
+                // kill 後管線關閉，兩條 reader 會自行結束
+                let _ = so.join();
+                let _ = se.join();
+            }
+            return Err($err);
+        }};
+    }
     let status = loop {
+        let Some((child, _, _)) = reap.as_mut() else {
+            unreachable!("reap 只在 early return 時取走");
+        };
         match child.try_wait() {
             Ok(Some(st)) => break st,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // kill 後管線關閉，兩條 reader 會自行結束
-                    let _ = stdout_handle.join();
-                    let _ = stderr_handle.join();
-                    return Err(CytraceError::Cbom {
+                    reap_and_fail!(CytraceError::Cbom {
                         key: "cbom.err.timeout",
                         detail: Some(timeout.as_secs().to_string()),
                     });
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            Err(e) => return Err(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
+            // try_wait 失敗（例如 SIGCHLD 被他處收割）→ 同樣要收屍再回報
+            Err(e) => reap_and_fail!(CytraceError::Engine(format!("cbomkit-theia: {e}"))),
         }
     };
+    let (_child, stdout_handle, stderr_handle) = reap.take().expect("正常結束路徑上 reap 必然還在");
 
     let out = std::process::Output {
         status,
@@ -485,28 +510,46 @@ pub fn skipped_file_count(stderr: &str) -> u64 {
 /// 自承 2 把私鑰，而建模輸出有 1 憑證 + 1 私鑰，兩種錯誤量綱都會算出 0，
 /// 於是閘門回 `Pass`，那把 OpenSSH 金鑰確實沒被建模。
 ///
-/// theia 對它偵測到卻無法建模的資產只在 **stderr** 留痕
-/// （`Found N private key(s) in <path>`），stdout 零元件、exit 0。
+/// theia 對它偵測到卻無法建模的資產只在 **stderr** 留痕，stdout 零元件、exit 0。
 /// 實測：OpenSSH 格式私鑰走這條路；同一把金鑰改存 PKCS#8 PEM 則會產生資產——
 /// **換個檔案格式，閘門答案就從「有脆弱」變成「通過」**。
 /// 原則與 oversize 相同：引擎講得出口的漏檢一律要出現在計數裡，寧可多算。
 ///
-/// `modelled` 傳入 stdout 實際產出的資產數，用以扣除已如實回報的部分。
+/// **兩類的訊息格式不同**（v1.1.2 實測，2026-09-27）：
+///
+/// ```text
+/// msg="Found 1 private key(s) in s.key"
+/// msg="Certificate searching done" numberOfDetectedCertificates=1
+/// ```
+///
+/// 憑證**從不**印 `Found N certificate(s)`。原實作只認 `Found ` 前綴，於是 certs 恆為 0，
+/// `undetermined_count` 對憑證恆回 0——「偵測到 5 張、只建模 3 張」會算出缺口 0、
+/// 閘門回 `Pass`，正是 fail-open（第六輪複審的證據缺口，實測後確認為缺陷）。
 pub fn admitted_counts(stderr: &str) -> (u64, u64) {
     let mut keys = 0u64;
     let mut certs = 0u64;
     for line in stderr.lines() {
-        let Some(rest) = line.split("Found ").nth(1) else {
-            continue;
-        };
-        let n: u64 = rest
-            .split_whitespace()
-            .next()
-            .and_then(|t| t.parse().ok())
-            .unwrap_or(1); // 認不得數字也算一項：寧可多算
-        if rest.contains("private key") {
-            keys = keys.saturating_add(n);
-        } else if rest.contains("certificate") {
+        // 私鑰：`Found N private key(s) in <path>`
+        if let Some(rest) = line.split("Found ").nth(1) {
+            let n: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or(1); // 認不得數字也算一項：寧可多算
+            if rest.contains("private key") {
+                keys = keys.saturating_add(n);
+            } else if rest.contains("certificate") {
+                // 上游若哪天改成這個格式，這條仍接得住（目前不會命中）
+                certs = certs.saturating_add(n);
+            }
+        }
+        // 憑證：logrus 結構化欄位 `numberOfDetectedCertificates=N`
+        if let Some(rest) = line.split("numberOfDetectedCertificates=").nth(1) {
+            let n: u64 = rest
+                .split_whitespace()
+                .next()
+                .and_then(|t| t.trim_matches('"').parse().ok())
+                .unwrap_or(1); // 認不得數字也算一項：寧可多算
             certs = certs.saturating_add(n);
         }
     }
@@ -551,7 +594,7 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
         Err(CytraceError::Engine(format!(
-            "{name} 失敗（exit {:?}）：{}",
+            "{name} exit {:?}: {}",
             out.status.code(),
             String::from_utf8_lossy(&out.stderr).trim()
         )))
@@ -561,6 +604,24 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 逾時設定解析（不得存在「無逾時」這個可達狀態）──
+
+    #[test]
+    fn timeout_falls_back_to_default_for_invalid_values() {
+        // 0 不是「無限制」——無逾時正是 FIFO 永久阻塞、server 停擺的成因
+        assert_eq!(parse_timeout_secs(Some("0")), CBOM_TIMEOUT_SECS_DEFAULT);
+        assert_eq!(parse_timeout_secs(Some("-1")), CBOM_TIMEOUT_SECS_DEFAULT);
+        assert_eq!(parse_timeout_secs(Some("abc")), CBOM_TIMEOUT_SECS_DEFAULT);
+        assert_eq!(parse_timeout_secs(Some("")), CBOM_TIMEOUT_SECS_DEFAULT);
+        assert_eq!(parse_timeout_secs(None), CBOM_TIMEOUT_SECS_DEFAULT);
+    }
+
+    #[test]
+    fn timeout_accepts_positive_values() {
+        assert_eq!(parse_timeout_secs(Some("30")), 30);
+        assert_eq!(parse_timeout_secs(Some(" 45 ")), 45);
+    }
 
     /// fake 引擎可經 `dyn ScanEngine` 注入——驗證測試縫成立（server 整合測試依賴此性質）。
     struct FakeEngine;

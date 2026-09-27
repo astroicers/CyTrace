@@ -33,6 +33,25 @@ fn theia_present() -> bool {
         .unwrap_or(false)
 }
 
+/// 缺工具時**必須失敗**，不得靜默通過。
+///
+/// 本檔全部案例帶 `#[ignore]`，無引擎環境根本不會跑；一旦有人明確下
+/// `--ignored` 要跑，「因為缺 openssl 所以什麼都沒驗、但回報 PASS」就是
+/// 假綠燈——這正是本檔存在要防的那種東西（第六輪複審 finding H：11 案中
+/// 9 案在缺工具時靜默 return）。前置工具由 `make test-real-engine` 與
+/// CI 的 real-engine job 事前檢查並告知。
+fn require(tool: &str, present: bool) {
+    assert!(
+        present,
+        "缺少 {tool}：本案例無法驗證任何事，不得回報通過。\n\
+         請安裝該工具，或不要以 --ignored 執行 real_engine（見 make test-real-engine）"
+    );
+}
+
+fn require_theia() {
+    require("cbomkit-theia", theia_present());
+}
+
 /// 建立乾淨的暫存目標目錄。
 fn workspace(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("cytrace-real-{}-{tag}", std::process::id()));
@@ -86,9 +105,7 @@ fn assert_no_key_material(inv: &CryptoInventory) {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn clean_target_is_completed_with_zero_assets() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("clean");
     fs::write(d.join("readme.txt"), b"no crypto here").unwrap();
@@ -114,14 +131,12 @@ fn clean_target_is_completed_with_zero_assets() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn certificate_and_key_are_detected_without_leaking_material() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("basic");
     if !gen_cert(&d, "server", 2048) {
         let _ = fs::remove_dir_all(&d);
-        return; // 無 openssl 的環境跳過
+        panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
     }
 
     let inv = scan(&d);
@@ -137,9 +152,7 @@ fn certificate_and_key_are_detected_without_leaking_material() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn unreadable_symlink_makes_the_gate_withhold_pass() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let base = workspace("symlink");
     fs::create_dir_all(base.join("outside")).unwrap();
@@ -155,7 +168,22 @@ fn unreadable_symlink_makes_the_gate_withhold_pass() {
     let _ = fs::remove_dir_all(&base);
 
     if readable_by_us {
-        return; // 以 root 跑時讀得到，本案例不適用
+        // 以 root 跑時 0o000 仍讀得到，「權限不可讀」這個前提不成立。
+        // 不靜默略過——改斷言對 root **仍然成立**的反向不變量（第六輪複審 finding H：
+        // 本分支原本零斷言，在 root 環境下整個案例形同不存在）：
+        // 讀得到就不該被計為缺口，否則會造出一個永遠 NoResult 的假警報，
+        // 而 root 正是地端掃描最常用的身分。
+        assert_eq!(
+            inv.unscanned_unreadable, 0,
+            "以 root 執行時 0o000 檔案實際讀得到，不得誤計為不可讀缺口\n\
+             （誤計的後果：--fail-on-quantum-vulnerable 在 root 下恆為 NoResult 假警報）"
+        );
+        assert!(
+            matches!(inv.status, CbomStatus::Completed),
+            "讀得到全部檔案時盤點應完成，實為 {:?}",
+            inv.status
+        );
+        return;
     }
     assert!(
         inv.unscanned_unreadable > 0,
@@ -173,9 +201,7 @@ fn unreadable_symlink_makes_the_gate_withhold_pass() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn symlink_loop_does_not_hang() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("symloop");
     fs::create_dir_all(d.join("sub")).unwrap();
@@ -195,9 +221,7 @@ fn symlink_loop_does_not_hang() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn fifo_target_returns_within_timeout() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("fifo");
     fs::write(d.join("openssl.cnf"), b"[x]\n").unwrap();
@@ -208,7 +232,7 @@ fn fifo_target_returns_within_timeout() {
         .unwrap_or(false)
     {
         let _ = fs::remove_dir_all(&d);
-        return;
+        panic!("mkfifo 失敗：本案例（FIFO 永久阻塞回歸）無法驗證任何事，不得回報通過");
     }
 
     let started = std::time::Instant::now();
@@ -229,14 +253,12 @@ fn fifo_target_returns_within_timeout() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn oversize_file_is_reported_as_unscanned() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("oversize");
     if !gen_cert(&d, "big", 2048) {
         let _ = fs::remove_dir_all(&d);
-        return;
+        panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
     }
     // 把憑證墊到 >1 MiB：內容仍是合法 PEM 開頭，但引擎會因大小略過
     let mut pem = fs::read(d.join("big.crt")).unwrap();
@@ -257,9 +279,7 @@ fn oversize_file_is_reported_as_unscanned() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn engine_admitted_findings_are_not_silently_dropped() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("openssh");
     let key = d.join("ssh_host_ed25519_key");
@@ -270,7 +290,7 @@ fn engine_admitted_findings_are_not_silently_dropped() {
         .unwrap_or(false)
     {
         let _ = fs::remove_dir_all(&d);
-        return; // 無 ssh-keygen 的環境跳過
+        panic!("ssh-keygen 產金鑰失敗：本案例無法驗證任何事，不得回報通過");
     }
 
     let inv = scan(&d);
@@ -290,9 +310,7 @@ fn engine_admitted_findings_are_not_silently_dropped() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn gzip_remnant_named_after_an_image_does_not_load_foreign_assets() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("remnant");
     // 8 bytes 的 gzip 殘檔，命名為常見映像名
@@ -326,9 +344,7 @@ fn gzip_remnant_named_after_an_image_does_not_load_foreign_assets() {
 #[test]
 #[ignore = "需要 cbomkit-theia"]
 fn plain_file_target_is_rejected_before_spawning() {
-    if !theia_present() {
-        return;
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("plain");
     let f = d.join("firmware.bin");
@@ -344,9 +360,7 @@ fn plain_file_target_is_rejected_before_spawning() {
 #[test]
 #[ignore = "需要 cbomkit-theia 與 openssl"]
 fn large_output_does_not_deadlock_the_pipe() {
-    if !theia_present() {
-        panic!("缺少 cbomkit-theia；本層不接受靜默略過");
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("largeout");
 
@@ -387,9 +401,7 @@ fn large_output_does_not_deadlock_the_pipe() {
 #[test]
 #[ignore = "需要 cbomkit-theia、openssl 與 ssh-keygen"]
 fn mixed_target_still_reports_unmodelled_findings() {
-    if !theia_present() {
-        panic!("缺少 cbomkit-theia；本層不接受靜默略過");
-    }
+    require_theia();
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("mixed");
 
@@ -425,5 +437,127 @@ fn mixed_target_still_reports_unmodelled_findings() {
         QuantumGate::Pass,
         "有未建模的金鑰時不得宣告通過"
     );
+    assert_no_key_material(&inv);
+}
+
+// ── 案例 12：落地的 cbom.cdx.json（theia 原樣輸出）不得含私鑰內容（NFR-09）──
+
+/// 前 11 個案例的 `assert_no_key_material` 只看**我們解析後的** `CryptoInventory`；
+/// 但 `cytrace scan --cbom` 另外把 theia 的 **stdout 原樣落地**為 `cbom.cdx.json`，
+/// 而那份才是可能併入交件的檔案。兩者是不同的東西，前者乾淨不代表後者乾淨
+/// （第六輪複審的證據缺口）。
+///
+/// v1.1.2 實測（2026-09-27）：theia 對 `type: private-key` 的元件**不填 `value`**，
+/// 只有 `public-key` 才帶 base64 值（公鑰本身非機密）。**這是引擎行為，不是我們的保證**——
+/// 上游哪天開始輸出私鑰 value，交付報表就會夾帶私鑰，而現行程式碼完全不會察覺。
+/// 本案例即為那道警報。
+#[test]
+#[ignore = "需要 cbomkit-theia 與 openssl"]
+fn raw_cbom_json_never_carries_private_key_material() {
+    require_theia();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let d = workspace("rawkeys");
+
+    // 四種私鑰格式：傳統 PEM / PKCS#8 / EC / OpenSSH，涵蓋建模與未建模兩種路徑
+    let ok = Command::new("openssl")
+        .args([
+            "genrsa",
+            "-out",
+            d.join("trad.key").to_str().unwrap(),
+            "2048",
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+        && Command::new("openssl")
+            .args([
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:2048",
+                "-out",
+                d.join("pkcs8.key").to_str().unwrap(),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        && Command::new("openssl")
+            .args([
+                "ecparam",
+                "-name",
+                "prime256v1",
+                "-genkey",
+                "-noout",
+                "-out",
+                d.join("ec.key").to_str().unwrap(),
+            ])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    if !ok {
+        let _ = fs::remove_dir_all(&d);
+        panic!("openssl 產私鑰失敗：本案例無法驗證任何事，不得回報通過");
+    }
+    // 一併放一張憑證，確保輸出裡真的有東西（空輸出會讓斷言變成空轉）
+    if !gen_cert(&d, "server", 2048) {
+        let _ = fs::remove_dir_all(&d);
+        panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
+    }
+
+    let (inv, raw) = cytrace_core::collect_cbom_with_raw(&engine::RealEngine, d.to_str().unwrap());
+    let _ = fs::remove_dir_all(&d);
+
+    assert_eq!(inv.status, CbomStatus::Completed, "盤點應完成");
+    let raw = raw.expect("Completed 時必有原始 JSON 可落地");
+    assert!(!raw.trim().is_empty(), "原始 JSON 不得為空");
+
+    // 1) 不得含 PEM 封裝標記
+    for marker in ["PRIVATE KEY", "-----BEGIN", "-----END"] {
+        assert!(
+            !raw.contains(marker),
+            "原樣落地的 cbom.cdx.json 不得含 PEM 標記 {marker:?}（NFR-09）"
+        );
+    }
+
+    // 2) 逐元件檢查：任何 private-key 一律不得帶 value
+    //    （不以「最長 base64 長度」把關——公鑰的 value 合法地可達數百字元，
+    //      用長度判斷會同時漏掉真洩漏又誤報正常公鑰）
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("原始輸出須為合法 JSON");
+    let comps = doc
+        .get("components")
+        .and_then(|c| c.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(!comps.is_empty(), "本目標應產生元件，否則斷言在空轉");
+
+    let mut private_seen = 0usize;
+    for c in &comps {
+        let Some(rp) = c
+            .get("cryptoProperties")
+            .and_then(|p| p.get("relatedCryptoMaterialProperties"))
+        else {
+            continue;
+        };
+        if rp.get("type").and_then(|t| t.as_str()) != Some("private-key") {
+            continue;
+        }
+        private_seen += 1;
+        let value = rp.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            value.is_empty(),
+            "private-key 元件夾帶了金鑰內容（{} 字元）——上游行為已變，\
+             交付報表正在洩漏私鑰，必須先過濾再落地（NFR-09）\nname={:?}",
+            value.len(),
+            c.get("name")
+        );
+    }
+    assert!(
+        private_seen > 0,
+        "目標含 3 把私鑰卻沒有任何 private-key 元件——斷言在空轉，\
+         引擎行為或建模路徑已變，須先確認再談通過"
+    );
+
+    // 3) 我們解析後的結構同樣不得含金鑰內容
     assert_no_key_material(&inv);
 }
