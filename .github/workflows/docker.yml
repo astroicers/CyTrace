@@ -90,8 +90,18 @@ jobs:
             THEIA_LINUX_AMD64_SHA256=${{ env.THEIA_LINUX_AMD64_SHA256 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
+          # provenance / sbom attestation 會讓 buildx 產出 manifest list（即使單平台），
+          # 而 `load: true` 用的 docker exporter 不支援匯出 manifest list：
+          #   ERROR: failed to build: docker exporter does not currently support
+          #          exporting manifest lists
+          # 故 PR（load 本機供冒煙）時關閉，tag（push 到 GHCR）時保留——交付物才需要
+          # 供應鏈證明，冒煙用的本機 image 不需要。
+          #
+          # **既有缺陷，由本分支的 PR 首次暴露**：docker.yml 雖有 pull_request 觸發，
+          # 但此 repo 在此之前從未開過 PR（歷史 run 全為 push tag 或 workflow_dispatch），
+          # 所以 load 那條路一次都沒跑過。
+          provenance: ${{ github.event_name == 'pull_request' && 'false' || 'mode=max' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
 
       # 冒煙：PR（load 的本機 image）與 tag（剛 push）都跑，通過才算數
       - name: 冒煙 --version
