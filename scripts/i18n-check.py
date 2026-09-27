@@ -35,9 +35,16 @@ _NOT_FILE = r"(?!(?:html|json|js|css|md|log|pdf)['\"`])"
 # 雙引號（Rust）、單引號與反引號（前端）皆須涵蓋——前端一律單引號，
 # 只認雙引號等於對前端零覆蓋（第六輪複審 finding F）。
 # 開閉引號以反向參照配對，避免 `'key"` 這種跨引號誤命中。
-KEY_LITERAL = re.compile(
-    rf"""(['"`])({_NS}\.{_NOT_FILE}[a-z0-9_.]+)\1"""
-)
+#
+# **引號種類依檔案類型**：Rust 沒有反引號字串，`.rs` 裡的反引號一律是 doc comment
+# 的行內程式碼標記（``server.err.cbom``），把它當成程式碼引用會誤報——談論某個鍵
+# 不存在的註解，反而讓檢查要求那個鍵存在。
+KEY_LITERAL_RS = re.compile(rf"""(["'])({_NS}\.{_NOT_FILE}[a-z0-9_.]+)\1""")
+KEY_LITERAL_TS = re.compile(rf"""(['"`])({_NS}\.{_NOT_FILE}[a-z0-9_.]+)\1""")
+
+
+def key_literal_for(path: pathlib.Path) -> re.Pattern:
+    return KEY_LITERAL_RS if path.suffix == ".rs" else KEY_LITERAL_TS
 # 模板字串組鍵：t(`report.crypto.col.${{c}}`) → 取前綴，要求 catalog 有該前綴下的葉鍵
 KEY_PREFIX = re.compile(rf"`({_NS}(?:\.[a-z0-9_]+)*)\.\$\{{")
 CODE_GLOBS = ("crates/**/*.rs", "frontend/src/**/*.ts", "frontend/src/**/*.tsx")
@@ -52,7 +59,7 @@ def keys_used_in_code(root: pathlib.Path) -> tuple[set[str], set[str]]:
             if "/tests/" in str(f) or f.name.endswith("_test.rs"):
                 continue
             text = f.read_text(encoding="utf-8")
-            keys |= {m.group(2) for m in KEY_LITERAL.finditer(text)}
+            keys |= {m.group(2) for m in key_literal_for(f).finditer(text)}
             prefixes |= set(KEY_PREFIX.findall(text))
     return keys, prefixes
 

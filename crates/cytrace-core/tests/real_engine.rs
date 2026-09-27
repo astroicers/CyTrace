@@ -612,15 +612,7 @@ fn certificate_admitted_count_tracks_the_real_engine() {
             panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
         }
     }
-    let out = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(120))
-        .expect("盤點應成功")
-        .expect("theia 存在時不得回報缺席");
-    assert_eq!(
-        out.admitted_certs, 3,
-        "三張憑證的自承數須為 3——若為 0，表示引擎的憑證計數欄位已改名而解析沒跟上，\n\
-         後果是憑證類的未建模缺口恆為 0、量子閘門一律放行（fail-open）"
-    );
-    assert_eq!(out.admitted_keys, 3, "-nodes 產出的三把私鑰亦須計入");
+    let single = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(120));
 
     // (b) 同樣三張，但連成一個 PEM bundle：計數應仍為 3（不是 1 個檔案）
     let bundle_dir = workspace("certbundle");
@@ -629,24 +621,84 @@ fn certificate_admitted_count_tracks_the_real_engine() {
         bundle.extend(fs::read(d.join(format!("c{i}.crt"))).unwrap());
     }
     fs::write(bundle_dir.join("bundle.pem"), &bundle).unwrap();
-    let _ = fs::remove_dir_all(&d);
-
-    let out = cbom_with_timeout(bundle_dir.to_str().unwrap(), Duration::from_secs(120))
-        .expect("盤點應成功")
-        .expect("theia 存在時不得回報缺席");
-    let _ = fs::remove_dir_all(&bundle_dir);
-    assert_eq!(
-        out.admitted_certs, 3,
-        "3-in-1 bundle 的自承數須為 3（依憑證數而非檔案數）"
-    );
+    let bundled = cbom_with_timeout(bundle_dir.to_str().unwrap(), Duration::from_secs(120));
 
     // (c) 零憑證目標不得憑空生出自承數（否則會造成常態假警報）
     let empty = workspace("certzero");
     fs::write(empty.join("openssl.cnf"), b"[system_default_sect]\n").unwrap();
-    let out = cbom_with_timeout(empty.to_str().unwrap(), Duration::from_secs(120))
+    let zero = cbom_with_timeout(empty.to_str().unwrap(), Duration::from_secs(120));
+
+    // **先清理再斷言**：斷言失敗時 panic 會跳過其後的清理，留下含憑證與私鑰的暫存目錄
+    // （同檔前面的案例已建立此慣例；第八輪複審 finding J 指出本案例沒沿用）。
+    for dir in [&d, &bundle_dir, &empty] {
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    let single = single
         .expect("盤點應成功")
         .expect("theia 存在時不得回報缺席");
-    let _ = fs::remove_dir_all(&empty);
-    assert_eq!(out.admitted_certs, 0, "無憑證時自承數須為 0");
-    assert_eq!(out.admitted_keys, 0, "無私鑰時自承數須為 0");
+    assert_eq!(
+        single.admitted_certs, 3,
+        "三張憑證的自承數須為 3——若為 0，表示引擎的憑證計數欄位已改名而解析沒跟上，\n\
+         後果是憑證類的未建模缺口恆為 0、量子閘門一律放行（fail-open）"
+    );
+    assert_eq!(
+        single.admitted_keys, 3,
+        "openssl req -nodes 為每張憑證另產一把未加密私鑰，三張即三把，皆由 \
+         theia 的 Secret Detection Plugin 自承（`Found 1 private key(s) in …`）"
+    );
+
+    let bundled = bundled
+        .expect("盤點應成功")
+        .expect("theia 存在時不得回報缺席");
+    assert_eq!(
+        bundled.admitted_certs, 3,
+        "3-in-1 bundle 的自承數須為 3（依憑證數而非檔案數）"
+    );
+
+    let zero = zero.expect("盤點應成功").expect("theia 存在時不得回報缺席");
+    assert_eq!(zero.admitted_certs, 0, "無憑證時自承數須為 0");
+    assert_eq!(zero.admitted_keys, 0, "無私鑰時自承數須為 0");
+}
+
+// ── 案例 14：正常路徑確實抽到了 stderr（第八輪複審 finding D 的對照面）──
+
+/// 「抽不到輸出不得當成空的」那條邏輯由 `engine::tests::drain_*` 四支單元測試精確把關
+/// （用永不送值的 channel 觸發，比注入 0ms 寬限可靠——後者對已就緒的 channel 立即返回，
+/// 根本觸發不到）。**這裡要釘的是另一半**：正常路徑真的抽到了 stderr 而非湊巧為空。
+///
+/// 少了這條，把 `drain` 改成「總是回空 Vec」會讓漏檢計數全部歸零，而
+/// 13 個案例裡沒有一個會紅——`skipped` / `admitted_*` 恰好都只在有警告時才非零。
+#[test]
+#[ignore = "需要 cbomkit-theia 與 openssl"]
+fn stderr_is_actually_drained_on_the_normal_path() {
+    require_theia();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let d = workspace("drainnormal");
+    if !gen_cert(&d, "server", 2048) {
+        let _ = fs::remove_dir_all(&d);
+        panic!("openssl 產憑證失敗：本案例無法驗證任何事，不得回報通過");
+    }
+    // 墊一個 >1 MiB 的憑證，讓 theia 必然印出 "Skipping large file"
+    let mut pem = fs::read(d.join("server.crt")).unwrap();
+    pem.extend(std::iter::repeat_n(b'\n', 1_200_000));
+    fs::write(d.join("big.crt"), &pem).unwrap();
+
+    let out = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(120));
+    let _ = fs::remove_dir_all(&d);
+    let out = out.expect("盤點應成功").expect("theia 存在時不得回報缺席");
+
+    // 三個計數都源自 stderr；全為零就表示 stderr 沒被讀到（或被當成空的）
+    assert!(
+        out.skipped > 0,
+        "超過門檻的檔案數須取自 stderr，為 0 表示 stderr 未被抽到"
+    );
+    assert!(
+        out.admitted_certs > 0,
+        "自承憑證數須取自 stderr 的 numberOfDetectedCertificates"
+    );
+    assert!(
+        out.admitted_keys > 0,
+        "自承私鑰數須取自 stderr 的 Found N private key(s)"
+    );
 }

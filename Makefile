@@ -25,7 +25,7 @@ frontend-check:
 	cd frontend && pnpm typecheck
 	@# frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作；Rust 側的契約測試比對
 	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
-	node frontend/scripts/cbom-message-check.mjs
+	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -71,9 +71,16 @@ clippy:
 lint: fmt-check clippy
 	python3 scripts/i18n-check.py
 	python3 scripts/notice-parity-check.py
-	@# 變異測試：證明上一行的 13 列沒有白列（初版對整檔比對，NOTICE 可以錯而它仍綠）
-	python3 scripts/notice-parity-check.py --self-test
-	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致 + NOTICE 對帳且無白列，零 warning）"
+	@# 對抽取邏輯注入故障，確認結構性檢查（區段數 / OUTSIDE needle / 空值）真的會紅
+	@# ——初版與二版都是「逐列變異」，兩版的判別力都等於正常執行（第八輪複審 finding C）
+	python3 scripts/notice-parity-check.py --verify-sentinels
+	@# 報表成因渲染：本組織 GitHub 為 free 方案、CI 無法設為 required（user-level 實查），
+	@# 故「只在 CI 跑」實質等於「只在事後偵測」；land 前的閘必須跑到（第八輪複審 finding K）。
+	@# 只呼叫這一支而非整個 frontend-check：pnpm 在部分環境會先做 deps check 並要求
+	@# 互動核准 build script（esbuild），會讓整條 lint 壞掉；typecheck 仍由 CI 與
+	@# make frontend-check 承接。
+	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

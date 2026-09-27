@@ -229,6 +229,7 @@
       "target_unreadable": "目標不可讀：{{target}}",
       "target_not_archive": "非 tar / gzip 封存檔，拒絕當成映像：{{target}}",
       "timeout": "引擎逾時 {{secs}} 秒，已終止；目標可能含具名管線或特殊檔案",
+      "drain_timeout": "引擎輸出抽取逾時 {{secs}} 秒，無法確認漏檢數量；不得視為「已掃完」",
       "empty_output": "引擎輸出空白，非「零資產」",
       "stdout_not_json": "引擎輸出非合法 JSON",
       "not_cyclonedx": "引擎輸出不是 CycloneDX BOM",

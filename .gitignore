@@ -31,3 +31,4 @@ dist-console/
 .DS_Store
 Thumbs.db
 .asp-managed-deny.json
+frontend/pnpm-workspace.yaml

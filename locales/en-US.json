@@ -229,6 +229,7 @@
       "target_unreadable": "Target is not readable: {{target}}",
       "target_not_archive": "Not a tar/gzip archive; refusing to treat it as an image: {{target}}",
       "timeout": "Engine timed out after {{secs}}s and was terminated; the target may contain a named pipe or special file",
+      "drain_timeout": "Timed out after {{secs}}s while draining engine output; coverage gaps cannot be confirmed and this must not be treated as a complete scan",
       "empty_output": "Engine produced no output — this is not \"zero assets\"",
       "stdout_not_json": "Engine output is not valid JSON",
       "not_cyclonedx": "Engine output is not a CycloneDX BOM",

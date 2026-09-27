@@ -923,6 +923,31 @@ milestones:
           gitleaks 規則庫為 MIT，「全為 Apache-2.0」不再成立）與 NFR-03（ToolVersions 加 theia 欄位）、
           README.md bin 清單、docs/DELIVERY_SOP.md §1 與 NOTICE、docs/adr/ADR-002 成功指標。
 
+      - id: T909
+        title: "server API 錯誤訊息去硬編碼中文（i18n 雙語強制）"
+        type: MODIFICATION
+        priority: 3
+        adr: null
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: pending
+        estimated_complexity: low
+        source_type: review
+        source_ref: "第八輪獨立複審 finding L（CBOM 分支，2026-09-27）"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-09-27"
+        description: |
+          `crates/cytrace-server/src/api/jobs.rs` 有多處直接把中文字串塞進 API 回應的 detail：
+          `:41`「fail_on 不合法：{th}」、`:150`「上傳超過 {limit} bytes」、`:190`「缺少 file 欄位」、
+          `:260`「status 不合法：{raw}」。`--lang en-US` 的用戶端會收到中文，違反 i18n 雙語強制鐵則。
+          改為 `i18n_key` + 不可翻譯參數（與 CBOM 路徑同一形態：純鍵存下來，由請求語系渲染）。
+
+          **不在 CBOM（M9）範圍內**，故獨立成票而非擴大該批 diff。發現脈絡：第八輪複審在查
+          `CytraceError::untranslatable_detail` 的覆蓋面時一併掃到；CBOM 自身的路徑已修畢
+          （`job_error_of` 與 `ApiError::from_core` 皆走單一出口）。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

@@ -108,6 +108,8 @@ if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
       * gitleaks v8 (MIT), gitleaks/go-gitdiff (MIT) - embedded secret detection rules
       * MPL-2.0 (file-level weak copyleft): hashicorp/golang-lru, hashicorp/go-version,
         cyphar/filepath-securejoin
+    See the upstream vendor directory for the full dependency and license list.
+    This product distributes build artifacts only; the source was not modified.
 "@
 } else {
   $TheiaNotice = "  (This bundle does not include the CBOM engine; cytrace --cbom degrades to `"not inventoried`".)"

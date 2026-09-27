@@ -317,14 +317,19 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | `reason_detail` 無中文散文 | **全部** `CytraceError` 變體（含 `Io` / `DbMissing`）的細節皆不得夾帶本型別的中文前綴 | `reason_detail_never_carries_chinese_prose_for_any_variant`（逐變體）＋ `CytraceError::untranslatable_detail` 單一出口 | 每次 CI |
 | 逾時無 panic 可達狀態 | 上界 86400s：`u64::MAX` 秒能通過解析但 `Instant + Duration` 依定義 panic | `timeout_rejects_values_that_would_panic_on_instant_add` | 每次 CI |
 | **raw `cbom.cdx.json` 無私鑰材料** | 逐元件斷言 `type: private-key` 不得帶 `value`；raw 無 PEM 標記；並斷言 private-key 元件數 > 0（防空轉） | real_engine 案例 12 `raw_cbom_json_never_carries_private_key_material` | 每次 CI |
-| NOTICE 兩平台對帳 | `package.sh` 與 `package.ps1` 的 NOTICE 皆含 13 項法律必要實體（含 ring 的 ISC + OpenSSL/BoringSSL 混合授權） | `scripts/notice-parity-check.py`（`make lint` 與 CI lint job） | 每次 CI |
+| NOTICE 兩平台對帳 | 兩支腳本的 **NOTICE 區段**（非整個腳本檔）皆含 15 項法律必要實體，含 ring 的 ISC + OpenSSL/BoringSSL 混合授權與 Apache-2.0 §4(b) 的「未修改原始碼」聲明 | `scripts/notice-parity-check.py`（`make lint` 與 CI lint job） | 每次 CI |
 | 逾時無「無限制」可達狀態 | `CYTRACE_CBOM_TIMEOUT_SECS=0` / 負值 / 非數字一律回退預設 600s | `timeout_falls_back_to_default_for_invalid_values` | 每次 CI |
 | 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並抽乾兩條 reader | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
 | 抽乾不得無上限阻塞 | 以 channel `recv_timeout`（5s 寬限）取代 `JoinHandle::join`：`kill` 只殺直接子程序，孫程序持有管線寫端時 `join` 永不返回＝逾時形同失效 | `large_output_does_not_deadlock_the_pipe`（285 KB 仍不塞管線）；theia v1.1.2 實測不 spawn 子程序，此路徑目前不可達，屬防上游變更 | 每次 CI |
 | CBOM 訊息渲染邊界 | 依**原文是否含佔位符**決定插值或括號（非事後猜細節有無出現）；空細節不留懸空分隔符 | `cytrace-i18n` 四支 `render_cbom_*` 測試 | 每次 CI |
 | 報表顯示失敗成因 | `#crypto` 區段除四態訊息外，`Failed` 另顯示依當前語系渲染的成因（含目標路徑 / 逾時秒數） | `frontend/src/cbom.ts` + 端到端實跑（報表內嵌 `reason_key` / `reason_detail`） | 每次 release |
 | 兩份渲染實作不得漂開 | 前端是 `Catalog::render_cbom` 的第二份實作（報表有執行期語言切換器，不能在 Rust 端預渲染）；鍵清單與變數名規則須一致 | `frontend_cbom_key_list_matches_this_one` / `frontend_var_name_rule_matches_this_one`（實測：任一側少一鍵或改規則即轉紅） | 每次 CI |
-| 成因文字的行為把關 | 契約測試比對不到**行為**差異，故另有實地渲染檢查：8 鍵 × 2 語系 + 空細節 + 未知鍵 = 20 案 | `frontend/scripts/cbom-message-check.mjs`（實測抓到兩個真差異：空細節漏 `{{target}}`、en-US 夾全角括號） | 每次 CI |
+| 成因文字的行為把關 | 契約測試比對不到**行為**差異，故另有實地渲染檢查：8 鍵 × 2 語系 + 5 類邊界 = 28 案，且**import 真實作**而非複製其邏輯 | `frontend/scripts/cbom-message-check.mts`（Node 22 型別剝離，零新依賴）。實測：把實作的空細節分支、括號規則、未知鍵回退各改壞一次，三次皆轉紅 | 每次 CI（亦在 `make lint`） |
+| server 失敗訊息不外洩散文與裸鍵 | **真正在跑的** `job_error_of`（非 `from_core`）的 `detail` 走 `untranslatable_detail()`，`i18n_key` 對 CBOM 用成因鍵而非不存在的 `server.err.cbom` | `job_error_detail_never_carries_prose_or_bare_keys` / `cbom_job_error_keeps_the_specific_cause_key`（實測：退回 `to_string()` 或壓成 `server.err.{kind}` 皆轉紅） | 每次 CI |
+| 抽不到引擎輸出即失敗 | `recv_timeout` 的 `Err` 不得被吞成空 buffer——否則 `skipped` / `admitted_*` 歸零、閘門對沒掃完的目標回 Pass | `drain_or_fail` + 四支單元測試（永不送值的 channel、已就緒、真的空、reader 掛掉）＋ real_engine 案例 14 釘住正常路徑確實抽到 stderr | 每次 CI |
+| `detail = None` 不漏佔位符 | 兩側同規則插 `?`；`reason_detail` 序列化時可省略，故此狀態實際可達 | `none_detail_never_leaks_placeholders`（8 鍵 × 2 語系） | 每次 CI |
+| 未知鍵兩側同規則 | 一律回退 `cbom.err.engine` 並保留細節，不得把裸鍵印給交件對象 | `unknown_keys_fall_back_instead_of_printing_the_raw_key` | 每次 CI |
+| NOTICE 哨兵自身有效 | 白列的防線是**結構性檢查**（區段數、OUTSIDE needle、空值），`--verify-sentinels` 對它們注入故障 | 實測：拿掉 `OUTSIDE_PS1` 或區段數檢查皆轉紅，而「逐列變異」在同一情境下是綠的 | 每次 CI（亦在 `make lint`） |
 | en-US 不夾全角標點 | 附加括號依語系選用（半角 / 全角），**含括號分支** | `english_messages_never_use_fullwidth_punctuation`（原測試只覆蓋插值分支故漏了一輪） | 每次 CI |
 | stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
 | 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
@@ -347,6 +352,19 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 > 475 MB 真實映像（grafana:13.2.2，1071 張憑證），detected 與 modelled **完全相符**，
 > 且該欄位每次掃描只印一行（不會每層累加）。也就是說本修正在 v1.1.2 上**不改變任何
 > 現行結論**；它的價值在於引擎行為漂移時會被抓到，而不是修掉了一個當下的誤判。
+>
+> **第八輪把這個教訓推進一層：驗證本身也會驗錯對象。** 第七輪我為 NOTICE gate 做了
+> 「負向驗證」，但試的是 sh 側的 `Syft`——那裡剛好只有小寫 `syft`，於是驗過了；
+> 真正的白列在 ps1（`.PARAMETER SyftVersion`）。第八輪我為前端渲染寫了檢查腳本，
+> 卻手抄了一份 `render()`，於是它驗的是自己的副本：把**實作**的空細節分支與括號規則
+> 各改壞一次，腳本兩次都是綠的。兩次都不是「忘了驗」，而是**驗了、通過了、而那個通過
+> 不含資訊**。凡是宣稱「已證明擋得住」的東西，要交的證據是「把它要擋的東西真的改壞一次，
+> 它轉紅」——改壞的必須是**被保護的那一份**，不是檢查自己的副本，也不是隨手挑的那一邊。
+>
+> 同一輪還有一條同型的：`--self-test` 對 REQUIRED 逐列做變異，看似證明「無白列」，
+> 但 `re.sub` 抹掉全部命中後 `re.search` 依構造必然失敗，故通過條件恆等於正常執行。
+> 把變異上移到打包腳本原始檔仍不改變這件事（實測：抽取退化成吃整檔時兩者雙雙通過）。
+> 白列真正的防線是結構性檢查（區段數、範圍哨兵），故改為對**那些檢查**注入故障。
 >
 > 同一批實測順帶關掉 NFR-09 的一個證據缺口：theia 對 `type: private-key` 的元件
 > **不填 `value`**（只有公鑰帶 base64 值），故原樣落地的 `cbom.cdx.json` 不含私鑰內容。

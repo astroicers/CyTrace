@@ -141,3 +141,48 @@ fn frontend_var_name_rule_matches_this_one() {
         "前端的預設變數名不是 target——非逾時類的細節會插不進去"
     );
 }
+
+// ── 兩側行為契約：不只鍵與規則，邊界也要同 ──
+
+/// `detail = None` 時不得印出佔位符（第八輪複審 finding E）。
+///
+/// `reason_detail` 是 `Option` 且序列化時可省略（golden JSON 就沒有該欄位），
+/// 故 `cytrace report` 讀回舊版／被裁剪的 `scan-result.json` 時必然走到這條路。
+/// 契約測試比對鍵清單與變數名規則，**不碰行為**，所以這條在 TS 修好之後
+/// Rust 側還漏了一輪。
+#[test]
+fn none_detail_never_leaks_placeholders() {
+    for lang in ["zh-TW", "en-US"] {
+        let cat = Catalog::load(lang);
+        for (key, _) in CBOM_ERR_KEYS {
+            let out = cat.render_cbom(key, None);
+            assert!(
+                !out.contains("{{"),
+                "{lang} {key}: detail=None 時殘留佔位符：{out}"
+            );
+            assert_ne!(out.trim(), *key, "{lang} {key}: 渲染出裸鍵");
+        }
+    }
+}
+
+/// 未知鍵一律回退 `cbom.err.engine`，兩側同規則（第八輪複審 finding F）。
+#[test]
+fn unknown_keys_fall_back_instead_of_printing_the_raw_key() {
+    for lang in ["zh-TW", "en-US"] {
+        let cat = Catalog::load(lang);
+        for detail in [Some("/mnt/target/x.bin"), None] {
+            let out = cat.render_cbom("cbom.err.some_new_key_from_the_future", detail);
+            assert!(
+                !out.contains("cbom.err."),
+                "{lang}: 未知鍵不得印出裸鍵（報表會把它顯示給交件對象看）：{out}"
+            );
+            assert!(!out.contains("{{"), "{lang}: 不得殘留佔位符：{out}");
+            if let Some(d) = detail {
+                assert!(out.contains(d), "{lang}: 回退時細節不得消失：{out}");
+            }
+        }
+        // 完全空的鍵名同樣不得漏出
+        let out = cat.render_cbom("", Some("/x"));
+        assert!(!out.is_empty() && !out.contains("{{"), "空鍵名：{out}");
+    }
+}

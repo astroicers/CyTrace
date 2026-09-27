@@ -353,6 +353,44 @@ pub fn cbom(target: &str) -> Result<Option<CbomOutput>> {
 
 /// 同 [`cbom`]，但可指定逾時（供測試注入短逾時，不必操作行程環境變數）。
 pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<Option<CbomOutput>> {
+    cbom_with_timeouts(target, timeout, DRAIN_GRACE_DEFAULT)
+}
+
+/// 子程序結束後等管線 EOF 的寬限。正常情況下 buffer 已就緒，此值只在異常時生效。
+///
+/// 上界的依據：子程序已結束（或已被 kill），寫端唯一可能還開著的情形是有孫程序
+/// 繼承了它；5 秒足以涵蓋正常的 EOF 傳遞，又不會讓呼叫端實質卡住。
+pub const DRAIN_GRACE_DEFAULT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 抽乾一條 reader channel。**抽不到就是失敗，不得當成「空的」。**
+///
+/// `recv_timeout` 的 `Err` 若被 `unwrap_or_default()` 吞掉，「stderr 真的是空的」與
+/// 「抽不到 stderr」會塌成同一個空 `Vec`，於是 `skipped` 與 `admitted_*` 全部歸零
+/// ——「有 1 MiB 以上的 CA bundle 被略過」變成「沒有」、「偵測到卻未建模」恆為 0，
+/// 量子閘門對沒掃完的目標回報 `Pass`。那是核心不變量「沒掃到 ≠ 通過」的反面
+/// （第八輪複審 finding D）。
+///
+/// `Disconnected` 同樣算失敗：reader thread 若在 send 之前 panic，我們一樣沒有輸出。
+fn drain_or_fail(
+    rx: &std::sync::mpsc::Receiver<Vec<u8>>,
+    grace: std::time::Duration,
+) -> Result<Vec<u8>> {
+    rx.recv_timeout(grace).map_err(|_| CytraceError::Cbom {
+        key: "cbom.err.drain_timeout",
+        detail: Some(grace.as_secs().to_string()),
+    })
+}
+
+/// 同 [`cbom_with_timeout`]，但另可指定**抽乾寬限**。
+///
+/// `drain_grace` 開放注入只有一個用途：讓「抽不到輸出」這條路徑**可被測試觸發**。
+/// 少了它，該路徑只有在上游哪天 spawn 孫程序時才會走到，而那時沒有任何東西會轉紅
+/// （第八輪複審 finding D 的附帶要求）。
+pub fn cbom_with_timeouts(
+    target: &str,
+    timeout: std::time::Duration,
+    drain_grace: std::time::Duration,
+) -> Result<Option<CbomOutput>> {
     let t = cbom_target(target)?;
 
     // theia 需要可寫 HOME 才不會把警告印到 stdout（T901b 實測）
@@ -420,11 +458,7 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
         let _ = tx_err.send(buf);
     });
 
-    /// 子程序結束後等管線 EOF 的寬限。正常情況下 buffer 已就緒，此值只在異常時生效。
-    const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
-    let drain = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| -> Vec<u8> {
-        rx.recv_timeout(DRAIN_GRACE).unwrap_or_default()
-    };
+    let drain = |rx: &std::sync::mpsc::Receiver<Vec<u8>>| drain_or_fail(rx, drain_grace);
 
     // 逾時輪詢：逾時即 kill，歸為 Failed（fail-closed，不中止主流程）
     //
@@ -472,10 +506,18 @@ pub fn cbom_with_timeout(target: &str, timeout: std::time::Duration) -> Result<O
     let mut child = reap.take().expect("正常結束路徑上 reap 必然還在");
     let _ = child.wait();
 
+    // **抽不到就是失敗，不得當成「空的」**：`recv_timeout` 的 `Err(Timeout)` 若被
+    // `unwrap_or_default()` 吞掉，「stderr 真的是空的」與「抽不到 stderr」會塌成同一個
+    // 空 Vec，於是 `skipped` 與 `admitted_*` 全部歸零——「有 1 MiB 以上的 CA bundle
+    // 被略過」變成「沒有」、「偵測到卻未建模」恆為 0，量子閘門對沒掃完的目標回報 Pass。
+    // 那是本專案核心不變量「沒掃到 ≠ 通過」的反面，也正是這整段改動要防的情境
+    // （第八輪複審 finding D：stdout 側有 `ensure_cbom_json` 攔著，stderr 側原本沒有）。
+    let stdout_buf = drain(&rx_out)?;
+    let stderr_buf = drain(&rx_err)?;
     let out = std::process::Output {
         status,
-        stdout: drain(&rx_out),
-        stderr: drain(&rx_err),
+        stdout: stdout_buf,
+        stderr: stderr_buf,
     };
 
     // stderr 含「因大小門檻略過」的警告，須在丟棄前清點（見 skipped_file_count）
@@ -633,6 +675,56 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 抽乾：抽不到不得當成「空的」（第八輪複審 finding D）──
+
+    #[test]
+    fn drain_timeout_is_an_error_not_an_empty_buffer() {
+        // 永不送值的 channel：等同「管線寫端仍被孫程序持有」
+        let (_tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        let r = drain_or_fail(&rx, std::time::Duration::from_millis(10));
+        match r {
+            Err(CytraceError::Cbom { key, detail }) => {
+                assert_eq!(key, "cbom.err.drain_timeout");
+                assert!(detail.is_some(), "須帶寬限秒數供操作員判讀");
+            }
+            Err(other) => panic!("應為 drain_timeout，實為 {other:?}"),
+            Ok(buf) => panic!(
+                "抽不到卻回報成功（{} bytes）——空 buffer 會讓 skipped / admitted_* 歸零，\n\
+                 量子閘門於是對沒掃完的目標回報 Pass（fail-open）",
+                buf.len()
+            ),
+        }
+    }
+
+    #[test]
+    fn drain_returns_the_buffer_when_the_reader_finishes() {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        tx.send(b"Skipping large file: ca.pem (exceeds limit of 1048576 bytes)".to_vec())
+            .unwrap();
+        let buf = drain_or_fail(&rx, std::time::Duration::from_secs(1)).expect("應成功");
+        assert!(!buf.is_empty(), "已就緒的 buffer 須原樣取回");
+    }
+
+    #[test]
+    fn genuinely_empty_stderr_is_not_an_error() {
+        // 「真的空」與「抽不到」必須分得出來：前者合法（乾淨目標無警告）
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        tx.send(Vec::new()).unwrap();
+        let buf = drain_or_fail(&rx, std::time::Duration::from_secs(1)).expect("空輸出仍是成功");
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn dead_reader_thread_is_a_failure() {
+        // reader 在 send 之前 panic → Disconnected，一樣沒有輸出，不得當成空
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+        drop(tx);
+        assert!(
+            drain_or_fail(&rx, std::time::Duration::from_secs(1)).is_err(),
+            "reader 掛掉時不得回報空輸出"
+        );
+    }
 
     // ── 逾時設定解析（不得存在「無逾時」這個可達狀態）──
 

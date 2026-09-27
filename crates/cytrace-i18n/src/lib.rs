@@ -47,13 +47,29 @@ impl Catalog {
     ///
     /// **CLI 與 server 共用本函式**：兩邊各寫一份渲染邏輯，就會有一邊先退化成裸鍵。
     pub fn render_cbom(&self, key: &str, detail: Option<&str>) -> String {
-        let Some(d) = detail else {
-            return self.t(key, &[]);
+        // 未知鍵一律回退：`lookup` 全失敗時 `t()` 會回傳鍵本身，而該「原文」不含佔位符，
+        // 於是走括號分支產出 `cbom.err.some_future_key（/path）`——**裸鍵印給使用者**。
+        // 前端已如此回退（`frontend/src/cbom.ts`），兩側必須同規則
+        // （第八輪複審 finding F：Rust 側漏了，且兩邊註解都聲稱「規則一致」）。
+        let key = if lookup(&self.lang, key).is_some() || lookup(&self.fallback, key).is_some() {
+            key
+        } else {
+            "cbom.err.engine"
         };
         let var = if key == "cbom.err.timeout" {
             "secs"
         } else {
             "target"
+        };
+        // **無細節時仍須插值**：`t(key, &[])` 對未填變數原樣保留，於是含 `{{target}}`
+        // 的四個鍵會把佔位符印給使用者——第六輪已修過一次的畫面。
+        // `reason_detail: None` 是實際可達狀態（序列化時可省略，舊報表重建時也會是 None），
+        // 而 TS 側已插 `'?'`，Rust 側原本沒有（第八輪複審 finding E）。
+        let Some(d) = detail else {
+            let raw = lookup(&self.lang, key)
+                .or_else(|| lookup(&self.fallback, key))
+                .unwrap_or_else(|| key.to_string());
+            return interpolate(&raw, &[(var, "?")]);
         };
         // 以**原文是否含該佔位符**決定走插值或括號，而非事後猜「細節有沒有出現在結果裡」。
         // 舊版用 `!rendered.contains(d)` 判斷，有兩個錯法（第七輪複審 finding）：

@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { renderCbomFailure } from '../../cbom'
 import { api, artifactUrl } from '../api/client'
 import type { JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
@@ -15,7 +16,7 @@ function interval(job: JobRecord | null): number {
 }
 
 export function JobDetailPage({ id }: { id: string }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { data: job, error } = usePolling(() => api.getJob(id), interval)
 
   if (error && !job) {
@@ -110,8 +111,14 @@ export function JobDetailPage({ id }: { id: string }) {
           <h2 className="text-sm font-semibold text-sev-critical">
             {t('console.job.error_title')}
           </h2>
-          <p className="mt-1 text-sm">{t(job.error.i18n_key)}</p>
-          {job.error.detail && (
+          {/* CBOM 失敗的 i18n_key 是 cbom.err.*，其文案含 {{target}}/{{secs}}；
+              用 t() 直接渲染會把佔位符原樣印出，故走與報表同一支 renderCbomFailure。 */}
+          <p className="mt-1 text-sm">
+            {job.error.i18n_key.startsWith('cbom.err.')
+              ? renderCbomFailure(t, job.error.i18n_key, job.error.detail, i18n.language)
+              : t(job.error.i18n_key)}
+          </p>
+          {job.error.detail && !job.error.i18n_key.startsWith('cbom.err.') && (
             <pre className="mt-2 overflow-x-auto text-xs text-gray-500">
               {job.error.detail}
             </pre>

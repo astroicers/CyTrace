@@ -15,7 +15,8 @@
 `不含 CBOM 引擎` 命中 sh 的 `echo "…WITHOUT_CBOM=1…"`——把 NOTICE 裡的對應段
 整段刪掉，檢查依然綠。一個擋不到它宣稱擋的東西的 gate，比沒有 gate 更糟，
 因為它會被當成證據。故本版先切出 here-doc / here-string，再比對；
-並以 `--self-test` 對每一列做變異驗證，證明沒有白列。
+抽取的正確性由兩項結構性檢查承接（區段數、OUTSIDE needle），
+`--verify-sentinels` 對它們做故障注入。
 """
 import argparse
 import re
@@ -42,6 +43,10 @@ REQUIRED = [
     ("禁中國來源宣告", r"OpenSCA-cli", r"OpenSCA-cli"),
     ("該宣告的涵蓋範圍註記", r"國籍", r"does not cover the nationality"),
     ("cargo-deny 把關聲明", r"cargo-deny", r"cargo-deny"),
+    # Apache-2.0 §4(b) 對「是否修改過原始碼」有聲明要求；sh 有、ps1 原本整句缺
+    # （第八輪複審 finding I）
+    ("未修改原始碼之聲明", r"未修改原始碼", r"source was not modified"),
+    ("上游 vendor 目錄指引", r"vendor 目錄", r"vendor directory"),
 ]
 
 # NOTICE 區段的界線。兩支腳本都是「條件段（theia）」＋「主體」兩塊，
@@ -63,16 +68,26 @@ PS1_BLOCKS = [
 PS1_INLINE = r"^\s*\$TheiaNotice = \"(.*)\"\s*$"
 
 
-def extract(text: str, blocks, inline_pat: str) -> str:
-    """抽出會成為 NOTICE 內容的文字；抽不到任何區段即為錯誤（不得靜默回空字串）。"""
+def extract(text: str, blocks, inline_pat: str) -> tuple[str, int, int]:
+    """抽出會成為 NOTICE 內容的文字。
+
+    回傳（文字, 命中的 block 數, 命中的 inline 數）。**命中數要回報出去**：
+    某個 block pattern 失配時該段會被靜默丟棄，而「整體非空」檢查抓不到
+    ——現在不出錯只是靠 REQUIRED 清單的分布碰巧蓋住，不是靠機制
+    （第八輪複審 finding H）。
+    """
     parts = []
+    block_hits = 0
     for start, end in blocks:
         m = re.search(start + r"(.*?)" + end, text, re.S)
         if m:
             parts.append(m.group(1))
+            block_hits += 1
+    inline_hits = 0
     for m in re.finditer(inline_pat, text, re.M):
         parts.append(m.group(1))
-    return "\n".join(parts)
+        inline_hits += 1
+    return "\n".join(parts), block_hits, inline_hits
 
 
 def check(sh_notice: str, ps1_notice: str) -> list[str]:
@@ -86,14 +101,38 @@ def check(sh_notice: str, ps1_notice: str) -> list[str]:
     return missing
 
 
-def load() -> tuple[str, str]:
+def notice_of(text: str, which: str) -> tuple[str, list[str]]:
+    """從腳本原文抽出 NOTICE 區段，並回報抽取本身的問題。"""
+    if which == "sh":
+        blocks, inline, outside = SH_BLOCKS, SH_INLINE, OUTSIDE_SH
+    else:
+        blocks, inline, outside = PS1_BLOCKS, PS1_INLINE, OUTSIDE_PS1
+    notice, block_hits, inline_hits = extract(text, blocks, inline)
+    problems = []
+    name = "package.sh" if which == "sh" else "package.ps1"
+    if block_hits != len(blocks):
+        problems.append(
+            f"{name}：{len(blocks)} 個 NOTICE 區段只抽到 {block_hits} 個"
+            f"——here-doc / here-string 形式可能已改變，該段內容不會被檢查"
+        )
+    if inline_hits < 1:
+        problems.append(f"{name}：theia 缺席時的單行 NOTICE 抽不到")
+    if not notice.strip():
+        problems.append(f"{name}：NOTICE 區段抽取為空")
+    for needle in outside:
+        if needle in notice:
+            problems.append(f"{name} 抽取範圍過寬：含 NOTICE 之外的 {needle!r}")
+    return notice, problems
+
+
+def load() -> tuple[str, str, list[str]]:
     for path in (SH, PS1):
         if not path.exists():
             print(f"✗ 缺少打包腳本: {path}")
             sys.exit(1)
-    sh_notice = extract(SH.read_text(encoding="utf-8"), SH_BLOCKS, SH_INLINE)
-    ps1_notice = extract(PS1.read_text(encoding="utf-8"), PS1_BLOCKS, PS1_INLINE)
-    return sh_notice, ps1_notice
+    sh_notice, sh_problems = notice_of(SH.read_text(encoding="utf-8"), "sh")
+    ps1_notice, ps1_problems = notice_of(PS1.read_text(encoding="utf-8"), "ps1")
+    return sh_notice, ps1_notice, sh_problems + ps1_problems
 
 
 # ── 抽取正確性的哨兵 ──
@@ -113,73 +152,106 @@ OUTSIDE_PS1 = [
 ]
 
 
-def assert_extraction_is_sound(sh_notice: str, ps1_notice: str) -> list[str]:
-    problems = []
-    if not sh_notice.strip():
-        problems.append("package.sh 的 NOTICE 區段抽取為空——here-doc 形式可能已改變")
-    if not ps1_notice.strip():
-        problems.append("package.ps1 的 NOTICE 區段抽取為空——here-string 形式可能已改變")
-    for needle in OUTSIDE_SH:
-        if needle in sh_notice:
-            problems.append(f"package.sh 抽取範圍過寬：含 NOTICE 之外的 {needle!r}")
-    for needle in OUTSIDE_PS1:
-        if needle in ps1_notice:
-            problems.append(f"package.ps1 抽取範圍過寬：含 NOTICE 之外的 {needle!r}")
-    return problems
+def verify_sentinels() -> int:
+    """驗證**哨兵本身**擋得住抽取退化——這才是白列的防線。
 
+    誠實記錄為什麼不是「對 REQUIRED 逐列做變異」（前兩版都是那樣，兩版都證不出東西）：
 
-def self_test(sh_notice: str, ps1_notice: str) -> int:
-    """變異測試：逐列從 NOTICE 抹去該實體，確認本檢查**必定轉紅**。
+    - 第一版變異**抽取後的字串**。`re.sub` 移除 pattern 的所有命中後，隨後的 `re.search`
+      依構造必然失敗，故「抹去後仍通過」永不觸發；而「pattern 無命中」早已被正常執行
+      蘊含。通過條件 ≡ 正常執行的通過條件（第八輪複審 finding C）。
+    - 第二版把變異上移到**打包腳本原文**，以為能把 `extract()` 納入變異範圍。實測
+      （2026-09-27）在「抽取退化成吃整檔」的情境下，正常執行與變異測試**雙雙通過**：
+      因為變異抹掉的是該字串在原始檔中的全部出現，抽取吃多少都一樣被抹光。
+      「抹掉全部命中」這個手法的判別力本質上等於正常執行。
 
-    白列（無論如何都會通過的列）在此會現形——它是假的機械支撐，
-    正是第七輪複審抓到初版的那個錯法。
+    抽取退化真正的防線是兩項**結構性**檢查，都在 `notice_of` 裡：
+      1. `block_hits == len(blocks)`：某段抽不到就報錯（不靜默丟棄該段）；
+      2. `OUTSIDE_*` needle：抽取結果不得含 NOTICE 之外的字串。
+    本函式對這兩項做故障注入，確認它們會紅——防線自己要有防線。
     """
-    print("自我測試：逐列變異，確認每一列都真的有把關作用")
-    dead = []
-    for label, sh_pat, ps1_pat in REQUIRED:
-        for side, notice, pat in (
-            ("package.sh", sh_notice, sh_pat),
-            ("package.ps1", ps1_notice, ps1_pat),
-        ):
-            mutated = re.sub(pat, "＜已抹去＞", notice)
-            if mutated == notice:
-                dead.append(f"{side}「{label}」：pattern 在 NOTICE 中無命中，變異無效")
-                continue
-            if side == "package.sh":
-                missing = check(mutated, ps1_notice)
-            else:
-                missing = check(sh_notice, mutated)
-            if not missing:
-                dead.append(f"{side}「{label}」：抹去後檢查仍通過 → 白列")
-    if dead:
-        print("✗ 下列項目不具把關作用：")
-        for d in dead:
-            print(f"    - {d}")
+    print("哨兵驗證：對抽取邏輯注入故障，確認結構性檢查會紅")
+    failures = []
+
+    # (1) 區段失配 → 必須被 notice_of 的區段數檢查抓到。
+    #     故障注入的方式是**改寫腳本原文的 here-doc / here-string 標記**（腳本重構時
+    #     真正會發生的事），而非把 broken pattern 餵進 extract()——後者會繞過 notice_of，
+    #     於是拿掉區段數檢查也照樣通過（實測發現，2026-09-27）。
+    delimiter_edits = [
+        ("sh", SH.read_text(encoding="utf-8"), '<<NOTICE\n', '<<EOF\n'),
+        ("sh", SH.read_text(encoding="utf-8"), '<<THEIA\n', '<<THEIA_BLOCK\n'),
+        ("ps1", PS1.read_text(encoding="utf-8"), '@"\nCyTrace ', '@"\nCyTraceX '),
+        ("ps1", PS1.read_text(encoding="utf-8"), '$TheiaNotice = @"', '$TheiaNotice = @\''),
+    ]
+    for which, src, old_mark, new_mark in delimiter_edits:
+        if old_mark not in src:
+            failures.append(f"{which}：故障注入用的標記 {old_mark!r} 不在腳本裡，注入無效")
+            continue
+        _, problems = notice_of(src.replace(old_mark, new_mark, 1), which)
+        if not problems:
+            failures.append(
+                f"{which}：here-doc 標記改為 {new_mark!r} 後該段抽不到，"
+                f"卻沒有被回報——該段的 NOTICE 內容會靜默不受檢查"
+            )
+
+    # (2) 抽取過寬 → 必須被 OUTSIDE needle 抓到
+    #     模擬第七輪的 bug 形態：pattern 從檔頭吃起
+    over_wide_cases = [
+        ("sh", [(r"^", r"\nNOTICE\n")], SH_INLINE, SH.read_text(encoding="utf-8"), OUTSIDE_SH),
+        (
+            "ps1",
+            [(r"<#", r'\n"@ \| Out-File')],
+            PS1_INLINE,
+            PS1.read_text(encoding="utf-8"),
+            OUTSIDE_PS1,
+        ),
+    ]
+    for which, blocks, inline, src, outside in over_wide_cases:
+        notice, _, _ = extract(src, blocks, inline)
+        caught = [n for n in outside if n in notice]
+        if not caught:
+            failures.append(
+                f"{which} 抽取過寬（{len(notice)} 字元）卻沒有任何 OUTSIDE needle 命中"
+                f"——哨兵清單涵蓋不足，第七輪那種 bug 會再次靜默通過"
+            )
+
+    # (3) 抽取為空 → 必須被空值檢查抓到
+    for which in ("sh", "ps1"):
+        notice, problems = notice_of("（完全不含 NOTICE 的內容）", which)
+        if not problems:
+            failures.append(f"{which}：空抽取未被回報")
+
+    if failures:
+        print("✗ 哨兵無法擋住下列故障：")
+        for f in failures:
+            print(f"    - {f}")
         return 1
-    print(f"✓ 自我測試通過（{len(REQUIRED)} 列 × 2 平台 = {len(REQUIRED) * 2} 個變異全數轉紅）")
+    print(
+        f"✓ 哨兵驗證通過（{len(SH_BLOCKS) + len(PS1_BLOCKS)} 個區段失配、"
+        f"2 個抽取過寬、2 個空抽取，全數被結構性檢查攔下）"
+    )
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="打包腳本 NOTICE 對帳")
     ap.add_argument(
-        "--self-test",
+        "--verify-sentinels",
         action="store_true",
-        help="對每一列做變異，驗證本檢查確實擋得住缺漏（無白列）",
+        help="對抽取邏輯注入故障，確認結構性檢查（區段數 / OUTSIDE needle / 空值）會紅",
     )
     args = ap.parse_args()
 
-    sh_notice, ps1_notice = load()
+    sh_notice, ps1_notice, problems = load()
 
-    problems = assert_extraction_is_sound(sh_notice, ps1_notice)
     if problems:
         print("✗ NOTICE 區段抽取不可信，檢查結論無效：")
         for p in problems:
             print(f"    - {p}")
         return 1
 
-    if args.self_test:
-        return self_test(sh_notice, ps1_notice)
+    if args.verify_sentinels:
+        return verify_sentinels()
 
     missing = check(sh_notice, ps1_notice)
     if missing:
