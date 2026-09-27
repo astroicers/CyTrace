@@ -219,5 +219,17 @@
       "not_applicable": "不適用",
       "unknown": "無法判定"
     }
+  },
+  "cbom": {
+    "err": {
+      "target_not_local": "目標非本地可讀路徑，拒絕交給引擎：{{target}}",
+      "target_unreadable": "目標不可讀：{{target}}",
+      "target_not_archive": "非 tar / gzip 封存檔，拒絕當成映像：{{target}}",
+      "timeout": "引擎逾時 {{secs}} 秒，已終止；目標可能含具名管線或特殊檔案",
+      "empty_output": "引擎輸出空白，非「零資產」",
+      "stdout_not_json": "引擎輸出非合法 JSON",
+      "not_cyclonedx": "引擎輸出不是 CycloneDX BOM",
+      "engine": "引擎錯誤"
+    }
   }
 }

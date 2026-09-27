@@ -134,7 +134,8 @@ mod tests {
         assert_eq!(
             quantum_gate(Some(&inventory(
                 CbomStatus::Failed {
-                    reason_key: "cbom.err.empty_output".into()
+                    reason_key: "cbom.err.empty_output".into(),
+                    reason_detail: None
                 },
                 vec![]
             ))),

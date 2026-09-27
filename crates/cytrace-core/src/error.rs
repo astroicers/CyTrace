@@ -21,6 +21,19 @@ pub enum CytraceError {
     #[error("設定錯誤：{0}")]
     Config(String),
 
+    /// CBOM 錯誤：攜帶**純 i18n 鍵**與不可翻譯的細節（路徑、秒數）。
+    ///
+    /// 與 [`CytraceError::Engine`] / [`CytraceError::Parse`] 分開，是為了讓呼叫端能依
+    /// 語系渲染——把鍵與中文散文黏成一個字串的話，`--lang en-US` 會吐中文，
+    /// 且該字串會寫進 `scan-result.json` 並經 API 對外（違反 i18n 雙語強制鐵則）。
+    #[error("{key}{}", detail.as_ref().map(|d| format!("：{d}")).unwrap_or_default())]
+    Cbom {
+        /// i18n 鍵（如 `cbom.err.timeout`），**不含散文**。
+        key: &'static str,
+        /// 不可翻譯的細節（目標路徑、逾時秒數）；插值用。
+        detail: Option<String>,
+    },
+
     /// 離線漏洞 DB 快照缺失（ADR-003）。
     #[error("漏洞資料庫快照缺失：{0}")]
     DbMissing(String),

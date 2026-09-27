@@ -14,7 +14,8 @@ fn out(json: &str, skipped: u64) -> CbomOutput {
     CbomOutput {
         json: json.into(),
         skipped,
-        admitted: 0,
+        admitted_keys: 0,
+        admitted_certs: 0,
     }
 }
 
@@ -337,6 +338,7 @@ fn absent_engine_must_not_stamp_a_theia_version() {
 
     let failed = tool_versions(&CbomStatus::Failed {
         reason_key: "x".into(),
+        reason_detail: None,
     });
     assert_eq!(failed.theia, None, "執行失敗不得填版本");
 
@@ -395,7 +397,7 @@ fn engine_leaves_no_temp_home_behind() {
     use cytrace_core::engine::cbom;
     use std::fs;
 
-    let _guard = TEMP_LOCK.lock().expect("temp 鎖");
+    let _guard = TEMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // 所有離開路徑都要清理（含引擎缺席、spawn 失敗的 early return）。
     // 以「呼叫前後 temp 目錄中 cytrace-theia-home-* 的數量不變」驗證。
@@ -488,7 +490,7 @@ fn fifo_in_target_does_not_hang_the_scan() {
     use std::fs;
     use std::time::{Duration, Instant};
 
-    let _guard = TEMP_LOCK.lock().expect("temp 鎖");
+    let _guard = TEMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // 實測：目標樹含一個 FIFO 時 theia 永久阻塞，CLI 只印「掃描中」再也不返回；
     // server 端 permit 永不釋放、Running job 不可取消，預設併發 2 → 兩個卡住即服務停擺。
@@ -517,4 +519,31 @@ fn fifo_in_target_does_not_hang_the_scan() {
         elapsed < Duration::from_secs(60),
         "含 FIFO 的目標必須在逾時內返回，實耗 {elapsed:?}"
     );
+}
+
+#[test]
+fn failed_status_carries_a_pure_i18n_key_not_prose() {
+    // 曾經 reason_key = e.to_string()，把鍵與中文散文黏成一串：
+    // --lang en-US 會吐中文，且該字串會寫進 scan-result.json 並經 API 對外。
+    let inv = collect_cbom(&Engine(Ok(Some("{ not json".into()))), "dir:/x");
+    match &inv.status {
+        CbomStatus::Failed {
+            reason_key,
+            reason_detail,
+        } => {
+            assert!(
+                reason_key.starts_with("cbom.err."),
+                "reason_key 須為純鍵，實得 {reason_key}"
+            );
+            assert!(
+                !reason_key.chars().any(|c| c as u32 > 0x7f),
+                "reason_key 不得含非 ASCII（散文）：{reason_key}"
+            );
+            assert!(
+                reason_detail.is_some(),
+                "不可翻譯的細節應放 reason_detail 而非鍵裡"
+            );
+        }
+        other => panic!("應為 Failed，實得 {other:?}"),
+    }
 }

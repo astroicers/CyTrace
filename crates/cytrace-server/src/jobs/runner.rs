@@ -101,6 +101,7 @@ fn job_error_of(e: &CytraceError) -> JobError {
         CytraceError::Io(_) => "io",
         CytraceError::Config(_) => "config",
         CytraceError::DbMissing(_) => "db_missing",
+        CytraceError::Cbom { .. } => "cbom",
     };
     JobError {
         kind: kind.into(),

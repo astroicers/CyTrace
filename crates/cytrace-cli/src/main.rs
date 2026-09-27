@@ -166,7 +166,10 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
                     Ok(None) => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
                     Err(e) => eprintln!(
                         "{}",
-                        cat.t("cli.cbom.failed", &[("reason", &e.to_string())])
+                        cat.t(
+                            "cli.cbom.failed",
+                            &[("reason", &render_cbom_error(&e, cat))]
+                        )
                     ),
                 }
             }
@@ -400,6 +403,20 @@ struct CbomOpts {
     fail_on_quantum: bool,
 }
 
+/// 把 CBOM 錯誤依語系渲染：純鍵查 catalog，不可翻譯的細節附在括號內。
+///
+/// 直接用 `e.to_string()` 會印出鍵本身（`cbom.err.empty_output`），
+/// 使用者看不懂、且 `--lang en-US` 也不會變英文。
+fn render_cbom_error(e: &cytrace_core::CytraceError, cat: &Catalog) -> String {
+    match e {
+        cytrace_core::CytraceError::Cbom { key, detail } => match detail {
+            Some(d) => format!("{}（{d}）", cat.t(key, &[])),
+            None => cat.t(key, &[]),
+        },
+        other => other.to_string(),
+    }
+}
+
 /// 把 CBOM 狀態告知使用者——降級與失敗**必須可見**，不得無聲略過（ADR-013 決策 4/10）。
 fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
     use cytrace_types::CbomStatus;
@@ -440,8 +457,16 @@ fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
             }
         }
         CbomStatus::EngineAbsent => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
-        CbomStatus::Failed { reason_key } => {
-            eprintln!("{}", cat.t("cli.cbom.failed", &[("reason", reason_key)]))
+        CbomStatus::Failed {
+            reason_key,
+            reason_detail,
+        } => {
+            // reason_key 是純 i18n 鍵，依語系渲染；細節（路徑／秒數）附在後面
+            let reason = match reason_detail {
+                Some(d) => format!("{}（{d}）", cat.t(reason_key, &[])),
+                None => cat.t(reason_key, &[]),
+            };
+            eprintln!("{}", cat.t("cli.cbom.failed", &[("reason", &reason)]))
         }
         CbomStatus::NotRequested => {}
     }

@@ -164,7 +164,7 @@ impl ApiError {
         self
     }
 
-    /// CytraceError → ApiError 對映（Engine/Parse/Io/Config/DbMissing）。
+    /// CytraceError → ApiError 對映（Engine/Parse/Io/Config/DbMissing/Cbom）。
     pub fn from_core(lang: Lang, err: &CytraceError) -> Self {
         let kind = match err {
             CytraceError::Engine(_) => ErrorKind::Engine,
@@ -172,6 +172,8 @@ impl ApiError {
             CytraceError::Io(_) => ErrorKind::Io,
             CytraceError::Config(_) => ErrorKind::Config,
             CytraceError::DbMissing(_) => ErrorKind::DbMissing,
+            // CBOM 錯誤歸引擎類；detail 由 err.to_string() 帶出（鍵 + 細節）
+            CytraceError::Cbom { .. } => ErrorKind::Engine,
         };
         ApiError::new(lang, kind).with_detail(err.to_string())
     }

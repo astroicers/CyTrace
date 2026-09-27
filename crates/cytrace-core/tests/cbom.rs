@@ -314,30 +314,48 @@ fn non_cyclonedx_json_is_rejected() {
 }
 
 #[test]
-fn engine_admitted_but_unmodelled_findings_are_counted() {
-    use cytrace_core::engine::undetermined_count;
+fn admitted_counts_are_parsed_per_category() {
+    use cytrace_core::engine::admitted_counts;
 
-    // theia 對「偵測到但無法建模」的資產只在 stderr 留痕，stdout 零元件、exit 0。
-    // 實測：OpenSSH 格式私鑰 → stderr 有 "Found 1 private key(s)"，
-    // 但 CBOM 的 components 是 null；同一把金鑰換成 PKCS#8 PEM 則會產生資產。
-    // 引擎自己講得出口的漏檢若不計數，報表會宣稱清單完整而閘門回 Pass。
+    // theia 對偵測到但無法建模的資產只在 stderr 留痕，stdout 零元件、exit 0。
+    // 自承數必須**分類別**記錄，否則混合資產目標會被跨類別相減抵銷成 0。
     let stderr = concat!(
         "msg=\"Secret detected\" file=etc/ssh/ssh_host_ed25519_key type=private-key\n",
         "msg=\"Found 1 private key(s) in etc/ssh/ssh_host_ed25519_key\"\n",
+        "msg=\"Found 3 certificate(s) in etc/ssl/bundle.pem\"\n",
     );
-    assert_eq!(
-        undetermined_count(stderr, 0),
-        1,
-        "引擎自承偵測到 1 把私鑰但 stdout 零資產 → 須計為未確定 1 項"
-    );
-
-    // stdout 已如實產出對應資產時不重複計數
-    assert_eq!(undetermined_count(stderr, 1), 0);
-    assert_eq!(undetermined_count(stderr, 5), 0, "不得出現負數或溢位");
+    assert_eq!(admitted_counts(stderr), (1, 3), "私鑰與憑證須分開計");
 
     // 沒有自承漏檢時為 0
     assert_eq!(
-        undetermined_count("msg=\"Certificate Plugin completed\"\n", 0),
-        0
+        admitted_counts("msg=\"Certificate Plugin completed\"\n"),
+        (0, 0)
+    );
+
+    // 認不得數字時仍計一項（寧可多算）
+    assert_eq!(
+        admitted_counts("msg=\"Found some private key(s)\"\n"),
+        (1, 0)
+    );
+}
+
+#[test]
+fn undetermined_subtracts_within_one_category() {
+    use cytrace_core::engine::undetermined_count;
+    assert_eq!(undetermined_count(2, 1), 1, "自承 2 建模 1 → 未確定 1");
+    assert_eq!(undetermined_count(1, 1), 0);
+    assert_eq!(undetermined_count(1, 5), 0, "不得出現負數或溢位");
+}
+
+#[test]
+fn modelled_counts_are_per_category() {
+    use cytrace_core::{modelled_cert_count, modelled_key_count};
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let certs = modelled_cert_count(&assets);
+    let keys = modelled_key_count(&assets);
+    assert!(certs > 0 && keys > 0, "fixture 須同時含憑證與私鑰");
+    assert!(
+        certs + keys < assets.len() as u64,
+        "fixture 須另含其他類別，否則量綱錯誤看不出來"
     );
 }

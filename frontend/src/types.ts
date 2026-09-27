@@ -60,7 +60,7 @@ export type CbomStatus =
   | 'NotRequested'
   | 'EngineAbsent'
   | 'Completed'
-  | { Failed: { reason_key: string } }
+  | { Failed: { reason_key: string; reason_detail?: string | null } }
 
 /** 單一密碼學資產。不含金鑰內容（NFR-09）。 */
 export interface CryptoAsset {

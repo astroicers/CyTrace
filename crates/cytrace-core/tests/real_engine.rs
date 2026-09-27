@@ -89,7 +89,7 @@ fn clean_target_is_completed_with_zero_assets() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("clean");
     fs::write(d.join("readme.txt"), b"no crypto here").unwrap();
 
@@ -117,7 +117,7 @@ fn certificate_and_key_are_detected_without_leaking_material() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("basic");
     if !gen_cert(&d, "server", 2048) {
         let _ = fs::remove_dir_all(&d);
@@ -140,7 +140,7 @@ fn unreadable_symlink_makes_the_gate_withhold_pass() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let base = workspace("symlink");
     fs::create_dir_all(base.join("outside")).unwrap();
     fs::create_dir_all(base.join("target")).unwrap();
@@ -176,7 +176,7 @@ fn symlink_loop_does_not_hang() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("symloop");
     fs::create_dir_all(d.join("sub")).unwrap();
     symlink(&d, d.join("sub/loop")).unwrap();
@@ -198,7 +198,7 @@ fn fifo_target_returns_within_timeout() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("fifo");
     fs::write(d.join("openssl.cnf"), b"[x]\n").unwrap();
     if !Command::new("mkfifo")
@@ -232,7 +232,7 @@ fn oversize_file_is_reported_as_unscanned() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("oversize");
     if !gen_cert(&d, "big", 2048) {
         let _ = fs::remove_dir_all(&d);
@@ -260,7 +260,7 @@ fn engine_admitted_findings_are_not_silently_dropped() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("openssh");
     let key = d.join("ssh_host_ed25519_key");
     if !Command::new("ssh-keygen")
@@ -293,7 +293,7 @@ fn gzip_remnant_named_after_an_image_does_not_load_foreign_assets() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("remnant");
     // 8 bytes 的 gzip 殘檔，命名為常見映像名
     fs::write(d.join("nginx"), [0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0]).unwrap();
@@ -329,7 +329,7 @@ fn plain_file_target_is_rejected_before_spawning() {
     if !theia_present() {
         return;
     }
-    let _g = LOCK.lock().unwrap();
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let d = workspace("plain");
     let f = d.join("firmware.bin");
     fs::write(&f, [0u8, 1, 2, 3]).unwrap();
@@ -337,4 +337,93 @@ fn plain_file_target_is_rejected_before_spawning() {
     let r = engine::cbom_target(f.to_str().unwrap());
     let _ = fs::remove_dir_all(&d);
     assert!(r.is_err(), "非 tar/gzip 檔案不得被當成映像");
+}
+
+// ── 案例 10：大輸出（第五輪阻斷級：逾時輪詢不抽管線 → 死鎖）──
+
+#[test]
+#[ignore = "需要 cbomkit-theia 與 openssl"]
+fn large_output_does_not_deadlock_the_pipe() {
+    if !theia_present() {
+        panic!("缺少 cbomkit-theia；本層不接受靜默略過");
+    }
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let d = workspace("largeout");
+
+    // 60 組憑證 → theia 輸出約 285 KB，遠超 Linux 預設 64 KiB 管線容量。
+    // 逾時輪詢若只呼叫 try_wait() 而不讀管線，子程序會阻塞在 write() 永不結束，
+    // 於是必然跑到 deadline 被 kill——實測：theia 單獨跑 5 秒完成，經 CyTrace 卡滿逾時。
+    let mut made = 0;
+    for i in 0..60 {
+        if gen_cert(&d, &format!("t{i}"), 2048) {
+            made += 1;
+        }
+    }
+    if made < 40 {
+        let _ = fs::remove_dir_all(&d);
+        panic!("缺少 openssl 或產憑證失敗（僅 {made} 組）；本層不接受靜默略過");
+    }
+
+    let started = std::time::Instant::now();
+    // 逾時給 90 秒：若管線有被正常抽乾，這個規模應在數秒內完成
+    let r = cbom_with_timeout(d.to_str().unwrap(), Duration::from_secs(90));
+    let elapsed = started.elapsed();
+    let _ = fs::remove_dir_all(&d);
+
+    let out = r.expect("大輸出不得失敗").expect("引擎存在時不得回 None");
+    assert!(
+        out.json.len() > 64 * 1024,
+        "本案例須產生超過管線容量的輸出才有意義，實得 {} bytes",
+        out.json.len()
+    );
+    assert!(
+        elapsed < Duration::from_secs(60),
+        "大輸出不得因管線未抽乾而卡到逾時，實耗 {elapsed:?}"
+    );
+}
+
+// ── 案例 11：混合資產目標（第五輪阻斷級：量綱不符使 undetermined 歸零）──
+
+#[test]
+#[ignore = "需要 cbomkit-theia、openssl 與 ssh-keygen"]
+fn mixed_target_still_reports_unmodelled_findings() {
+    if !theia_present() {
+        panic!("缺少 cbomkit-theia；本層不接受靜默略過");
+    }
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let d = workspace("mixed");
+
+    // 同時含「會被建模的憑證」與「不會被建模的 OpenSSH 金鑰」。
+    // 案例 7 只放 ssh key，故 admitted=1、keyish=0，相減仍為 1——看不到量綱錯誤。
+    // 本案例 admitted=2（a.key + ssh key），若拿 assets.len() 相減會歸零、閘門誤回 Pass。
+    if !gen_cert(&d, "a", 2048) {
+        let _ = fs::remove_dir_all(&d);
+        panic!("缺少 openssl；本層不接受靜默略過");
+    }
+    let key = d.join("ssh_host_ed25519_key");
+    if !Command::new("ssh-keygen")
+        .args(["-t", "ed25519", "-N", "", "-q", "-f", key.to_str().unwrap()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let _ = fs::remove_dir_all(&d);
+        panic!("缺少 ssh-keygen；本層不接受靜默略過");
+    }
+
+    let inv = scan(&d);
+    let _ = fs::remove_dir_all(&d);
+
+    assert_eq!(inv.status, CbomStatus::Completed);
+    assert!(!inv.assets.is_empty(), "憑證應產生資產");
+    assert!(
+        inv.unscanned_undetermined > 0,
+        "引擎自承的未建模金鑰不得被其他類別資產的數量抵銷（量綱須一致）"
+    );
+    assert_ne!(
+        quantum_gate(Some(&inv)),
+        QuantumGate::Pass,
+        "有未建模的金鑰時不得宣告通過"
+    );
+    assert_no_key_material(&inv);
 }

@@ -64,6 +64,11 @@ function Get-Engine($name, $ver) {
 Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
 
+# 引擎釘選版本的單一事實源（與 package.sh 一致）
+$TheiaVersion = (Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=' |
+  ForEach-Object { $_.Line -replace '^THEIA_VERSION=', '' } | Select-Object -First 1)
+if (-not $TheiaVersion) { $TheiaVersion = "unknown" }
+
 # 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
 #
 # 注意：**不可**比照上方從 GitHub release 下載——ADR-013 明定自源碼建置、不依賴上游
@@ -94,12 +99,33 @@ Say "self-SBOM"
   --exclude './target/**' --exclude './delivery/**' -o cyclonedx-json -q |
   Out-File -Encoding utf8 "$Bundle\cytrace.sbom.cdx.json"
 
-# 5) NOTICE
+# 5) NOTICE（theia 段落依**實際是否收進包內**輸出，與 package.sh 等價）
+if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
+  $TheiaNotice = @"
+  - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) - cryptographic asset inventory (CBOM; ADR-013)
+    Built from source (tag v$TheiaVersion), not an upstream release binary.
+    Its dependencies include the following non-Apache-2.0 components:
+      * gitleaks v8 (MIT), gitleaks/go-gitdiff (MIT) - embedded secret detection rules
+      * MPL-2.0 (file-level weak copyleft): hashicorp/golang-lru, hashicorp/go-version,
+        cyphar/filepath-securejoin
+"@
+} else {
+  $TheiaNotice = "  (This bundle does not include the CBOM engine; cytrace --cbom degrades to `"not inventoried`".)"
+}
+
 @"
 CyTrace $Version - Third-party NOTICE
-Bundled Apache-2.0 tools (unmodified): Syft, Grype (Anchore).
+Bundled tools (unmodified):
+  - Syft  (Anchore, Apache-2.0) - SBOM generation
+  - Grype (Anchore, Apache-2.0) - vulnerability matching
+$TheiaNotice
+
 Rust dependency licenses: see cytrace.sbom.cdx.json.
+
 Supply chain: no China-sourced dependencies (e.g. OpenSCA-cli).
+  Scope of this statement: dependency source domains, copyright notices and maintaining
+  organizations; it does not cover the nationality or residence of individual contributors
+  (see ADR-013 "scope of the no-China-sourced rule").
 "@ | Out-File -Encoding utf8 "$Bundle\NOTICE"
 
 # 6) 離線執行 wrapper（固定用包內引擎與 DB、強制離線）

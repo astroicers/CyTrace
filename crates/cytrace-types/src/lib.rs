@@ -157,8 +157,16 @@ pub enum CbomStatus {
     NotRequested,
     /// 指定了，但引擎 binary 不存在（降級，不影響主流程）。
     EngineAbsent,
-    /// 執行或解析失敗；`reason_key` 為 i18n 鍵。
-    Failed { reason_key: String },
+    /// 執行或解析失敗。
+    ///
+    /// `reason_key` 為**純 i18n 鍵**（如 `cbom.err.timeout`），不含散文——
+    /// 黏上中文散文的話 `--lang en-US` 會吐中文，且該字串會寫進 `scan-result.json`
+    /// 並經 API 對外（違反 i18n 雙語強制鐵則）。不可翻譯的細節放 `reason_detail`。
+    Failed {
+        reason_key: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        reason_detail: Option<String>,
+    },
     /// 正常完成（`assets` 可能為空，代表確實沒掃到密碼資產）。
     Completed,
 }
@@ -339,9 +347,10 @@ mod tests {
     fn cbom_status_failed_carries_reason_key() {
         let failed = CbomStatus::Failed {
             reason_key: "cbom.err.stdout_not_json".into(),
+            reason_detail: None,
         };
         match failed {
-            CbomStatus::Failed { reason_key } => {
+            CbomStatus::Failed { reason_key, .. } => {
                 assert_eq!(reason_key, "cbom.err.stdout_not_json")
             }
             _ => panic!("須為 Failed"),

@@ -119,4 +119,23 @@ jobs:
           $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
           & (Join-Path $b.FullName "bin\cytrace.exe") --version
+      # NOTICE 與包內實際內容必須一致——否則會出一個授權聲明不實的交付包（ADR-013）
+      - name: NOTICE 與包內引擎一致
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $notice = Get-Content (Join-Path $b.FullName "NOTICE") -Raw
+          if (-not ($notice -match "does not cover the nationality")) {
+            throw "NOTICE 缺少禁中國來源宣告的涵蓋範圍註記"
+          }
+          if (Test-Path (Join-Path $b.FullName "bin\cbomkit-theia.exe")) {
+            foreach ($t in @("CBOMkit-theia","MPL-2.0","gitleaks")) {
+              if (-not ($notice -match [regex]::Escape($t))) { throw "包內含 theia 但 NOTICE 缺 $t" }
+            }
+          } else {
+            if (-not ($notice -match "does not include the CBOM engine")) {
+              throw "包內無 theia 但 NOTICE 未明示"
+            }
+          }
+          Write-Host "NOTICE 與包內引擎一致"
           Write-Host "OK package: $($b.Name)"

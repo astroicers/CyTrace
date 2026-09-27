@@ -219,5 +219,17 @@
       "not_applicable": "Not applicable",
       "unknown": "Undetermined"
     }
+  },
+  "cbom": {
+    "err": {
+      "target_not_local": "Target is not a readable local path; refusing to pass it to the engine: {{target}}",
+      "target_unreadable": "Target is not readable: {{target}}",
+      "target_not_archive": "Not a tar/gzip archive; refusing to treat it as an image: {{target}}",
+      "timeout": "Engine timed out after {{secs}}s and was terminated; the target may contain a named pipe or special file",
+      "empty_output": "Engine produced no output — this is not \"zero assets\"",
+      "stdout_not_json": "Engine output is not valid JSON",
+      "not_cyclonedx": "Engine output is not a CycloneDX BOM",
+      "engine": "Engine error"
+    }
   }
 }

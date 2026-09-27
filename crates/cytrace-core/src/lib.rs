@@ -96,6 +96,22 @@ fn unreadable_count_inner(
     n
 }
 
+/// 清點 stdout 中的**私鑰**資產數（與引擎自承的「private key」同量綱）。
+pub fn modelled_key_count(assets: &[cytrace_types::CryptoAsset]) -> u64 {
+    assets
+        .iter()
+        .filter(|a| a.primitive.as_deref() == Some("private-key"))
+        .count() as u64
+}
+
+/// 清點 stdout 中的**憑證**資產數（與引擎自承的「certificate」同量綱）。
+pub fn modelled_cert_count(assets: &[cytrace_types::CryptoAsset]) -> u64 {
+    assets
+        .iter()
+        .filter(|a| a.asset_type == "certificate")
+        .count() as u64
+}
+
 /// 執行 CBOM 掃描並組成 [`cytrace_types::CryptoInventory`]（ADR-013 決策 4）。
 ///
 /// **永不回傳錯誤**——CBOM 的任何問題都只反映在 `status`，不中止 SBOM / CVE 主流程：
@@ -121,8 +137,17 @@ pub fn collect_cbom_with_raw(
     // 解析失敗不得把已算出的漏檢成因歸零——那是操作員唯一的處置線索
     // （唯一的資產可能就在那個被略過的 CA bundle 裡）。
     let failed = |e: CytraceError, oversize: u64| CryptoInventory {
-        status: CbomStatus::Failed {
-            reason_key: e.to_string(),
+        status: match &e {
+            // 純鍵 + 細節分開存，供呼叫端依語系渲染
+            CytraceError::Cbom { key, detail } => CbomStatus::Failed {
+                reason_key: (*key).to_string(),
+                reason_detail: detail.clone(),
+            },
+            // 其他錯誤型別沒有對應鍵，以通用鍵承接並把訊息放細節
+            other => CbomStatus::Failed {
+                reason_key: "cbom.err.engine".to_string(),
+                reason_detail: Some(other.to_string()),
+            },
         },
         assets: Vec::new(),
         unscanned_oversize: oversize,
@@ -147,7 +172,15 @@ pub fn collect_cbom_with_raw(
     let inv = match parse::parse_cbom(&raw.json) {
         Ok(assets) => CryptoInventory {
             status: CbomStatus::Completed,
-            unscanned_undetermined: raw.admitted.saturating_sub(assets.len() as u64),
+            // **分類別**對帳：自承私鑰數扣建模私鑰數、自承憑證數扣建模憑證數。
+            // 跨類別相減會讓混合資產目標抵銷成 0（第五輪複審實測）。
+            unscanned_undetermined: engine::undetermined_count(
+                raw.admitted_keys,
+                modelled_key_count(&assets),
+            ) + engine::undetermined_count(
+                raw.admitted_certs,
+                modelled_cert_count(&assets),
+            ),
             assets,
             // 兩種靜默漏檢都要計入，否則 unscanned_count=0 會讓量子閘門回報假 Pass：
             //   1. 權限不足：dir 模式下 theia 讀不到的檔案被無聲跳過（image 模式讀 layer，不適用）
