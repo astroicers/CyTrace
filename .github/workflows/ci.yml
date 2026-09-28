@@ -113,6 +113,24 @@ jobs:
           fi
       - name: build console SPA
         run: cd frontend && pnpm build:console
+      # 契約測試與渲染檢查讀的是 frontend/src/*.ts，**出貨的是 commit 進 repo 的產物**
+      # （rust-embed 內嵌 report-template.html 與 assets/console/）。改了 src 卻忘了重產，
+      # 所有檢查照樣全綠，而交付的是舊邏輯——與本分支一路修的病灶同型：
+      # 「檢查一份東西、出貨另一份東西」（第十輪複審待補證據 3）。
+      # 故在此比對重建產物與 commit 版本；不符即紅並指出要跑哪個 target。
+      - name: 產物與源碼同步（rust-embed 內嵌的是 commit 版本）
+        run: |
+          cp frontend/dist/index.html crates/cytrace-report/assets/report-template.html
+          rm -rf crates/cytrace-server/assets/console
+          mkdir -p crates/cytrace-server/assets/console
+          cp -r frontend/dist-console/. crates/cytrace-server/assets/console/
+          if ! git diff --quiet -- crates/cytrace-report/assets crates/cytrace-server/assets; then
+            echo "✗ 內嵌產物與前端源碼不同步——改了 frontend/src 卻沒重產產物。"
+            echo "  修法：make frontend && make frontend-console，然後把產物一併 commit。"
+            git diff --stat -- crates/cytrace-report/assets crates/cytrace-server/assets
+            exit 1
+          fi
+          echo "✓ 內嵌產物與源碼一致"
       - name: console 零外連自檢
         run: bash scripts/console-egress-check.sh frontend/dist-console
 

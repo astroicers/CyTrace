@@ -222,6 +222,15 @@ mod tests {
                     detail: Some("600".into()),
                 },
             ),
+            // detail 可為空的**可達**輸入：少了它，下面那條「detail 可空但 i18n_key
+            // 必須自帶成因」的斷言在本測試裡一次都沒有輸入可驗（第十輪複審）
+            (
+                "Cbom-no-detail",
+                CytraceError::Cbom {
+                    key: "cbom.err.empty_output",
+                    detail: None,
+                },
+            ),
         ];
 
         for (name, err) in cases {
@@ -246,6 +255,8 @@ mod tests {
                 "{name}: detail 不得是裸 i18n 鍵：{}",
                 je.detail
             );
+            // detail 為空是合法的（`empty_output` 本就沒有可帶出的細節）；
+            // 此時成因必須完全由 i18n_key 承擔，下面那條斷言即為此。
             // 刻意不斷言 detail 非空：`Cbom { key: "cbom.err.empty_output", detail: None }`
             // 是可達狀態，經 `unwrap_or_default()` 就是空字串（同檔下一支測試正是斷言它為 ""）。
             // 原本這裡寫 `assert!(!je.detail.is_empty())`，對所選輸入恆真、且與那條規範

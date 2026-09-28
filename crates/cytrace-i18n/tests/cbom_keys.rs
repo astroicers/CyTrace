@@ -71,8 +71,9 @@ fn keys_requiring_vars_actually_use_them() {
 /// `frontend/src/cbom.ts` 成為 `Catalog::render_cbom` 的第二份實作——
 /// 「兩邊各寫一份，就會有一邊先退化」正是第六輪 finding A/B/C 的成因。
 ///
-/// 本測試是承接那個風險的唯一機制：任一側新增／刪除／改名 CBOM 錯誤鍵而另一側
-/// 沒跟上，就在此轉紅。沿用 `cytrace-types` 序列化契約測試的手法（讀對側檔案比對），
+/// 本測試承接該風險的一半：任一側新增／刪除／改名 CBOM 錯誤鍵而另一側沒跟上，
+/// 就在此轉紅。另一半由 `key_lists_are_derived_from_the_catalog_not_hand_copied`
+/// 承接（它以 catalog 為事實源，涵蓋「兩側同時漏掉同一個鍵」這種本測試看不見的情形）。沿用 `cytrace-types` 序列化契約測試的手法（讀對側檔案比對），
 /// 因為前端無測試框架，而為此引入 vitest 會多一個要離線建置與審授權的依賴。
 #[test]
 fn frontend_cbom_key_list_matches_this_one() {
@@ -263,15 +264,18 @@ fn key_lists_are_derived_from_the_catalog_not_hand_copied() {
     );
 }
 
-/// 每個鍵的文案所用的佔位符，必須是規則指派給它的那一個。
+/// 每個鍵的文案所用的佔位符，必須是規則指派給它的那一個；**且規則指派 `secs` 的鍵，
+/// 其文案必須真的含 `{{secs}}`**（雙向）。
 ///
-/// 規則是「`cbom.err.timeout` 用 `{{secs}}`，其餘用 `{{target}}`」。新增
-/// `cbom.err.drain_timeout` 時文案用了 `{{secs}}`，但它不是 `timeout`，於是規則指派
-/// `target` → 原文不含 `{{target}}` → 走括號分支 → **`{{secs}}` 原樣印給使用者**
+/// 規則的事實源是 [`cytrace_i18n::var_for_cbom_key`]（`SECS_KEYS` 明表）。新增
+/// `cbom.err.drain_timeout` 時文案用了 `{{secs}}`，而當時的規則是「只有
+/// `cbom.err.timeout` 用 secs」的單一比較，於是它拿到 `target` → 原文不含
+/// `{{target}}` → 走括號分支 → **`{{secs}}` 原樣印給使用者**
 /// （第九輪複審實測；第六輪已修過一次的同一個畫面，這次在 Rust 側）。
 ///
-/// 比對「文案裡實際出現的佔位符」與「規則指派的變數名」，是唯一能在新增鍵時
-/// 當場攔住這件事的檢查——逐鍵手寫期望值的測試只會跟著漏。
+/// **反空轉**：`found` 為空時內層迴圈零斷言。9 鍵中有 4 鍵文案本就無佔位符，
+/// 更要命的是若 `{{`/`}}` 語法哪天改變，抽取對所有鍵都落空、這支測試 100% 空轉而恆綠
+/// （第十輪複審）。故在迴圈外斷言抽到的佔位符總數，並比對「應該有佔位符的鍵」數量。
 #[test]
 fn every_message_uses_the_placeholder_its_rule_assigns() {
     for (lang, raw) in [
@@ -284,6 +288,8 @@ fn every_message_uses_the_placeholder_its_rule_assigns() {
             .and_then(|c| c.get("err"))
             .and_then(|e| e.as_object())
             .expect("應有 cbom.err");
+        let mut total_placeholders = 0usize;
+        let mut secs_keys_seen = 0usize;
         for (short, val) in errs {
             let key = format!("cbom.err.{short}");
             let text = val.as_str().expect("文案應為字串");
@@ -295,6 +301,7 @@ fn every_message_uses_the_placeholder_its_rule_assigns() {
                 .skip(1)
                 .filter_map(|s| s.split("}}").next())
                 .collect();
+            total_placeholders += found.len();
             for var in &found {
                 assert_eq!(
                     *var, assigned,
@@ -303,6 +310,29 @@ fn every_message_uses_the_placeholder_its_rule_assigns() {
                      文案：{text}"
                 );
             }
+            // 反方向：規則說這個鍵吃秒數，文案就必須真的留一個 {{secs}} 的位置，
+            // 否則細節只能走括號分支，使用者看到的是「…（600）」而非「逾時 600 秒」。
+            if assigned == "secs" {
+                secs_keys_seen += 1;
+                assert!(
+                    found.contains(&"secs"),
+                    "{lang} {key} 被規則指派 secs，但文案沒有 {{{{secs}}}} 的位置。\n\
+                     文案：{text}"
+                );
+            }
         }
+        // 反空轉：抽取失效時上面每一圈都是零斷言，整支測試恆綠
+        assert!(
+            total_placeholders >= 5,
+            "{lang}：只抽到 {total_placeholders} 個佔位符——\
+             `{{{{`/`}}}}` 語法或抽取邏輯可能已變，斷言在空轉"
+        );
+        assert_eq!(
+            secs_keys_seen,
+            cytrace_i18n::SECS_KEYS.len(),
+            "{lang}：catalog 裡被指派 secs 的鍵有 {secs_keys_seen} 個，\
+             但 SECS_KEYS 有 {} 個——兩者必須一一對應",
+            cytrace_i18n::SECS_KEYS.len()
+        );
     }
 }

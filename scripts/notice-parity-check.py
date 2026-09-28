@@ -78,6 +78,9 @@ PS1_BLOCKS = [
     # @" … "@ | Out-File … NOTICE
     (r'@"\nCyTrace ', r'\n"@ \| Out-File'),
 ]
+# ps1 側**刻意**允許 `"`（與 SH_INLINE 的 `[^"\n]*` 不同）：`package.ps1` 的該行
+# 以 `` `" `` 跳脫引號，收窄成 `[^"\n]*` 會讓它抽不到。這個不對稱是必要的，別順手統一。
+# （收窄為 `[^\n]*` 對 ps1 其實是 no-op：extract 用 re.M 而非 re.S，`.` 本就不跨行。）
 PS1_INLINE = r"^\s*\$TheiaNotice = \"([^\n]*)\"\s*$"
 
 
@@ -103,42 +106,58 @@ def extract(text: str, blocks, inline_pat: str) -> tuple[str, int, int]:
     return "\n".join(parts), block_hits, inline_hits
 
 
-def combos_of(notice: str, which: str) -> dict[str, str]:
-    """把抽出的 NOTICE 拆成兩種**實際會出貨的組合**。
+def combos_of(src: str, which: str) -> tuple[dict[str, str], list[str]]:
+    """把腳本原文拆成兩種**實際會出貨的 NOTICE 組合**，並回報重建本身的問題。
 
     NOTICE 的內容依「包內是否含 theia」而不同：含 theia 走 here-doc 條件段，
-    不含則走單行的降級說明。抽取把兩者併成一個 blob，於是「條件段裡的聲明在
-    WITHOUT_CBOM 的包中缺席」驗不出來（第九輪複審 finding 5）。
-    這裡以區段來源重建兩種組合：主體對兩者皆適用，條件段各自只屬於一種。
+    不含則走單行的降級說明。把兩者併成一個 blob 來驗，「條件段裡的聲明在
+    WITHOUT_CBOM 的包中缺席」就驗不出來（第九輪複審 finding 5）。
+
+    **吃傳入的 `src`，不自己讀檔**：初版簽章收 `notice` 卻完全不用、改讀
+    `SH.read_text()`，於是 `load()` 抽出來的東西不是 `check()` 驗的東西，
+    而故障注入改寫過的原文也到不了這裡（第十輪複審 finding 5）。
+
+    **重建失效要回報**：任一區段抓不到就回空字串的話，該組合會少料而看起來只是
+    「缺某一列」，讀者無從分辨是聲明真的缺、還是重建壞了（同輪 finding 4）。
     """
     if which == "sh":
-        theia_block = re.search(
-            SH_BLOCKS[0][0] + r"(.*?)" + SH_BLOCKS[0][1], SH.read_text(encoding="utf-8"), re.S
-        )
-        body = re.search(
-            SH_BLOCKS[1][0] + r"(.*?)" + SH_BLOCKS[1][1], SH.read_text(encoding="utf-8"), re.S
-        )
-        inline = re.search(SH_INLINE, SH.read_text(encoding="utf-8"), re.M)
+        blocks, inline_pat, name = SH_BLOCKS, SH_INLINE, "package.sh"
     else:
-        src = PS1.read_text(encoding="utf-8")
-        theia_block = re.search(PS1_BLOCKS[0][0] + r"(.*?)" + PS1_BLOCKS[0][1], src, re.S)
-        body = re.search(PS1_BLOCKS[1][0] + r"(.*?)" + PS1_BLOCKS[1][1], src, re.S)
-        inline = re.search(PS1_INLINE, src, re.M)
+        blocks, inline_pat, name = PS1_BLOCKS, PS1_INLINE, "package.ps1"
+
+    problems = []
+    theia_block = re.search(blocks[0][0] + r"(.*?)" + blocks[0][1], src, re.S)
+    body = re.search(blocks[1][0] + r"(.*?)" + blocks[1][1], src, re.S)
+    # inline 取全部命中，與 extract() 的 finditer 對齊（初版用 re.search 只取第一個）
+    inlines = [m.group(1) for m in re.finditer(inline_pat, src, re.M)]
+
+    if theia_block is None:
+        problems.append(f"{name}：{MARK_COMBO} 抓不到 theia 條件段")
+    if body is None:
+        problems.append(f"{name}：{MARK_COMBO} 抓不到 NOTICE 主體")
+    if not inlines:
+        problems.append(f"{name}：{MARK_COMBO} 抓不到 theia 缺席時的單行說明")
+
     b = body.group(1) if body else ""
-    return {
-        THEIA_ONLY: b + "\n" + (theia_block.group(1) if theia_block else ""),
-        NO_THEIA_ONLY: b + "\n" + (inline.group(1) if inline else ""),
-    }
+    return (
+        {
+            THEIA_ONLY: b + "\n" + (theia_block.group(1) if theia_block else ""),
+            NO_THEIA_ONLY: b + "\n" + "\n".join(inlines),
+        },
+        problems,
+    )
 
 
-def check(sh_notice: str, ps1_notice: str) -> list[str]:
+def check() -> list[str]:
     """回傳缺漏清單（空清單 = 通過）。
 
     對**兩種實際產出組合**各驗一次，而非驗兩者的聯集。
     """
     missing = []
-    sh_combos = combos_of(sh_notice, "sh")
-    ps1_combos = combos_of(ps1_notice, "ps1")
+    sh_combos, sh_problems = combos_of(SH.read_text(encoding="utf-8"), "sh")
+    ps1_combos, ps1_problems = combos_of(PS1.read_text(encoding="utf-8"), "ps1")
+    missing.extend(sh_problems)
+    missing.extend(ps1_problems)
     for label, sh_pat, ps1_pat, scope in REQUIRED:
         for combo in (THEIA_ONLY, NO_THEIA_ONLY):
             if scope not in (ALWAYS, combo):
@@ -158,6 +177,7 @@ MARK_SECTION_COUNT = "只抽到"
 MARK_OVER_WIDE = "抽取範圍過寬"
 MARK_EMPTY = "抽取為空"
 MARK_INLINE = "單行 NOTICE 抽不到"
+MARK_COMBO = "產出組合重建失效"
 
 
 def notice_of(
@@ -299,14 +319,52 @@ def verify_sentinels() -> int:
         _, problems = notice_of(no_inline_sh, "sh")
         expect("sh 單行 NOTICE 賦值改名", problems, MARK_INLINE)
 
+    # (5) 產出組合重建失效 → combos_of 的結構性檢查。
+    #     `--verify-sentinels` 原本在 check() 之前 return，四組注入一次都沒經過
+    #     combos_of 與 scope 欄——本輪唯一沒有哨兵的新機制（第十輪複審 finding 4）。
+    for which, src, old_mark, new_mark, what in [
+        ("sh", sh_src, "<<THEIA\n", "<<THEIA_X\n", "theia 條件段"),
+        ("sh", sh_src, 'cat > "$BUNDLE/NOTICE" <<NOTICE', 'cat > "$BUNDLE/NOTICE" <<EOF', "NOTICE 主體"),
+        ("ps1", ps1_src, '$TheiaNotice = @"', "$TheiaNotice = @'", "theia 條件段"),
+    ]:
+        if old_mark not in src:
+            failures.append(f"{which}：組合注入用的標記 {old_mark!r} 不在腳本裡，注入無效")
+            continue
+        _, problems = combos_of(src.replace(old_mark, new_mark, 1), which)
+        expect(f"{which} {what}抓不到", problems, MARK_COMBO)
+
+    # (6) scope 欄有效：把「只屬於不含 theia 的包」那一列移進條件段，
+    #     `check()` 必須指名是哪一種組合缺料。這條直接驗 REQUIRED 的 scope 語意，
+    #     而非只驗 combos_of 的結構。
+    moved = sh_src.replace(
+        'THEIA_NOTICE="  （本包不含 CBOM 引擎',
+        'THEIA_NOTICE_MOVED="  （本包不含 CBOM 引擎',
+        1,
+    )
+    if moved == sh_src:
+        failures.append("sh：scope 注入用的 inline 賦值不在腳本裡，注入無效")
+    else:
+        combos, _ = combos_of(moved, "sh")
+        no_theia = combos[NO_THEIA_ONLY]
+        hit = any(
+            re.search(pat, no_theia)
+            for label, pat, _, scope in REQUIRED
+            if scope == NO_THEIA_ONLY
+        )
+        if hit:
+            failures.append(
+                "sh：移走「不含 CBOM 引擎」那行之後，NO_THEIA 組合裡仍命中該列"
+                "——scope 欄或組合重建沒有把兩種產出分開"
+            )
+
     if failures:
         print("✗ 哨兵無法擋住下列故障：")
         for f in failures:
             print(f"    - {f}")
         return 1
     print(
-        "✓ 哨兵驗證通過（區段數 ×4、抽取過寬 ×2、空值 ×1、inline ×1；"
-        "每組各自斷言該檢查的特徵訊息，不靠別的檢查頂替）"
+        "✓ 哨兵驗證通過（區段數 ×4、抽取過寬 ×2、空值 ×1、inline ×1、"
+        "組合重建 ×3、scope 語意 ×1；每組各自斷言該檢查的特徵訊息，不靠別的檢查頂替）"
     )
     return 0
 
@@ -331,7 +389,7 @@ def main() -> int:
     if args.verify_sentinels:
         return verify_sentinels()
 
-    missing = check(sh_notice, ps1_notice)
+    missing = check()
     if missing:
         print("✗ 兩平台 NOTICE 不對稱——會出授權聲明不實的交付包：")
         for m in missing:

@@ -619,8 +619,12 @@ fn certificate_admitted_count_tracks_the_real_engine() {
     // 這一段的每個 unwrap 都在清理之前，失敗即殘留含未加密私鑰的暫存目錄
     // （第九輪複審 finding：finding J 只修了斷言側，I/O 這側還在）。
     // 以 closure 收束，讓任何失敗都經同一條清理路徑。
-    let bundle_dir = workspace("certbundle");
-    let empty = workspace("certzero");
+    // 三個目錄一次建齊再組清理清單：`workspace()` 內含 `expect("建立暫存目錄")`，
+    // 若它在 cleanup 定義之前 panic，`d`（3 張憑證 + 3 把 -nodes 未加密私鑰）會留在
+    // /tmp 無人收（第十輪複審：上一輪的收束對讀寫成立、對目錄建立不成立）。
+    let bundle_dir =
+        std::env::temp_dir().join(format!("cytrace-real-{}-certbundle", std::process::id()));
+    let empty = std::env::temp_dir().join(format!("cytrace-real-{}-certzero", std::process::id()));
     let dirs = [d.clone(), bundle_dir.clone(), empty.clone()];
     let cleanup = || {
         for dir in &dirs {
@@ -628,6 +632,10 @@ fn certificate_admitted_count_tracks_the_real_engine() {
         }
     };
     let prepared = (|| -> std::io::Result<()> {
+        for dir in [&bundle_dir, &empty] {
+            let _ = fs::remove_dir_all(dir);
+            fs::create_dir_all(dir)?;
+        }
         let mut bundle = Vec::new();
         for i in 1..=3 {
             bundle.extend(fs::read(d.join(format!("c{i}.crt")))?);

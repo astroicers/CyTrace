@@ -91,6 +91,14 @@ fn scanresult_with_crypto_matches_golden_baseline() {
         expected.trim(),
         "CBOM 輸出偏離 golden baseline——若為刻意變更，UPDATE_GOLDEN=1 重產並複核"
     );
+    // 反空轉：`!contains(...)` 這族斷言在 actual 為空時全部恆真。
+    // 先釘住輸出確實有內容與預期結構，那些否定式斷言才有意義（第十輪自盤點）。
+    assert!(
+        actual.contains("\"crypto\"") && actual.contains("\"assets\""),
+        "golden 輸出缺少 crypto/assets 結構——fixture 或組裝可能失效，\
+         下面的否定式斷言會全部恆真：{}",
+        &actual[..actual.len().min(200)]
+    );
     assert!(
         !actual.contains("PRIVATE KEY"),
         "NFR-09：golden 不得含金鑰內容"

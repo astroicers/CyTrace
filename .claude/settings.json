@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Bash(cd /home/ubuntu/CyTrace *)"
+      "Bash(cd /home/ubuntu/CyTrace *)",
+      "Bash(gitleaks detect *)"
     ],
     "deny": [
       "Bash(docker deploy *)",

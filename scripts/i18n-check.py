@@ -50,13 +50,23 @@ KEY_PREFIX = re.compile(rf"`({_NS}(?:\.[a-z0-9_]+)*)\.\$\{{")
 CODE_GLOBS = ("crates/**/*.rs", "frontend/src/**/*.ts", "frontend/src/**/*.tsx")
 
 
-def keys_used_in_code(root: pathlib.Path) -> tuple[set[str], set[str]]:
-    """回傳（字面鍵, 模板前綴）。"""
+def keys_used_in_code(
+    root: pathlib.Path, only_suffix: tuple[str, ...] | str | None = None
+) -> tuple[set[str], set[str]]:
+    """回傳（字面鍵, 模板前綴）。
+
+    `only_suffix` 供反空轉哨兵分別清點 Rust 側與前端側——只有一側有值，
+    代表另一側的 glob 或引號規則壞了，而合併統計看不出來。
+    """
+    if isinstance(only_suffix, str):
+        only_suffix = (only_suffix,)
     keys: set[str] = set()
     prefixes: set[str] = set()
     for pattern in CODE_GLOBS:
         for f in root.glob(pattern):
             if "/tests/" in str(f) or f.name.endswith("_test.rs"):
+                continue
+            if only_suffix and f.suffix not in only_suffix:
                 continue
             text = f.read_text(encoding="utf-8")
             keys |= {m.group(2) for m in key_literal_for(f).finditer(text)}
@@ -83,6 +93,21 @@ def main() -> int:
     # 反向檢查：程式碼引用的鍵必須在 catalog 中
     root = pathlib.Path(__file__).resolve().parent.parent
     used, prefixes = keys_used_in_code(root)
+
+    # **反空轉**：正則或 CODE_GLOBS 一旦失效，`used` 會是空集合，於是
+    # 「程式碼引用 0 鍵皆已定義」——這支檢查會恆綠而什麼都沒驗。
+    # 下限取兩側各自的實測值：Rust 與前端都必須各自抽到鍵，
+    # 只有一側有值代表另一側的 glob 或引號規則壞了（第十輪自盤點）。
+    rs_keys, _ = keys_used_in_code(root, only_suffix=".rs")
+    ts_keys, _ = keys_used_in_code(root, only_suffix=(".ts", ".tsx"))
+    if len(rs_keys) < 20 or len(ts_keys) < 20:
+        ok = False
+        print(
+            f"✗ 反向檢查疑似空轉：Rust 側抽到 {len(rs_keys)} 鍵、前端側 {len(ts_keys)} 鍵"
+            f"（各應有數十個）——KEY_LITERAL 正則或 CODE_GLOBS 可能已失效，"
+            f"此時「皆已定義」這個結論不含資訊"
+        )
+
     undefined = sorted(k for k in used if k not in base)
     if undefined:
         ok = False

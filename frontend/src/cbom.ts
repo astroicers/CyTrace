@@ -41,7 +41,10 @@ export type CbomErrorKey = (typeof CBOM_ERROR_KEYS)[number]
  * （第九輪複審）。**以秒數為細節的鍵不只一個**，故列成明表而非單一比較；
  * 新增鍵時 `every_message_uses_the_placeholder_its_rule_assigns` 會當場攔住不一致。
  */
-const SECS_KEYS: readonly string[] = ['cbom.err.timeout', 'cbom.err.drain_timeout']
+export const SECS_KEYS: readonly string[] = [
+  'cbom.err.timeout',
+  'cbom.err.drain_timeout',
+]
 
 function varNameFor(key: string): 'secs' | 'target' {
   return SECS_KEYS.includes(key) ? 'secs' : 'target'

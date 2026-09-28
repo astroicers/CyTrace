@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { renderCbomFailure } from '../../cbom'
+import { describeJobError } from '../jobError'
 import { api, artifactUrl } from '../api/client'
 import type { JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
@@ -111,27 +111,23 @@ export function JobDetailPage({ id }: { id: string }) {
           <h2 className="text-sm font-semibold text-sev-critical">
             {t('console.job.error_title')}
           </h2>
-          {/* CBOM 失敗的 i18n_key 是 cbom.err.*，其文案含 {{target}}/{{secs}}；
-              用 t() 直接渲染會把佔位符原樣印出，故走與報表同一支 renderCbomFailure。
-              i18n_key 為空或查不到時（t() 會回傳鍵本身）退回顯示 detail 原文——
-              操作員拿到裸鍵或空白都等於沒有訊息（第九輪複審）。 */}
-          <p className="mt-1 text-sm">
-            {(() => {
-              const key = job.error.i18n_key
-              if (key.startsWith('cbom.err.')) {
-                return renderCbomFailure(t, key, job.error.detail, i18n.language)
-              }
-              const msg = key ? t(key) : ''
-              // t() 查不到時回傳鍵本身；那對操作員沒有意義
-              if (!msg || msg === key) return job.error.detail || t('console.common.error')
-              return msg
-            })()}
-          </p>
-          {job.error.detail && !job.error.i18n_key.startsWith('cbom.err.') && (
-            <pre className="mt-2 overflow-x-auto text-xs text-gray-500">
-              {job.error.detail}
-            </pre>
-          )}
+          {/* 訊息與 detail 的分工由 describeJobError 一次決定，`<pre>` 只看它的回報。
+              兩處各判一次必然會不同步——第九輪加退回路徑時 `<p>` 印了 detail、
+              `<pre>` 的守衛沒跟著改，同一段印兩次（第十輪複審），而同一個 commit
+              在 CLI 側正好斷言「細節不得重複出現」。 */}
+          {(() => {
+            const { text, detailConsumed } = describeJobError(job.error, t, i18n.language)
+            return (
+              <>
+                <p className="mt-1 text-sm">{text}</p>
+                {job.error.detail && !detailConsumed && (
+                  <pre className="mt-2 overflow-x-auto text-xs text-gray-500">
+                    {job.error.detail}
+                  </pre>
+                )}
+              </>
+            )
+          })()}
         </div>
       )}
 

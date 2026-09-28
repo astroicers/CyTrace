@@ -525,11 +525,19 @@ mod tests {
             .keys()
             .map(|k| format!("cbom.err.{k}"))
             .collect();
-        assert!(keys.len() >= 8, "抽到 {} 個鍵，疑似抽取失效", keys.len());
+        assert_eq!(
+            keys.len(),
+            cytrace_i18n::SECS_KEYS.len() + 7,
+            "catalog 的 cbom.err.* 鍵數與預期不符（抽到 {}）——抽取失效或鍵集合已變；\n\
+             鍵集合的權威比對在 cytrace-i18n 的 key_lists_are_derived_from_the_catalog",
+            keys.len()
+        );
 
         for lang in ["zh-TW", "en-US"] {
             let cat = Catalog::load(lang);
             for key in &keys {
+                // leak 提到每鍵一次（原本在最內層迴圈，一次 run 洩漏 36 次）
+                let static_key: &'static str = Box::leak(key.clone().into_boxed_str());
                 // 依規則給該鍵一個合適的細節；兩種 detail 形態都要走過
                 let detail = if cytrace_i18n::var_for_cbom_key(key) == "secs" {
                     "600"
@@ -538,7 +546,7 @@ mod tests {
                 };
                 for d in [Some(detail.to_string()), None] {
                     let e = cytrace_core::CytraceError::Cbom {
-                        key: Box::leak(key.clone().into_boxed_str()),
+                        key: static_key,
                         detail: d.clone(),
                     };
                     let out = render_cbom_error(&e, &cat);
