@@ -62,6 +62,13 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            # PR 專用（產出 pr-<n>）：上面三條規則在 pull_request 事件下全部不適用，
+            # 於是 tags 為空 → build 無標籤 → 後續 `docker run --rm "$IMG"` 拿到空字串而失敗
+            #   ##[warning]No Docker image version has been generated. Check tags input.
+            # PR 不 push，標籤只是給本機 load 的 image 一個名字供冒煙使用。
+            # 與 provenance 那條同一個既有缺陷家族：整條 PR 路徑（load → 冒煙）從未跑過，
+            # 因為此 repo 在本分支之前從未開過 PR。
+            type=ref,event=pr
 
       # tag / dispatch 時登入 GHCR（PR 不登入、不 push）
       - name: GHCR login
