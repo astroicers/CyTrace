@@ -124,7 +124,9 @@ jobs:
           rm -rf crates/cytrace-server/assets/console
           mkdir -p crates/cytrace-server/assets/console
           cp -r frontend/dist-console/. crates/cytrace-server/assets/console/
-          if ! git diff --quiet -- crates/cytrace-report/assets crates/cytrace-server/assets; then
+          # `git diff` 看不見**未追蹤**的新檔：產物多出一個沒被 index.html 參照的檔案時
+          # 會靜默通過，而交件包內嵌的 assets/ 缺它（第十一輪複審 finding F）。
+          if [ -n "$(git status --porcelain --untracked-files=all -- crates/cytrace-report/assets crates/cytrace-server/assets)" ]; then
             echo "✗ 內嵌產物與前端源碼不同步——改了 frontend/src 卻沒重產產物。"
             echo "  修法：make frontend && make frontend-console，然後把產物一併 commit。"
             git diff --stat -- crates/cytrace-report/assets crates/cytrace-server/assets

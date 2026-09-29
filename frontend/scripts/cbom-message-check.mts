@@ -47,8 +47,36 @@ await i18n.init({
   interpolation: { escapeValue: false },
 })
 
+/**
+ * `job_error_of`（crates/cytrace-server/src/jobs/runner.rs）實際會產出的 `server.err.*`。
+ * 手挑幾個鍵的話，替 `server.err.*` 文案加佔位符不會被任何檢查擋到
+ * ——`every_message_uses_...` 只涵蓋 `cbom.err.*`（第十一輪複審 finding H）。
+ */
+const SERVER_ERR_KINDS = ['engine', 'parse', 'io', 'config', 'db_missing'] as const
+
+const CONSOLE_CASES: Array<{ label: string; i18n_key: string; detail?: string | null }> = [
+  { label: 'CBOM 成因', i18n_key: 'cbom.err.timeout', detail: '600' },
+  { label: 'CBOM 無細節', i18n_key: 'cbom.err.empty_output', detail: null },
+  ...SERVER_ERR_KINDS.map((k) => ({
+    label: `server.err.${k}`,
+    i18n_key: `server.err.${k}`,
+    detail: 'exit 2: boom',
+  })),
+  { label: '查不到的鍵', i18n_key: 'server.err.no_such_key', detail: '/var/lib/x' },
+  { label: '空鍵 + 有細節', i18n_key: '', detail: '/var/lib/x' },
+  { label: '空鍵 + 無細節', i18n_key: '', detail: null },
+]
+
 const problems: string[] = []
 let checked = 0
+let consoleChecked = 0
+
+// SECS_KEYS 為空時 `SECS_KEYS[0]` 是 undefined，「undefined 細節」那個邊界案
+// 會改去驗 cbom.err.engine 而仍然綠——判別力流失（第十一輪複審 finding J）。
+if (SECS_KEYS.length === 0) {
+  console.error('✗ SECS_KEYS 為空——以秒數為細節的邊界案會在空轉')
+  process.exit(1)
+}
 
 function check(label: string, out: string, expect: { detail?: string; lng: string }) {
   checked++
@@ -112,22 +140,19 @@ for (const lng of ['zh-TW', 'en-US']) {
 for (const lng of ['zh-TW', 'en-US']) {
   await i18n.changeLanguage(lng)
   const t = i18n.t.bind(i18n) as TFunction
-  const cases: Array<{ label: string; i18n_key: string; detail?: string | null }> = [
-    { label: 'CBOM 成因', i18n_key: 'cbom.err.timeout', detail: '600' },
-    { label: 'CBOM 無細節', i18n_key: 'cbom.err.empty_output', detail: null },
-    { label: '一般錯誤', i18n_key: 'server.err.engine', detail: 'exit 2: boom' },
-    { label: '查不到的鍵', i18n_key: 'server.err.no_such_key', detail: '/var/lib/x' },
-    { label: '空鍵 + 有細節', i18n_key: '', detail: '/var/lib/x' },
-    { label: '空鍵 + 無細節', i18n_key: '', detail: null },
-  ]
-  for (const c of cases) {
+  for (const c of CONSOLE_CASES) {
     checked++
+    consoleChecked++
     const { text, detailConsumed } = describeJobError(c, t, lng)
     const label = `${lng} console ${c.label}`
     if (!text) problems.push(`${label}: 訊息為空——操作員看不到任何成因`)
     if (text.includes('{{')) problems.push(`${label}: 殘留佔位符 → ${text}`)
-    if (text.startsWith('cbom.err.') || text.startsWith('server.err.'))
-      problems.push(`${label}: 顯示裸鍵 → ${text}`)
+    // 裸鍵判定不列命名空間白名單：第三個命名空間出現時會靜默逃逸
+    // （第十一輪複審 finding I）。改以「顯示文字就是那個鍵」與 i18n 鍵形態判定。
+    if (text === c.i18n_key && c.i18n_key !== '')
+      problems.push(`${label}: 顯示裸鍵（文字等於 i18n_key）→ ${text}`)
+    if (/^[a-z][a-z0-9_]*(\.[a-z0-9_]+){2,}$/.test(text.trim()))
+      problems.push(`${label}: 顯示疑似裸 i18n 鍵 → ${text}`)
     // detail 被訊息用掉時，<pre> 不得再印一次
     if (c.detail && detailConsumed && !text.includes(c.detail))
       problems.push(`${label}: 宣告 detail 已用掉，但訊息裡沒有它 → ${text}`)
@@ -138,13 +163,28 @@ for (const lng of ['zh-TW', 'en-US']) {
   }
 }
 
-// 反空轉：import 成功但清單為空、或迴圈沒跑到，`problems` 也會是空的而看似通過。
-// 案例數有下限才代表真的驗過東西（第十輪自盤點）。
-const MIN_CASES = 30
-if (checked < MIN_CASES) {
+// 反空轉：import 成功但清單為空、或某個迴圈沒跑到，`problems` 也會是空的而看似通過。
+//
+// **下限由組成推導且分段**：初版寫死 `MIN_CASES = 30`，而報表側恰好就是 30
+// （9 鍵 + 6 邊界）× 2 語系 = 30，於是整個 console 段對這個哨兵的貢獻是零——
+// 把 console 迴圈整段刪掉，`checked` 仍是 30、`30 < 30` 為 false、仍然 exit 0。
+// 本輪唯一為新機制加的反空轉下限，恰好保護不到那個新機制（第十一輪複審 finding A，
+// 實測確認：刪掉 console 迴圈後 exit 0）。
+const LANGS = 2
+const REPORT_MIN = (CBOM_ERROR_KEYS.length + 6) * LANGS
+const CONSOLE_MIN = CONSOLE_CASES.length * LANGS
+const reportChecked = checked - consoleChecked
+if (reportChecked < REPORT_MIN) {
   console.error(
-    `✗ 只跑了 ${checked} 個案例（應 ≥ ${MIN_CASES}）——鍵清單或迴圈可能失效，` +
-      `此時「檢查通過」這個結論不含資訊`,
+    `✗ 報表側只跑了 ${reportChecked} 個案例（應 ≥ ${REPORT_MIN}）——` +
+      `鍵清單或迴圈可能失效，此時「檢查通過」這個結論不含資訊`,
+  )
+  process.exit(1)
+}
+if (consoleChecked < CONSOLE_MIN) {
+  console.error(
+    `✗ console 側只跑了 ${consoleChecked} 個案例（應 ≥ ${CONSOLE_MIN}）——` +
+      `顯示分工的檢查可能已失效`,
   )
   process.exit(1)
 }

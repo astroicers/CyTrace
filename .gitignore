@@ -32,3 +32,4 @@ dist-console/
 Thumbs.db
 .asp-managed-deny.json
 frontend/pnpm-workspace.yaml
+__pycache__/

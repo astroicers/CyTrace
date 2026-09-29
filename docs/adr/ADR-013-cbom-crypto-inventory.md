@@ -332,7 +332,8 @@ stderr 出現 `failed to get image descriptor from registry: Get "https://index.
 | 抽不到引擎輸出即失敗 | `recv_timeout` 的 `Err` 不得被吞成空 buffer——否則 `skipped` / `admitted_*` 歸零、閘門對沒掃完的目標回 Pass | `drain_or_fail` + 四支單元測試（永不送值的 channel、已就緒、真的空、reader 掛掉）＋ real_engine 案例 14 釘住正常路徑確實抽到 stderr | 每次 CI |
 | `detail = None` 不漏佔位符 | 兩側同規則插 `?`；`reason_detail` 序列化時可省略，故此狀態實際可達 | `none_detail_never_leaks_placeholders`（8 鍵 × 2 語系） | 每次 CI |
 | 未知鍵兩側同規則 | 一律回退 `cbom.err.engine` 並保留細節，不得把裸鍵印給交件對象 | `unknown_keys_fall_back_instead_of_printing_the_raw_key` | 每次 CI |
-| NOTICE 哨兵自身有效 | **六**個結構性檢查（區段數、抽取過寬、空值、inline、組合重建、scope 語意）**各自**都有會紅的哨兵，每組斷言該檢查的特徵訊息而非「有任何問題」 | 實測逐一拿掉四個檢查，哨兵四次皆轉紅。前一版只斷言「有問題」，實測拿掉 OUTSIDE 迴圈或空值檢查**仍為 exit 0**（第九輪複審 finding 3/4），因為同一輸入會觸發別的檢查而互相頂替 | 每次 CI（亦在 `make lint`） |
+| NOTICE 哨兵自身有效 | 六個結構性檢查（區段數、抽取過寬、空值、inline、組合重建、scope 語意）**各自**都有會紅的哨兵，每組斷言該檢查的特徵訊息而非「有任何問題」 | **逐一拿掉六個檢查，六次皆轉紅**（2026-09-28 實測）。此前該列宣稱「六個」而 evidence 只有四個的實測，其中兩條經實測判別力為零：`inline` 沒有任何注入單獨對到它、`scope` 那組從未呼叫 `check()`（第十一輪複審 finding B/C/D，皆先實測確認再修）。更早的「逐列變異」版本其通過條件恆等於正常執行 | 每次 CI（亦在 `make lint`） |
+| 反空轉下限須貼近實值 | 下限遠低於實值時只抓得到「整組失效」，抓不到「部分退化」 | `i18n-check.py` 由 20/20 收到 34/80（實值 48/116，留約三成緩衝）並印出兩側實值；實測讓前端正則只認雙引號 → 前端側 0 鍵、轉紅。`cbom-message-check.mts` 的下限改由組成推導並**分段**（報表側／console 側各一），實測刪掉 console 迴圈 → 報「console 側只跑了 0 個案例」 | 每次 CI |
 | NOTICE 按**產出組合**驗 | 對「含 theia」與「不含 theia」兩種實際 NOTICE 各驗一次，而非驗兩者聯集 | 實測把 Apache-2.0 §4(b) 聲明移回 theia 條件段，檢查精確指出「不含 theia 的包」缺該兩列 | 每次 CI |
 | 鍵清單由 catalog 推導 | `cbom.err.*` 的三處清單（Rust 測試、前端、CLI 測試）不得手抄，須與 catalog 的命名空間逐鍵相符 | `key_lists_are_derived_from_the_catalog_not_hand_copied`；本測試在加入前是**紅的**——第八輪新增 `drain_timeout` 時三處全漏，於是前端回退成「引擎錯誤」、成因靜默消失，而契約測試比的是兩份都漏的手抄清單（第九輪複審 blocker 1） | 每次 CI |
 | 文案佔位符與規則一致 | catalog 中每個鍵的文案所用佔位符，必須是變數名規則指派給它的那一個 | `every_message_uses_the_placeholder_its_rule_assigns`；本測試在加入前是**紅的**——`drain_timeout` 文案用 `{{secs}}` 而規則給 `target`，`{{secs}}` 原樣印給使用者（第九輪複審 blocker 2，第六輪修過的同一個畫面） | 每次 CI |

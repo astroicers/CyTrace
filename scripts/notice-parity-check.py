@@ -19,6 +19,7 @@
 `--verify-sentinels` 對它們做故障注入。
 """
 import argparse
+import pathlib
 import re
 import sys
 from pathlib import Path
@@ -148,14 +149,16 @@ def combos_of(src: str, which: str) -> tuple[dict[str, str], list[str]]:
     )
 
 
-def check() -> list[str]:
+def check(sh_path: pathlib.Path | None = None, ps1_path: pathlib.Path | None = None) -> list[str]:
     """回傳缺漏清單（空清單 = 通過）。
 
     對**兩種實際產出組合**各驗一次，而非驗兩者的聯集。
     """
     missing = []
-    sh_combos, sh_problems = combos_of(SH.read_text(encoding="utf-8"), "sh")
-    ps1_combos, ps1_problems = combos_of(PS1.read_text(encoding="utf-8"), "ps1")
+    # 路徑可覆寫只為故障注入（--verify-sentinels）：讓 check() 對改寫過的腳本真的跑一遍，
+    # 而不是由哨兵自己複製一份判定（第十一輪複審 finding B）。
+    sh_combos, sh_problems = combos_of((sh_path or SH).read_text(encoding="utf-8"), "sh")
+    ps1_combos, ps1_problems = combos_of((ps1_path or PS1).read_text(encoding="utf-8"), "ps1")
     missing.extend(sh_problems)
     missing.extend(ps1_problems)
     for label, sh_pat, ps1_pat, scope in REQUIRED:
@@ -326,6 +329,11 @@ def verify_sentinels() -> int:
         ("sh", sh_src, "<<THEIA\n", "<<THEIA_X\n", "theia 條件段"),
         ("sh", sh_src, 'cat > "$BUNDLE/NOTICE" <<NOTICE', 'cat > "$BUNDLE/NOTICE" <<EOF', "NOTICE 主體"),
         ("ps1", ps1_src, '$TheiaNotice = @"', "$TheiaNotice = @'", "theia 條件段"),
+        # combos_of 的第三條檢查（`if not inlines`）原本沒有任何注入單獨對到它
+        # ——不是互相頂替，是**沒有人打**（第十一輪複審 finding C，實測刪掉該檢查
+        # 後哨兵仍 exit 0）。
+        ("sh", sh_src, 'THEIA_NOTICE="  （本包不含', 'X_NOTICE="  （本包不含', "單行說明"),
+        ("ps1", ps1_src, "$TheiaNotice = \"  (This bundle", "$TheiaNoticeX = \"  (This bundle", "單行說明"),
     ]:
         if old_mark not in src:
             failures.append(f"{which}：組合注入用的標記 {old_mark!r} 不在腳本裡，注入無效")
@@ -333,29 +341,28 @@ def verify_sentinels() -> int:
         _, problems = combos_of(src.replace(old_mark, new_mark, 1), which)
         expect(f"{which} {what}抓不到", problems, MARK_COMBO)
 
-    # (6) scope 欄有效：把「只屬於不含 theia 的包」那一列移進條件段，
-    #     `check()` 必須指名是哪一種組合缺料。這條直接驗 REQUIRED 的 scope 語意，
-    #     而非只驗 combos_of 的結構。
-    moved = sh_src.replace(
-        'THEIA_NOTICE="  （本包不含 CBOM 引擎',
-        'THEIA_NOTICE_MOVED="  （本包不含 CBOM 引擎',
-        1,
-    )
-    if moved == sh_src:
-        failures.append("sh：scope 注入用的 inline 賦值不在腳本裡，注入無效")
-    else:
-        combos, _ = combos_of(moved, "sh")
-        no_theia = combos[NO_THEIA_ONLY]
-        hit = any(
-            re.search(pat, no_theia)
-            for label, pat, _, scope in REQUIRED
-            if scope == NO_THEIA_ONLY
+    # (6) scope 欄有效：**現況下** check() 不得把「只屬於含 theia 的包」那幾列
+    #     報成「不含 theia 的包」缺料。scope 過濾一旦失效，那三列立刻對 NO_THEIA
+    #     組合報缺 → 本哨兵轉紅。
+    #
+    #     初版自行對 REQUIRED 查表、斷言重建字串不命中，名為「scope 語意」卻從未
+    #     觸及 check()（第十一輪複審 finding B）。第二版改為呼叫 check() 但斷言
+    #     方向仍錯：驗「移走某句後 check 會指名」——那件事在 scope 過濾被拿掉時
+    #     **照樣成立**，故實測仍 exit 0。現改為驗 scope 過濾唯一負責的那件事：
+    #     條件段的列不得外溢到另一種組合。
+    theia_only_labels = [label for label, _, _, scope in REQUIRED if scope == THEIA_ONLY]
+    leaked = [
+        m
+        for m in check()
+        if "不含 theia 的包" in m and any(f"「{lab}」" in m for lab in theia_only_labels)
+    ]
+    if leaked:
+        failures.append(
+            f"scope 語意：條件段的列外溢到「不含 theia 的包」組合 → {leaked}"
+            "——scope 欄失效，兩種產出被當成同一份驗"
         )
-        if hit:
-            failures.append(
-                "sh：移走「不含 CBOM 引擎」那行之後，NO_THEIA 組合裡仍命中該列"
-                "——scope 欄或組合重建沒有把兩種產出分開"
-            )
+    if not theia_only_labels:
+        failures.append("scope 語意：REQUIRED 沒有任何 THEIA_ONLY 列，此哨兵在空轉")
 
     if failures:
         print("✗ 哨兵無法擋住下列故障：")
@@ -396,10 +403,17 @@ def main() -> int:
             print(f"    - {m}")
         return 1
 
+    # 報 `check()` **實際比對的對象**的大小，而非 `extract()` 那個 blob——
+    # 第十輪 finding 5（「抽出來的東西不是驗的東西」）修在 combos_of，
+    # 殘留在這行成功訊息上（第十一輪複審 finding K）。
+    sh_combos, _ = combos_of(SH.read_text(encoding="utf-8"), "sh")
+    ps1_combos, _ = combos_of(PS1.read_text(encoding="utf-8"), "ps1")
     print(
         f"✓ NOTICE 對帳通過（{len(REQUIRED)} 項法律必要實體 × 2 平台 × "
-        f"2 種產出組合（含/不含 theia）；比對範圍為 NOTICE 區段 "
-        f"{len(sh_notice)} / {len(ps1_notice)} 字元）"
+        f"2 種產出組合；實際比對 sh "
+        f"{len(sh_combos[THEIA_ONLY])}/{len(sh_combos[NO_THEIA_ONLY])} 字元、ps1 "
+        f"{len(ps1_combos[THEIA_ONLY])}/{len(ps1_combos[NO_THEIA_ONLY])} 字元"
+        f"（含 theia / 不含 theia））"
     )
     return 0
 

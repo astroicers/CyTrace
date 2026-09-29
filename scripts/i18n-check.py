@@ -100,12 +100,17 @@ def main() -> int:
     # 只有一側有值代表另一側的 glob 或引號規則壞了（第十輪自盤點）。
     rs_keys, _ = keys_used_in_code(root, only_suffix=".rs")
     ts_keys, _ = keys_used_in_code(root, only_suffix=(".ts", ".tsx"))
-    if len(rs_keys) < 20 or len(ts_keys) < 20:
+    # 下限**貼近實值**：2026-09-28 實測 Rust 48 / 前端 116。原本各設 20，餘裕 28/96
+    # ——那只抓得到「整組失效」，抓不到「正則部分退化、一半的鍵不再被認出」
+    #（第十一輪複審待補證據 4）。留約三成緩衝供合法的鍵刪減。
+    RS_MIN, TS_MIN = 34, 80
+    if len(rs_keys) < RS_MIN or len(ts_keys) < TS_MIN:
         ok = False
         print(
-            f"✗ 反向檢查疑似空轉：Rust 側抽到 {len(rs_keys)} 鍵、前端側 {len(ts_keys)} 鍵"
-            f"（各應有數十個）——KEY_LITERAL 正則或 CODE_GLOBS 可能已失效，"
-            f"此時「皆已定義」這個結論不含資訊"
+            f"✗ 反向檢查疑似空轉或退化：Rust 側抽到 {len(rs_keys)} 鍵（下限 {RS_MIN}）、"
+            f"前端側 {len(ts_keys)} 鍵（下限 {TS_MIN}）——KEY_LITERAL 正則或 CODE_GLOBS "
+            f"可能已失效，此時「皆已定義」這個結論不含資訊。\n"
+            f"  若為刻意刪鍵，請一併下修此處的下限並在 commit 訊息說明。"
         )
 
     undefined = sorted(k for k in used if k not in base)
@@ -123,7 +128,8 @@ def main() -> int:
     if ok:
         print(
             f"✓ i18n 鍵一致（{len(base)} 個葉鍵 × {len(FILES)} 語系，無缺鍵；"
-            f"程式碼引用 {len(used)} 鍵 + {len(prefixes)} 模板前綴皆已定義）"
+            f"程式碼引用 {len(used)} 鍵（Rust {len(rs_keys)} / 前端 {len(ts_keys)}）"
+            f" + {len(prefixes)} 模板前綴皆已定義）"
         )
         return 0
     return 1

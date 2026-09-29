@@ -97,7 +97,10 @@ fn scanresult_with_crypto_matches_golden_baseline() {
         actual.contains("\"crypto\"") && actual.contains("\"assets\""),
         "golden 輸出缺少 crypto/assets 結構——fixture 或組裝可能失效，\
          下面的否定式斷言會全部恆真：{}",
-        &actual[..actual.len().min(200)]
+        // 字元切片而非位元組：`&actual[..200]` 在非 ASCII 邊界會 panic 成
+        // `byte index 200 is not a char boundary`，讀者看到的是那個 panic 而非
+        // 本斷言的訊息——錯誤路徑上的缺陷（第十一輪複審 finding E）。
+        actual.chars().take(200).collect::<String>()
     );
     assert!(
         !actual.contains("PRIVATE KEY"),

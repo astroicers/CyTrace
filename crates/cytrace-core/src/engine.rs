@@ -678,6 +678,17 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// 序列化所有改動**行程全域 cwd** 的測試。
+    ///
+    /// `std::env::set_current_dir` 是行程層級的，而 `cargo test` 預設多執行緒平行跑：
+    /// 兩個測試交錯設定 cwd 時，`cbom_target("nginx")` 會在對方的目錄裡解析而找不到檔案，
+    /// 回報 `cbom.err.target_not_local`。實測為 flaky——同一份程式碼一次紅、接著連三次綠
+    /// （第十一輪取證時撞到）。
+    ///
+    /// 隨機紅的測試比沒有測試更糟：它會訓練讀者把紅燈解釋成「又是那個 flaky」，
+    /// 於是真的缺陷也被同一句話蓋過去。
+    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // ── 抽乾：抽不到不得當成「空的」（第八輪複審 finding D）──
 
     #[test]
@@ -862,6 +873,7 @@ mod tests {
         // 決定性防線：theia 解析失敗後會把**字串當成映像參照**回退到 docker daemon / registry。
         // 實測 8 bytes 的 gzip 殘檔命名為 `nginx` → 載入本機真正的 nginx 映像、輸出 10,807 個元件；
         // 改成絕對路徑後 theia 直接 `could not parse reference`，兩條回退全部關閉。
+        let _g = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let d = tmpdir("abs");
         let f = d.join("nginx");
         fs::write(&f, [0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0]).unwrap();
@@ -881,6 +893,7 @@ mod tests {
 
     #[test]
     fn directory_target_is_also_absolute() {
+        let _g = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let d = tmpdir("absdir");
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(d.parent().unwrap()).unwrap();

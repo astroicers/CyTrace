@@ -517,6 +517,11 @@ mod tests {
         //
         // **鍵清單由 catalog 推導，不手抄**：原本這裡列了 5 個鍵，於是第八輪新增
         // `cbom.err.drain_timeout` 時它不在清單內，這支測試對新鍵零覆蓋（第九輪複審）。
+        /// 不以秒數為細節的 `cbom.err.*` 鍵數（target 類 3 + 無細節類 4）。
+        /// 具名是因為 `+7` 這個裸數字看不出耦合方向：新增 secs 鍵時本測試自動放行
+        /// （權威比對在 `key_lists_are_derived_from_the_catalog`），新增非 secs 鍵才轉紅。
+        const NON_SECS_CBOM_KEYS: usize = 7;
+
         let locale: serde_json::Value =
             serde_json::from_str(include_str!("../../../locales/zh-TW.json")).expect("locale");
         let keys: Vec<String> = locale["cbom"]["err"]
@@ -527,7 +532,7 @@ mod tests {
             .collect();
         assert_eq!(
             keys.len(),
-            cytrace_i18n::SECS_KEYS.len() + 7,
+            cytrace_i18n::SECS_KEYS.len() + NON_SECS_CBOM_KEYS,
             "catalog 的 cbom.err.* 鍵數與預期不符（抽到 {}）——抽取失效或鍵集合已變；\n\
              鍵集合的權威比對在 cytrace-i18n 的 key_lists_are_derived_from_the_catalog",
             keys.len()

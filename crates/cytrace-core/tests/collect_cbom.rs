@@ -400,16 +400,19 @@ fn engine_leaves_no_temp_home_behind() {
     let _guard = TEMP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
     // 所有離開路徑都要清理（含引擎缺席、spawn 失敗的 early return）。
-    // 以「呼叫前後 temp 目錄中 cytrace-theia-home-* 的數量不變」驗證。
+    // 以「呼叫前後 temp 目錄中**本行程**的 cytrace-theia-home-{pid}-* 數量不變」驗證。
+    //
+    // **只計自己的 pid**：`/tmp` 是機器全域資源，而 `TEMP_LOCK` 只序列化同一 binary 內。
+    // 原本計全部 `cytrace-theia-home-*`，於是 `make test` 與 `make test-real-engine`
+    // 同機並行、或兩個 CI job 共用 runner 時，計數會被對方的 theia HOME 擾動而隨機紅
+    // ——與本輪剛修的 CWD flaky 同類（第十一輪複審 finding G）。
+    // `unique_temp_path` 的命名已含 pid（`{prefix}-{pid}-{seq}`），故前綴比對即足夠。
+    let own_prefix = format!("cytrace-theia-home-{}-", std::process::id());
     let count = || {
         fs::read_dir(std::env::temp_dir())
             .map(|d| {
                 d.flatten()
-                    .filter(|e| {
-                        e.file_name()
-                            .to_string_lossy()
-                            .starts_with("cytrace-theia-home-")
-                    })
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(&own_prefix))
                     .count()
             })
             .unwrap_or(0)
