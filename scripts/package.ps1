@@ -25,7 +25,8 @@ param(
   [string]$SyftVersion = "1.45.1",
   [string]$GrypeVersion = "0.114.0",
   [string]$DbPath = "$env:LOCALAPPDATA\grype\db",
-  [switch]$SkipDb
+  [switch]$SkipDb,
+  [switch]$WithoutCbom
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +61,11 @@ function Get-Engine($name, $ver) {
   if (Test-Path $ex) { Remove-Item -Recurse -Force $ex }
   Expand-Archive -Path $zip -DestinationPath $ex -Force
   Copy-Item (Join-Path $ex "$name.exe") "$Bundle\bin\$name.exe"
+  # 下載即釘版（URL 內含版本），此處再驗一次解出的 exe 自報版本，
+  # 與 Linux 側 require_engine_version 對稱（release-prep 複審 major #5/#9 的補齊）
+  $got = (& "$Bundle\bin\$name.exe" --version 2>$null | Select-Object -First 1) -replace "^$name\s+", ''
+  if ($got -ne $ver) { throw "$name self-reports '$got' but pinned version is '$ver'" }
+  Say "$name $got verified"
 }
 Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
@@ -79,8 +85,13 @@ $TheiaExe = Join-Path $PSScriptRoot "..\dist\cbomkit-theia.exe"
 if (Test-Path $TheiaExe) {
   Say "collect cbomkit-theia (self-built artifact)"
   Copy-Item $TheiaExe "$Bundle\bin\cbomkit-theia.exe"
+} elseif ($WithoutCbom) {
+  Say "WithoutCbom: bundle intentionally ships without the CBOM engine (--cbom degrades)"
 } else {
-  Write-Host "  WARN: no cbomkit-theia.exe at dist\; bundle ships without the CBOM engine"
+  # fail-hard（與 Linux 側對稱）：原本 WARN 續跑會靜默出一個少引擎的「完整」包，
+  # 而 CHANGELOG 宣稱「打包 fail-hard」只有 Linux 為真——文件替不存在的控制背書
+  #（release-prep 複審 major #5/#9）。刻意不含時以 -WithoutCbom 顯式豁免。
+  throw "cbomkit-theia.exe not found at dist\. Build it first, or pass -WithoutCbom explicitly."
 }
 
 # 3) grype DB 離線快照（跨平台通用）
@@ -89,7 +100,9 @@ if (-not $SkipDb) {
     Say "copy grype DB snapshot ($DbPath)"
     Copy-Item -Recurse -Force "$DbPath\*" "$Bundle\db\"
   } else {
-    Write-Warning "grype DB not found at $DbPath; run 'grype db update' first (或用 -SkipDb)"
+    # fail-hard（與 Linux 側對稱；-SkipDb 為顯式豁免）：原本只 Warning 續跑，
+    # 會出一個無 DB 的「完整」簽章包，場域拆包才發現比對整條不能用
+    throw "grype DB not found at $DbPath. Run 'grype db update' first, or pass -SkipDb explicitly."
   }
 } else { Say "skip DB (smoke)" }
 

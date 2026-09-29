@@ -5,6 +5,8 @@
 > 格式依 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)；版本依 SemVer。
 
 ## [0.3.0] - 未發布
+<!-- 打 tag 前把「未發布」改為當日日期（release.yml 的版本閘只驗號碼不驗此行；
+     本行陳舊化目前無機械承接，靠本注記與 PR checklist） -->
 
 ### 新增
 
@@ -12,17 +14,18 @@
   （**預設關閉**）。封裝第三個引擎 **CBOMkit-theia v1.1.2**（Apache-2.0，
   自源碼可重現建置、SHA256 釘死），盤點掃描目標內的 X.509 憑證、公私鑰與
   演算法，判定量子脆弱性（規則移植自 cbomkit `quantum_safe.rego`）。
-- `--fail-on-quantum-vulnerable` 閘門，**fail-closed**：引擎缺席／執行失敗／
-  清單不完整一律 exit 1（「沒掃到 ≠ 通過」）；偵測到量子脆弱或無法判定的資產
-  exit 2；掃描完成且乾淨才 exit 0。
+- `--fail-on-quantum-vulnerable` 閘門，**fail-closed**（「沒掃到 ≠ 通過」）：
+  已偵測到量子脆弱或無法判定的資產 → exit 2（**優先於**清單不完整——漏掃只會
+  讓實況更糟，不得遮蔽已知脆弱）；引擎缺席／執行失敗／無脆弱但清單不完整 →
+  exit 1；掃描完成且乾淨 → exit 0。
 - 報表新增 `#crypto` 區段：資產表（演算法／金鑰長度／量子狀態／位置）、
   三類漏掃計數顯性揭露（權限不可讀／超過引擎 1 MiB 門檻／引擎自承未建模）、
   失敗成因依語系渲染。
 - `scan --cbom` 另落地 `cbom.cdx.json`（CycloneDX 1.6，通過離線 schema 驗證）。
 - Web 控制台：掃描任務可勾選 CBOM；失敗成因依請求語系顯示。
 - 報表封面新增**掃描身分**（執行 uid）與 **CBOM 引擎版本**（NFR-03 稽核欄位）。
-- 環境變數 `CYTRACE_CBOM_TIMEOUT_SECS`（1–86400，預設 600；無「無限制」選項——
-  目標含具名管線時無逾時會永久掛死）。
+- 環境變數 `CYTRACE_CBOM_TIMEOUT_SECS`（1–86400，預設 600；**越界或非數字
+  靜默回退預設**；刻意無「無限制」選項——目標含具名管線時無逾時會永久掛死）。
 
 ### 修正
 

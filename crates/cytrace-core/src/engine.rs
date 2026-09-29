@@ -159,14 +159,19 @@ fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
 /// `"unavailable"` sentinel——**不得**假裝有值；前端把 sentinel 譯為可讀訊息。
 /// 掃描主流程不因此失敗：DB 缺失的硬性攔截在 vuln 比對那層，此處只負責稽核標示。
 pub fn db_snapshot() -> cytrace_types::DbSnapshot {
+    // **不以退出碼過濾**：DB 逾預設時效（5 天——air-gapped 場域的常態）時
+    // `grype db status` exit 1 但 stdout 仍含完整 JSON。初版 `.filter(success)`
+    // 讓時效稽核欄位**恰在 DB 一舊就整欄消失**——NFR-03 要稽核的正是 DB 多舊
+    // （release-prep 複審 major #0/#3，反證者實測確認）。時效判斷是稽核者的事，
+    // 我們負責如實轉錄；另補 VALIDATE_AGE=false 使函式不依賴 wrapper 的環境繼承。
     parse_db_status(
         Command::new("grype")
             .args(["db", "status", "-o", "json"])
             .env("GRYPE_CHECK_FOR_APP_UPDATE", "false")
             .env("GRYPE_DB_AUTO_UPDATE", "false")
+            .env("GRYPE_DB_VALIDATE_AGE", "false")
             .output()
             .ok()
-            .filter(|o| o.status.success())
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
             .as_deref(),
     )

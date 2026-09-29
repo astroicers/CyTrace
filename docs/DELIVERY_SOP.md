@@ -15,6 +15,7 @@ cytrace-<版本>/
 ├── cytrace.sbom.cdx.json  # CyTrace 自產 SBOM（dogfooding，FR-009）
 ├── NOTICE                 # 第三方授權（Syft/Grype/theia 本體 Apache-2.0；theia 相依另含 MIT/MPL-2.0）
 ├── cytrace-offline        # 離線執行 wrapper（設定 PATH 與 GRYPE_DB_CACHE_DIR）
+├── CHANGELOG.md           # 版本變更說明（air-gapped 場域唯一來源）
 ├── SHA256SUMS             # 完整性
 └── SHA256SUMS.minisig     # 真實性（minisign detached 簽章）
 ```
@@ -90,8 +91,10 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 
 ### 7.1 取得與封存（有網段交付工作站）
 1. `docker pull ghcr.io/astroicers/cytrace:X.Y.Z`（需 GHCR 私有 read PAT）。
-   > tag **無 `v` 前綴**（metadata-action 的 semver pattern 去前綴；v0.2.1 實證
-   > image tag 為 `0.2.1`）。照舊文件 pull `:vX.Y.Z` 會 404。
+   > **tag push 路徑**的 image tag 無 `v` 前綴（semver pattern 去前綴；v0.2.1 實證
+   > 為 `0.2.1`），照舊文件 pull `:vX.Y.Z` 會 404。**workflow_dispatch 補發例外**：
+   > raw 規則原樣用輸入值——輸入 `v0.3.0` 就發 `:v0.3.0`，且不更新 `latest`；
+   > 補發後請以實際 image tag 取代本節的 `X.Y.Z`。
 2. 核對 digest：`docker buildx imagetools inspect ... --format '{{.Manifest.Digest}}'`
    對 GitHub Release 的 `IMAGE_DIGEST.txt`。
 3. 取 Release 附的 `cytrace-vX.Y.Z-image.tar`（CI 產物即權威）或本機 `docker save`。

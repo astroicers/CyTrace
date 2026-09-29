@@ -108,10 +108,20 @@ jobs:
       # 原實作 push（含 latest）先於冒煙，冒煙失敗時壞 image 已公開且 GHCR 留殘檔
       # （v0.2.0 前例；release 準備複審 finding #10）。兩段式的第二段吃 gha cache，
       # 重建成本近零。
-      - name: 冒煙 --version
+      - name: 冒煙 --version（release 時比對 tag——容器路徑的版本閘）
         run: |
           IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
-          docker run --rm "$IMG" --version
+          OUT=$(docker run --rm "$IMG" --version)
+          echo "$OUT"
+          # release.yml 的版本閘只蓋 binaries 路徑；少了這段，錯版 binary 仍可經
+          # 容器路徑出到 GHCR 與 Release tar（release-prep 複審 major #10）。
+          # PR 時 is_release=false，無 tag 可比，跳過。
+          if [ "${{ steps.rel.outputs.is_release }}" = "true" ]; then
+            TAG="${{ steps.rel.outputs.tag }}"; TAG="${TAG#v}"
+            case "$OUT" in *"$TAG"*) echo "✓ image 內 binary 自報版本含 $TAG";;
+              *) echo "✗ image 內 binary 版本與 tag $TAG 不符——擋下發布"; exit 1;;
+            esac
+          fi
 
       - name: 冒煙 serve（degraded 起站 → /healthz 200）
         run: |

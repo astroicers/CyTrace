@@ -42,7 +42,9 @@ function Cover() {
     // 原樣印英文 sentinel 對操作員無意義，譯為明確的「無法取得」訊息（NFR-03/NFR-06）
     [
       'DB',
-      m.db_snapshot.version === 'unavailable'
+      // 'unavailable' 是 v2 的顯性 sentinel；'snapshot' 是 v1 時期的硬編碼假值
+      // （不具稽核效力，ADR-009 修訂節）——舊 JSON 重建時同樣不得渲染成像真值
+      m.db_snapshot.version === 'unavailable' || m.db_snapshot.version === 'snapshot'
         ? t('report.db_unavailable')
         : `${m.db_snapshot.version}（${m.db_snapshot.built}）`,
     ],
