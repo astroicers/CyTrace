@@ -1,0 +1,433 @@
+//! T904：CBOM 解析與量子脆弱判定（ADR-013 決策 6/7/8）。
+//!
+//! fixture 取自 cbomkit-theia v1.1.2 的**真實輸出**（T901b 實測），再補 PQC 與未知曲線案例。
+
+use cytrace_core::parse::parse_cbom;
+use cytrace_core::quantum::{classify, weak_key};
+use cytrace_types::QuantumStatus;
+
+fn fixture() -> String {
+    std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cbom.json"
+    ))
+    .expect("讀取 cbom fixture")
+}
+
+// ── 量子判定規則表（移植 cbomkit opa/quantum_safe.rego + 金鑰長度）──
+
+#[test]
+fn rsa_is_quantum_vulnerable_regardless_of_size() {
+    assert_eq!(classify("RSA", None, Some(2048)), QuantumStatus::Vulnerable);
+    assert_eq!(classify("RSA", None, Some(4096)), QuantumStatus::Vulnerable);
+}
+
+#[test]
+fn pqc_algorithms_are_quantum_safe() {
+    assert_eq!(classify("ML-DSA-87", None, None), QuantumStatus::Safe);
+    assert_eq!(classify("ML-KEM-1024", None, None), QuantumStatus::Safe);
+    assert_eq!(classify("SLH-DSA", None, None), QuantumStatus::Safe);
+    assert_eq!(classify("falcon-512", None, None), QuantumStatus::Safe);
+}
+
+#[test]
+fn symmetric_and_hash_are_not_applicable() {
+    assert_eq!(
+        classify("AES-256", None, None),
+        QuantumStatus::NotApplicable
+    );
+    assert_eq!(classify("SHA256", None, None), QuantumStatus::NotApplicable);
+}
+
+#[test]
+fn classical_ecc_curves_are_quantum_vulnerable() {
+    assert_eq!(
+        classify("Ed25519", Some("Ed25519"), None),
+        QuantumStatus::Vulnerable
+    );
+    assert_eq!(
+        classify("EC", Some("P-256"), None),
+        QuantumStatus::Vulnerable
+    );
+}
+
+#[test]
+fn unknown_curve_is_unknown_not_guessed() {
+    // ADR-013 決策 6：未知曲線 → Unknown，不臆測
+    assert_eq!(
+        classify("EC", Some("brainpoolP256r1"), None),
+        QuantumStatus::Unknown
+    );
+}
+
+#[test]
+fn unrecognised_algorithm_is_unknown() {
+    assert_eq!(classify("MysteryAlg", None, None), QuantumStatus::Unknown);
+}
+
+#[test]
+fn composite_signature_names_are_judged_by_the_public_key_part() {
+    // theia 實際輸出含 "SHA256-RSA"（憑證簽章演算法）。名稱同時含雜湊與公鑰演算法時，
+    // 決定量子脆弱性的是公鑰那半——判成 NotApplicable 會讓真正的風險消失在報表裡。
+    assert_eq!(
+        classify("SHA256-RSA", None, None),
+        QuantumStatus::Vulnerable
+    );
+    assert_eq!(
+        classify("sha256WithRSAEncryption", None, None),
+        QuantumStatus::Vulnerable
+    );
+    assert_eq!(
+        classify("ecdsa-with-SHA384", None, None),
+        QuantumStatus::Vulnerable
+    );
+}
+
+// ── 弱金鑰（與量子狀態為獨立兩軸）──
+
+#[test]
+fn rsa_below_2048_is_weak_key() {
+    assert!(weak_key("RSA", None, Some(1024)));
+    assert!(!weak_key("RSA", None, Some(2048)), "RSA-2048 不算弱金鑰");
+    assert!(!weak_key("RSA", None, Some(4096)));
+}
+
+#[test]
+fn ed25519_is_not_weak_despite_255_bits() {
+    // 依曲線名稱判定，不用位元數門檻——255 < 256 會誤判
+    assert!(!weak_key("Ed25519", Some("Ed25519"), Some(255)));
+    assert!(!weak_key("EC", Some("P-256"), Some(256)));
+    assert!(weak_key("EC", Some("P-192"), Some(192)), "P-192 強度不足");
+}
+
+#[test]
+fn unknown_curve_is_not_reported_as_weak() {
+    // 判不出來就不宣稱弱——誤報會稀釋報表可信度
+    assert!(!weak_key("EC", Some("brainpoolP256r1"), None));
+}
+
+// ── parse_cbom ──
+
+#[test]
+fn parses_only_cryptographic_assets() {
+    let assets = parse_cbom(&fixture()).expect("解析");
+    assert!(
+        !assets.iter().any(|a| a.name == "not-a-crypto-asset"),
+        "type=file 的元件不得進入 CBOM 清單"
+    );
+    assert_eq!(assets.len(), 12, "fixture 共 12 個 cryptographic-asset");
+}
+
+#[test]
+fn captures_certificate_expiry_and_location() {
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let expired = assets
+        .iter()
+        .find(|a| a.name == "weak-fixture")
+        .expect("找到過期憑證");
+    assert_eq!(expired.asset_type, "certificate");
+    assert_eq!(expired.not_after.as_deref(), Some("2020-01-01T00:00:00Z"));
+    assert_eq!(expired.location, "weak.crt");
+}
+
+#[test]
+fn captures_private_key_size_and_flags_weak() {
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let weak = assets
+        .iter()
+        .find(|a| a.location == "weak.key")
+        .expect("找到 RSA-1024");
+    assert_eq!(weak.key_size, Some(1024));
+    assert!(weak.weak_key, "RSA-1024 應標記弱金鑰");
+    assert_eq!(weak.quantum, QuantumStatus::Vulnerable);
+
+    let ok = assets
+        .iter()
+        .find(|a| a.location == "server.key")
+        .expect("找到 RSA-2048");
+    assert_eq!(ok.key_size, Some(2048));
+    assert!(!ok.weak_key, "RSA-2048 非弱金鑰");
+    assert_eq!(ok.quantum, QuantumStatus::Vulnerable);
+}
+
+#[test]
+fn pqc_asset_is_classified_safe() {
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let pqc = assets
+        .iter()
+        .find(|a| a.name == "ML-DSA-87")
+        .expect("找到 ML-DSA-87");
+    assert_eq!(pqc.quantum, QuantumStatus::Safe);
+    assert!(!pqc.weak_key);
+}
+
+#[test]
+fn parsed_assets_never_contain_key_material() {
+    // NFR-09 回歸斷言：解析結果不得夾帶任何金鑰內容
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let json = serde_json::to_string(&assets).expect("序列化");
+    assert!(!json.contains("PRIVATE KEY"), "不得含 PEM 標記");
+    assert!(!json.contains("BEGIN "), "不得含 PEM 標頭");
+    let longest_b64 = json
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '+' && c != '/')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    assert!(
+        longest_b64 < 60,
+        "疑似 base64 金鑰內容（長度 {longest_b64}）"
+    );
+}
+
+#[test]
+fn malformed_json_is_parse_error() {
+    assert!(parse_cbom("{ not json").is_err());
+}
+
+#[test]
+fn empty_components_yields_empty_list() {
+    let assets = parse_cbom(r#"{"bomFormat":"CycloneDX","specVersion":"1.6"}"#).expect("解析");
+    assert!(assets.is_empty());
+}
+
+// ── 憑證的量子狀態須由其簽章演算法決定（不是由 subject 名稱）──
+
+#[test]
+fn certificate_quantum_resolves_via_signature_algorithm_ref() {
+    // theia 對憑證輸出的 name 是 subject 名稱（如 "cytrace-test-fixture"），
+    // 拿它去比對演算法名稱表必然是 Unknown——每張憑證都 Unknown 會讓量子閘門失去鑑別力。
+    // CycloneDX 的 certificateProperties.signatureAlgorithmRef 指向真正的演算法元件，應據此判定。
+    let assets = parse_cbom(&fixture()).expect("解析");
+
+    let rsa_cert = assets
+        .iter()
+        .find(|a| a.name == "cytrace-test-fixture")
+        .expect("找到 RSA 簽章憑證");
+    assert_eq!(
+        rsa_cert.quantum,
+        QuantumStatus::Vulnerable,
+        "簽章為 RSA 的憑證應判為量子脆弱，而非 Unknown"
+    );
+
+    let pqc_cert = assets
+        .iter()
+        .find(|a| a.name == "weak-fixture")
+        .expect("找到 PQC 簽章憑證");
+    assert_eq!(
+        pqc_cert.quantum,
+        QuantumStatus::Safe,
+        "簽章為 ML-DSA 的憑證應判為後量子安全"
+    );
+}
+
+// ── 引擎級靜默漏檢：theia 跳過 >1 MiB 的檔案（複審實測）──
+
+#[test]
+fn skipped_large_files_are_counted_from_stderr() {
+    use cytrace_core::engine::skipped_file_count;
+
+    // theia 對超過 1 MiB 的檔案直接略過，只在 stderr 印一行 warning、exit 仍為 0。
+    // 不清點的話 unscanned_count 會是 0，量子閘門就會回報「假 Pass」。
+    let stderr = concat!(
+        "time=\"2026-09-23T01:00:00Z\" level=info msg=\"=> Running Certificate Plugin\"\n",
+        "time=\"2026-09-23T01:00:00Z\" level=warning msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "time=\"2026-09-23T01:00:00Z\" level=warning msg=\"Skipping large file: bundle.pem (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(stderr), 2);
+}
+
+#[test]
+fn clean_stderr_counts_zero_skipped() {
+    use cytrace_core::engine::skipped_file_count;
+    assert_eq!(skipped_file_count(""), 0);
+    assert_eq!(
+        skipped_file_count("time=\"...\" level=info msg=\"Certificate Plugin completed\"\n"),
+        0
+    );
+}
+
+#[test]
+fn skipped_count_never_undercounts_regardless_of_filename() {
+    use cytrace_core::engine::skipped_file_count;
+
+    // fail-closed 的底線：解析不出檔名時**寧可多算也不能少算**。
+    // 去重是為了修正「每 plugin 各印一行」的膨脹，不是可以把一行整個丟掉的理由。
+    // 檔名可由供應鏈上游或 console 上傳者控制。
+    let tricky = "level=warning msg=\"Skipping large file: (exceeds limit of 1048576 bytes) (exceeds limit of 1048576 bytes)\"\n";
+    assert!(
+        skipped_file_count(tricky) >= 1,
+        "檔名以分隔字串開頭時仍須計入"
+    );
+
+    // 不同檔名共用前綴，不得被吃掉
+    let prefix = concat!(
+        "msg=\"Skipping large file: a (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: a (exceeds) b (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(prefix), 2, "兩個不同檔名須各算一次");
+
+    // 同一檔名多行（多 plugin）仍只算一次
+    let repeated = concat!(
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+    );
+    assert_eq!(skipped_file_count(repeated), 1, "同一檔案不得重複計數");
+}
+
+// ── 真實引擎對零資產目標的輸出（第四輪複審實測）──
+
+#[test]
+fn null_components_is_zero_assets_not_a_parse_failure() {
+    // fixture 為釘選版 theia 對「無任何密碼學資產的目錄」的**真實輸出**：
+    // components 是 JSON null，而非缺鍵或空陣列。
+    // 判成解析失敗的話，最常見的輸入（乾淨來源樹）會在交件報表上寫「盤點失敗」，
+    // 且 --fail-on-quantum-vulnerable 恆 exit 1，使用者只能把護欄整條關掉。
+    let raw = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/cbom-empty.json"
+    ))
+    .expect("讀取 fixture");
+    let assets = parse_cbom(&raw).expect("null components 須視為零資產");
+    assert!(assets.is_empty());
+}
+
+#[test]
+fn non_cyclonedx_json_is_rejected() {
+    use cytrace_core::engine::ensure_cbom_json;
+    // 放寬 null 的同時必須收緊「是不是 CBOM」，否則 `{}` 會走成 Completed + 0 資產，
+    // 換來一個新的 fail-open。
+    assert!(ensure_cbom_json("{}").is_err(), "缺 bomFormat 須拒絕");
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"SPDX","specVersion":"2.3"}"#).is_err(),
+        "非 CycloneDX 須拒絕"
+    );
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"CycloneDX"}"#).is_err(),
+        "缺 specVersion 須拒絕"
+    );
+    assert!(
+        ensure_cbom_json(r#"{"bomFormat":"CycloneDX","specVersion":"1.6","components":null}"#)
+            .is_ok(),
+        "合法 CBOM（零資產）須通過"
+    );
+}
+
+#[test]
+fn admitted_counts_are_parsed_per_category() {
+    use cytrace_core::engine::admitted_counts;
+
+    // theia 對偵測到但無法建模的資產只在 stderr 留痕，stdout 零元件、exit 0。
+    // 自承數必須**分類別**記錄，否則混合資產目標會被跨類別相減抵銷成 0。
+    //
+    // 兩類的訊息格式不同（見下一支測試的實地樣本）：私鑰走 `Found N private key(s)`，
+    // 憑證走結構化欄位 `numberOfDetectedCertificates=N`。
+    let stderr = concat!(
+        "msg=\"Secret detected\" file=etc/ssh/ssh_host_ed25519_key type=private-key\n",
+        "msg=\"Found 1 private key(s) in etc/ssh/ssh_host_ed25519_key\"\n",
+        "msg=\"Certificate searching done\" numberOfDetectedCertificates=3\n",
+    );
+    assert_eq!(admitted_counts(stderr), (1, 3), "私鑰與憑證須分開計");
+
+    // 沒有自承漏檢時為 0
+    assert_eq!(
+        admitted_counts("msg=\"Certificate Plugin completed\"\n"),
+        (0, 0)
+    );
+
+    // 認不得數字時仍計一項（寧可多算）
+    assert_eq!(
+        admitted_counts("msg=\"Found some private key(s)\"\n"),
+        (1, 0)
+    );
+}
+
+/// 憑證**只認**結構化欄位，不得同時認 `Found N certificate(s)`。
+///
+/// 原實作留了一條自承「目前不會命中」的 `Found … certificate` 分支當前瞻相容。
+/// 它是唯一一條會讓同一行被計兩次的路徑：上游若哪天兩種都印，憑證數變成兩倍，
+/// 於是「自承 6 建模 3」憑空生出 3 項未確定、閘門回 NoResult 假警報
+/// ——為了接一個不存在的格式，換來一個假警報的入口（第七輪複審 finding）。
+#[test]
+fn certificate_count_is_never_double_counted() {
+    use cytrace_core::engine::admitted_counts;
+
+    let both_formats =
+        "msg=\"Found 3 certificate(s) in bundle.pem\" numberOfDetectedCertificates=3\n";
+    assert_eq!(
+        admitted_counts(both_formats),
+        (0, 3),
+        "同一行兩種格式並存時，憑證數不得翻倍（3 而非 6）"
+    );
+
+    // 只有想像格式、沒有真實欄位時：計 0，並由 real_engine 案例 13 當場抓到欄位漂移。
+    // 這裡刻意**不**接受它——接了就等於容忍上面那條重複計數路徑存在。
+    assert_eq!(
+        admitted_counts("msg=\"Found 3 certificate(s) in bundle.pem\"\n"),
+        (0, 0),
+        "theia 不印此格式；憑證一律只認 numberOfDetectedCertificates"
+    );
+}
+
+/// **這段 stderr 是 theia v1.1.2 的真實輸出**（2026-09-27 實地抓取，未經改寫）。
+///
+/// 上面那個測試用的 `Found 3 certificate(s)` 是**我們想像的格式**，theia 從不這樣印：
+/// 憑證走 logrus 結構化欄位 `numberOfDetectedCertificates=N`。於是原實作的 certs 恆為 0、
+/// 憑證類的未確定數恆為 0——「偵測到卻沒建模的憑證」一律被吞掉，閘門回 Pass。
+/// 想像的 fixture 會長成想像的樣子，這正是本檔與 real_engine 層要一起存在的理由。
+#[test]
+fn certificate_count_is_parsed_from_the_real_logrus_field() {
+    use cytrace_core::engine::admitted_counts;
+
+    let real = concat!(
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"=> Running Certificate File Plugin\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=warning msg=\"Skipping large file: big.crt (exceeds limit of 1048576 bytes)\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Certificate searching done\" numberOfDetectedCertificates=1\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"=> Running Secret Detection Plugin\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Secret detected\" file=s.key type=private-key\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Found 1 private key(s) in s.key\"\n",
+        "time=\"2026-09-27T16:33:49+08:00\" level=info msg=\"Problematic CA detection completed\" checked=0 flagged=0\n",
+    );
+    assert_eq!(
+        admitted_counts(real),
+        (1, 1),
+        "真實輸出：1 把私鑰（Found …）＋ 1 張憑證（numberOfDetectedCertificates）"
+    );
+
+    // 多張憑證
+    assert_eq!(
+        admitted_counts("msg=\"Certificate searching done\" numberOfDetectedCertificates=17\n"),
+        (0, 17)
+    );
+    // 零張不得憑空生出缺口
+    assert_eq!(
+        admitted_counts("msg=\"Certificate searching done\" numberOfDetectedCertificates=0\n"),
+        (0, 0)
+    );
+    // 認不得數字仍計一項（寧可多算，與私鑰同原則）
+    assert_eq!(
+        admitted_counts("msg=\"…\" numberOfDetectedCertificates=NaN\n"),
+        (0, 1)
+    );
+}
+
+#[test]
+fn undetermined_subtracts_within_one_category() {
+    use cytrace_core::engine::undetermined_count;
+    assert_eq!(undetermined_count(2, 1), 1, "自承 2 建模 1 → 未確定 1");
+    assert_eq!(undetermined_count(1, 1), 0);
+    assert_eq!(undetermined_count(1, 5), 0, "不得出現負數或溢位");
+}
+
+#[test]
+fn modelled_counts_are_per_category() {
+    use cytrace_core::{modelled_cert_count, modelled_key_count};
+    let assets = parse_cbom(&fixture()).expect("解析");
+    let certs = modelled_cert_count(&assets);
+    let keys = modelled_key_count(&assets);
+    assert!(certs > 0 && keys > 0, "fixture 須同時含憑證與私鑰");
+    assert!(
+        certs + keys < assets.len() as u64,
+        "fixture 須另含其他類別，否則量綱錯誤看不出來"
+    );
+}

@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { describeJobError } from '../jobError'
 import { api, artifactUrl } from '../api/client'
 import type { JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
@@ -15,7 +16,7 @@ function interval(job: JobRecord | null): number {
 }
 
 export function JobDetailPage({ id }: { id: string }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { data: job, error } = usePolling(() => api.getJob(id), interval)
 
   if (error && !job) {
@@ -110,12 +111,23 @@ export function JobDetailPage({ id }: { id: string }) {
           <h2 className="text-sm font-semibold text-sev-critical">
             {t('console.job.error_title')}
           </h2>
-          <p className="mt-1 text-sm">{t(job.error.i18n_key)}</p>
-          {job.error.detail && (
-            <pre className="mt-2 overflow-x-auto text-xs text-gray-500">
-              {job.error.detail}
-            </pre>
-          )}
+          {/* 訊息與 detail 的分工由 describeJobError 一次決定，`<pre>` 只看它的回報。
+              兩處各判一次必然會不同步——第九輪加退回路徑時 `<p>` 印了 detail、
+              `<pre>` 的守衛沒跟著改，同一段印兩次（第十輪複審），而同一個 commit
+              在 CLI 側正好斷言「細節不得重複出現」。 */}
+          {(() => {
+            const { text, detailConsumed } = describeJobError(job.error, t, i18n.language)
+            return (
+              <>
+                <p className="mt-1 text-sm">{text}</p>
+                {job.error.detail && !detailConsumed && (
+                  <pre className="mt-2 overflow-x-auto text-xs text-gray-500">
+                    {job.error.detail}
+                  </pre>
+                )}
+              </>
+            )
+          })()}
         </div>
       )}
 

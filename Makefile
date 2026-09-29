@@ -7,7 +7,7 @@
 
 -include $(HOME)/.claude/asp/Makefile.inc
 
-.PHONY: info build test lint clippy fmt fmt-check coverage clean-rs frontend frontend-check frontend-console package docker-build docker-smoke docker-save
+.PHONY: info build test test-real-engine lint clippy fmt fmt-check coverage clean-rs frontend frontend-check frontend-console package docker-build docker-smoke docker-save
 
 info:
 	@echo "CyTrace — 地端依賴風險報表產生器（Rust workspace + 報表前端）"
@@ -23,6 +23,9 @@ frontend:
 
 frontend-check:
 	cd frontend && pnpm typecheck
+	@# frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作；Rust 側的契約測試比對
+	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
+	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -40,6 +43,20 @@ build:
 test:
 	cargo test --workspace
 
+# 真引擎 × 真實輸入形態的整合測試（ADR-013）。
+# 需要 cbomkit-theia 在 PATH；air-gapped CI 無引擎時這些案例為 #[ignore]，
+# 故 `make test` 不會跑到，須顯式呼叫本 target。
+#
+# 存在理由：M9 六輪複審中，第四輪之後的全部阻斷級都是「真引擎在常見輸入上的實際行為」
+# （零資產目標輸出 null、dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、
+# 憑證計數走 numberOfDetectedCertificates 而非我們以為的 Found N certificate(s)），
+# 用 fixture 與 fake engine 一個都測不到——連我們自己寫的 fixture 都在說謊。
+test-real-engine:
+	@command -v cbomkit-theia >/dev/null || { echo "✗ 找不到 cbomkit-theia；先跑 scripts/build-theia.sh"; exit 1; }
+	@# 案例缺工具時會 panic（本層不接受靜默略過），故前置一併檢查以給出清楚訊息
+	@for t in openssl ssh-keygen mkfifo; do 		command -v $$t >/dev/null || { echo "✗ 找不到 $$t（真引擎案例需要）"; exit 1; }; 	done
+	cargo test -p cytrace-core --test real_engine -- --ignored
+
 fmt:
 	cargo fmt --all
 
@@ -53,7 +70,22 @@ clippy:
 # 需有 recipe 才能覆寫 Makefile.inc 的通用 lint（否則只是追加前置相依）。
 lint: fmt-check clippy
 	python3 scripts/i18n-check.py
-	@echo "✓ lint passed（fmt + clippy + i18n 鍵一致，零 warning）"
+	python3 scripts/notice-parity-check.py
+	@# 對抽取邏輯注入故障，確認結構性檢查（區段數 / OUTSIDE needle / 空值）真的會紅
+	@# ——初版與二版都是「逐列變異」，兩版的判別力都等於正常執行（第八輪複審 finding C）
+	python3 scripts/notice-parity-check.py --verify-sentinels
+	@# 報表成因渲染：本組織 GitHub 為 free 方案、CI 無法設為 required（user-level 實查），
+	@# 故「只在 CI 跑」實質等於「只在事後偵測」；land 前的閘必須跑到（第八輪複審 finding K）。
+	@# 只呼叫這一支而非整個 frontend-check：pnpm 在部分環境會先做 deps check 並要求
+	@# 互動核准 build script（esbuild），會讓整條 lint 壞掉；typecheck 仍由 CI 與
+	@# make frontend-check 承接。
+	@# 前置缺席時給明確訊息並**仍然失敗**（fail-closed）——直接讓 node 報 MODULE_NOT_FOUND
+	@# 會被當成環境雜訊而被忽略，那等於這道檢查在該機器上靜默消失（第九輪複審）。
+	@command -v node >/dev/null || { echo "✗ 找不到 node（CBOM 成因渲染檢查需 Node ≥ 22 的型別剝離）"; exit 1; }
+	@node -e 'const [maj]=process.versions.node.split(".").map(Number); if (maj < 22) { console.error("✗ Node " + process.versions.node + " 過舊：--experimental-strip-types 需 22+"); process.exit(1) }'
+	@test -d frontend/node_modules/i18next || { echo "✗ 缺 frontend/node_modules/i18next（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
+	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

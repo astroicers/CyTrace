@@ -23,7 +23,20 @@
     "health": {
       "ok": "服務存活：{{addr}}",
       "fail": "無法連線：{{addr}}"
-    }
+    },
+    "cbom": {
+      "done": "密碼學資產盤點完成：{{count}} 項",
+      "engine_absent": "未安裝 CBOM 引擎（cbomkit-theia），本次未盤點密碼學資產",
+      "failed": "CBOM 盤點失敗：{{reason}}（不影響 SBOM 與弱點比對結果）",
+      "unscanned_unreadable": "警告：有 {{count}} 個項目因權限不足未掃描；請以能讀取目標的身分重跑",
+      "unscanned_oversize": "警告：有 {{count}} 個檔案超過引擎的 1 MiB 上限而未掃描；此限制無法以權限或參數解除",
+      "unscanned_undetermined": "警告：引擎自承偵測到 {{count}} 項資產但未能建模輸出；此為引擎覆蓋率限制，無法以權限或參數解除"
+    },
+    "quantum_gate": {
+      "vulnerable": "偵測到量子脆弱或無法判定的密碼學資產，以退出碼 2 結束",
+      "no_result": "已指定 --fail-on-quantum-vulnerable 但未取得 CBOM 結果；「沒掃到」不等於「通過」，以退出碼 1 結束"
+    },
+    "schema_ahead": "此檔由較新版 CyTrace 產生（schema v{{found}}，本版支援 v{{supported}}）；未知欄位會被略過，報表可能不完整"
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",
@@ -108,7 +121,9 @@
       "uploading": "上傳中 {{percent}}%",
       "cancel": "取消",
       "error_no_file": "請先選擇檔案",
-      "error_no_path": "請輸入掃描路徑"
+      "error_no_path": "請輸入掃描路徑",
+      "cbom": "併同盤點密碼學資產（CBOM）",
+      "cbom_hint": "盤點憑證、金鑰與 TLS 設定並標示量子脆弱項目；掃描時間會增加"
     },
     "job": {
       "title": "掃描任務詳情",
@@ -153,6 +168,9 @@
       "cancel": "取消",
       "unauthorized": "登入已逾時，請重新登入",
       "error": "發生錯誤"
+    },
+    "errors": {
+      "network": "無法連線到伺服器，請確認伺服器仍在執行"
     }
   },
   "report": {
@@ -165,6 +183,57 @@
       "title": "附註",
       "disclaimer_not_pentest": "本報表為產出/核發之依賴風險報表，非滲透測試或資安檢測，不得作為滲透測試結論引用。"
     },
-    "print": "列印 / 存 PDF"
+    "print": "列印 / 存 PDF",
+    "crypto": {
+      "title": "密碼學資產（CBOM）",
+      "not_executed": "本次未執行密碼學資產盤點",
+      "engine_absent": "未安裝 CBOM 引擎，本區段無資料",
+      "failed": "CBOM 盤點失敗，本區段無資料",
+      "empty": "未偵測到密碼學資產",
+      "scope_note": "盤點範圍為檔案系統與映像層的憑證、金鑰與 TLS/JCA 設定；不含原始碼層的演算法使用偵測",
+      "col": {
+        "name": "名稱",
+        "type": "類型",
+        "primitive": "用途",
+        "key_size": "金鑰長度",
+        "quantum": "量子狀態",
+        "weak_key": "弱金鑰",
+        "location": "位置",
+        "not_after": "有效期限"
+      },
+      "weak_key_yes": "是",
+      "summary": {
+        "total": "資產總數",
+        "vulnerable": "量子脆弱",
+        "weak_keys": "弱金鑰",
+        "expired": "已過期憑證"
+      },
+      "draft_note": "NIST IR 8547 的 2030／2035 年限目前仍為草案",
+      "unscanned_unreadable": "有 {{count}} 個項目因權限不足未掃描，本清單並不完整（可由具足夠權限者重跑解決）",
+      "unscanned_oversize": "有 {{count}} 個檔案超過引擎 1 MiB 上限而未掃描，本清單並不完整（此限制無法以權限或參數解除）",
+      "unscanned_undetermined": "引擎自承偵測到 {{count}} 項資產但未能建模輸出，本清單並不完整（引擎覆蓋率限制）"
+    },
+    "scan_identity": "掃描身分"
+  },
+  "crypto": {
+    "quantum": {
+      "safe": "後量子安全",
+      "vulnerable": "量子脆弱",
+      "not_applicable": "不適用",
+      "unknown": "無法判定"
+    }
+  },
+  "cbom": {
+    "err": {
+      "target_not_local": "目標非本地可讀路徑，拒絕交給引擎：{{target}}",
+      "target_unreadable": "目標不可讀：{{target}}",
+      "target_not_archive": "非 tar / gzip 封存檔，拒絕當成映像：{{target}}",
+      "timeout": "引擎逾時 {{secs}} 秒，已終止；目標可能含具名管線或特殊檔案",
+      "drain_timeout": "引擎輸出抽取逾時 {{secs}} 秒，無法確認漏檢數量；不得視為「已掃完」",
+      "empty_output": "引擎輸出空白，非「零資產」",
+      "stdout_not_json": "引擎輸出非合法 JSON",
+      "not_cyclonedx": "引擎輸出不是 CycloneDX BOM",
+      "engine": "引擎錯誤"
+    }
   }
 }

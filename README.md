@@ -3,7 +3,7 @@
 > 地端、無網際網路（軍用網路）場域的**軟體依賴風險報表產生器**。
 > Air-gapped software dependency risk report generator for on-premise / military networks.
 
-CyTrace 封裝 **Syft**（產 SBOM）與 **Grype**（比對 CVE）兩個 Apache-2.0 工具，
+CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-theia**（密碼學資產盤點）三個 Apache-2.0 工具，
 一鍵對目標（原始碼目錄／容器映像／檔案系統）產出可併入交件的**依賴風險報表**與
 **軟體產品文件表（SBOM）**。產品形態是**單一靜態 binary ＋ 離線單檔 HTML 報表**——無伺服器、零外連、跑完即結束。
 
@@ -19,7 +19,7 @@ CyTrace 封裝 **Syft**（產 SBOM）與 **Grype**（比對 CVE）兩個 Apache-
 - **穩定優先**：Rust 單一 musl 靜態 binary、零 runtime 依賴、釘選版本、可重現建置、golden baseline 回歸測試。
 - **可稽核交付**：交付物可 `sha256` + 簽章驗證；報表標註工具與 DB 版本/日期；附自產 SBOM。
 - **雙語 i18n**：強制 `zh-TW`（fallback）與 `en-US`，禁止硬編碼。
-- **供應鏈純淨**：僅 Apache-2.0 第三方（Syft/Grype），明確禁用中國來源依賴。
+- **供應鏈純淨**：第三方工具本體皆 Apache-2.0（Syft/Grype/CBOMkit-theia），明確禁用中國來源依賴（專案／組織層級）。
 
 ## 下載
 
@@ -129,4 +129,4 @@ cytrace run <目標> → Syft(SBOM) → Grype(離線DB,CVE) → 解析/分級 �
 
 ## 授權
 
-本專案程式碼 Apache-2.0。封裝之 Syft／Grype 亦為 Apache-2.0（見交付 NOTICE）。
+本專案程式碼 Apache-2.0。封裝之 Syft／Grype／CBOMkit-theia 本體亦為 Apache-2.0；theia 相依另含 MIT 與 MPL-2.0 成分（見交付 NOTICE）。

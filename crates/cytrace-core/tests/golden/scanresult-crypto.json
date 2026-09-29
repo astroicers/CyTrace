@@ -1,0 +1,170 @@
+{
+  "schema_version": 2,
+  "meta": {
+    "target": "dir:/fixture",
+    "tool_versions": {
+      "syft": "1.45.1",
+      "grype": "0.114.0",
+      "theia": "1.1.2"
+    },
+    "db_snapshot": {
+      "version": "v6.1.7",
+      "built": "2026-06-19"
+    },
+    "generated_at": "FIXED-FOR-GOLDEN",
+    "scan_identity": "uid=1000"
+  },
+  "components": [
+    {
+      "name": "libfoo",
+      "version": "3.0.1",
+      "type": "library",
+      "licenses": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "name": "barlib",
+      "version": "1.4.0",
+      "type": "library",
+      "licenses": [
+        "MIT"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "CVE-2024-1111",
+      "severity": "Critical",
+      "cvss": 9.8,
+      "component": "libfoo",
+      "fixed_version": "3.0.2",
+      "source": "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
+    },
+    {
+      "id": "CVE-2024-2222",
+      "severity": "Medium",
+      "cvss": 5.4,
+      "component": "barlib",
+      "source": "ghsa"
+    }
+  ],
+  "summary": {
+    "counts_by_severity": {
+      "Unknown": 0,
+      "Negligible": 0,
+      "Low": 0,
+      "Medium": 1,
+      "High": 0,
+      "Critical": 1
+    },
+    "overall_risk": "Critical"
+  },
+  "crypto": {
+    "status": "Completed",
+    "assets": [
+      {
+        "name": "cytrace-test-fixture",
+        "asset_type": "certificate",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "server.crt",
+        "not_after": "2027-09-22T08:23:40Z"
+      },
+      {
+        "name": "weak-fixture",
+        "asset_type": "certificate",
+        "quantum": "Safe",
+        "weak_key": false,
+        "location": "weak.crt",
+        "not_after": "2020-01-01T00:00:00Z"
+      },
+      {
+        "name": "RSA-2048",
+        "asset_type": "related-crypto-material",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "server.key",
+        "primitive": "private-key",
+        "key_size": 2048
+      },
+      {
+        "name": "RSA-1024",
+        "asset_type": "related-crypto-material",
+        "quantum": "Vulnerable",
+        "weak_key": true,
+        "location": "weak.key",
+        "primitive": "private-key",
+        "key_size": 1024
+      },
+      {
+        "name": "ED25519",
+        "asset_type": "related-crypto-material",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "ed25519.key",
+        "primitive": "private-key"
+      },
+      {
+        "name": "RSA-2048",
+        "asset_type": "related-crypto-material",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "server.crt",
+        "primitive": "public-key",
+        "key_size": 2048
+      },
+      {
+        "name": "SHA256",
+        "asset_type": "algorithm",
+        "quantum": "NotApplicable",
+        "weak_key": false,
+        "location": "server.crt",
+        "primitive": "hash"
+      },
+      {
+        "name": "RSA",
+        "asset_type": "algorithm",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "server.crt",
+        "primitive": "signature"
+      },
+      {
+        "name": "ML-DSA-87",
+        "asset_type": "algorithm",
+        "quantum": "Safe",
+        "weak_key": false,
+        "location": "pqc.crt",
+        "primitive": "signature"
+      },
+      {
+        "name": "AES-256",
+        "asset_type": "algorithm",
+        "quantum": "NotApplicable",
+        "weak_key": false,
+        "location": "openssl.cnf",
+        "primitive": "block-cipher"
+      },
+      {
+        "name": "Ed25519",
+        "asset_type": "algorithm",
+        "quantum": "Vulnerable",
+        "weak_key": false,
+        "location": "ed25519.key",
+        "primitive": "signature"
+      },
+      {
+        "name": "EC",
+        "asset_type": "algorithm",
+        "quantum": "Unknown",
+        "weak_key": false,
+        "location": "mystery.key",
+        "primitive": "signature"
+      }
+    ],
+    "unscanned_unreadable": 2,
+    "unscanned_oversize": 0,
+    "unscanned_undetermined": 0
+  }
+}

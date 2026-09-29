@@ -12,11 +12,13 @@ export function uploadScan(
   file: File,
   failOn: string | undefined,
   onProgress: (percent: number) => void,
+  cbom = false,
 ): UploadHandle {
   const xhr = new XMLHttpRequest()
   const form = new FormData()
   form.append('file', file)
   if (failOn) form.append('fail_on', failOn)
+  if (cbom) form.append('cbom', 'true')
 
   const promise = new Promise<JobRecord>((resolve, reject) => {
     xhr.open('POST', '/api/v1/jobs/upload')

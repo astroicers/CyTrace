@@ -4,9 +4,9 @@
 
 use clap::{Parser, Subcommand};
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
-use cytrace_core::{assemble, engine, failon, parse};
+use cytrace_core::{engine, failon, parse};
 use cytrace_i18n::Catalog;
-use cytrace_types::{DbSnapshot, Meta, Severity, ToolVersions};
+use cytrace_types::{DbSnapshot, Meta, Severity};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -37,6 +37,12 @@ enum Command {
         /// 報表輸出路徑（預設 ./<basename>.report.html）。
         #[arg(long, short)]
         out: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
+        /// 有量子脆弱資產即以退出碼 2 結束；**未取得 CBOM 結果則以 1 結束**（fail-closed）。
+        #[arg(long, requires = "cbom")]
+        fail_on_quantum_vulnerable: bool,
     },
     /// 多目標批次掃描（FR-010）：逐一出報表；任一目標達 --fail-on 即整體退出碼 2。
     Batch {
@@ -47,13 +53,22 @@ enum Command {
         /// 報表輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
+        /// 任一目標有量子脆弱資產即退出碼 2；任一目標未取得 CBOM 結果則整批 1。
+        #[arg(long, requires = "cbom")]
+        fail_on_quantum_vulnerable: bool,
     },
-    /// 只產 sbom.cdx.json 與 grype.json。
+    /// 只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）。
     Scan {
         target: String,
         /// 輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
+        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+        #[arg(long)]
+        cbom: bool,
     },
     /// 由既有 ScanResult JSON 離線重現報表（稽核複核；ADR-009）。
     Report {
@@ -108,6 +123,19 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
         Command::Report { input, out } => {
             let json = std::fs::read_to_string(input)?;
             let result: cytrace_types::ScanResult = serde_json::from_str(&json)?;
+            // 檔案來自更新版 CyTrace → serde 會靜默丟棄未知欄位，必須顯性警告
+            if let Some(key) = cytrace_core::schema_warning(result.schema_version) {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        key,
+                        &[
+                            ("found", &result.schema_version.to_string()),
+                            ("supported", &cytrace_types::SCHEMA_VERSION.to_string()),
+                        ]
+                    )
+                );
+            }
             let html = cytrace_report::render(&result)?;
             let path = out.clone().unwrap_or_else(|| default_report_path(input));
             std::fs::write(&path, html)?;
@@ -120,34 +148,67 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             );
             Ok(EXIT_OK)
         }
-        Command::Scan { target, out_dir } => {
+        Command::Scan {
+            target,
+            out_dir,
+            cbom,
+        } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
             println!("{}", cat.t("cli.scanning", &[("target", target)]));
             let sbom = engine::sbom(target)?;
             let grype = engine::vuln(&sbom)?;
             std::fs::write(dir.join("sbom.cdx.json"), &sbom)?;
             std::fs::write(dir.join("grype.json"), &grype)?;
+            if *cbom {
+                // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物
+                match engine::cbom(target) {
+                    Ok(Some(out)) => std::fs::write(dir.join("cbom.cdx.json"), &out.json)?,
+                    Ok(None) => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
+                    Err(e) => eprintln!(
+                        "{}",
+                        cat.t(
+                            "cli.cbom.failed",
+                            &[("reason", &render_cbom_error(&e, cat))]
+                        )
+                    ),
+                }
+            }
             Ok(EXIT_OK)
         }
         Command::Run {
             target,
             fail_on,
             out,
-        } => run_one(target, fail_on.as_deref(), out.clone(), cat),
+            cbom,
+            fail_on_quantum_vulnerable,
+        } => run_one(
+            target,
+            fail_on.as_deref(),
+            out.clone(),
+            cat,
+            CbomOpts {
+                enabled: *cbom,
+                fail_on_quantum: *fail_on_quantum_vulnerable,
+            },
+        ),
         Command::Batch {
             targets,
             fail_on,
             out_dir,
+            cbom,
+            fail_on_quantum_vulnerable,
         } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
-            let mut worst = EXIT_OK;
+            let opts = CbomOpts {
+                enabled: *cbom,
+                fail_on_quantum: *fail_on_quantum_vulnerable,
+            };
+            let mut codes = Vec::with_capacity(targets.len());
             for target in targets {
                 let out = Some(dir.join(format!("{}.report.html", sanitize(target))));
-                if run_one(target, fail_on.as_deref(), out, cat)? == EXIT_FAILON {
-                    worst = EXIT_FAILON;
-                }
+                codes.push(run_one(target, fail_on.as_deref(), out, cat, opts)?);
             }
-            Ok(worst)
+            Ok(worst_exit(codes))
         }
         #[cfg(feature = "server")]
         Command::Serve {
@@ -216,18 +277,74 @@ fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
 }
 
 /// 單一目標：產 SBOM → 比對 → 解析 → 組裝 → 出報表；回傳退出碼（0 或 2）。
+/// 單一目標內的雙閘門彙整（ADR-013 決策 9）。
+///
+/// `EXIT_ERR`（1）優先於 `EXIT_FAILON`（2）：exit 2 在本產品有明確語意——政策閘觸發、
+/// 可由人裁定豁免（ADR-006）；exit 1 則是**工具沒跑成功**。量子閘門的 `NoResult`
+/// 代表「根本沒掃到」，若被 `--fail-on` 的 2 蓋掉，CI 會誤讀為「有脆弱資產但掃描成功」。
+fn combine_gates(failon_triggered: bool, quantum: Option<failon::QuantumGate>) -> u8 {
+    let quantum_code = match quantum {
+        Some(failon::QuantumGate::NoResult) => EXIT_ERR,
+        Some(failon::QuantumGate::Vulnerable) => EXIT_FAILON,
+        Some(failon::QuantumGate::Pass) | None => EXIT_OK,
+    };
+    let failon_code = if failon_triggered {
+        EXIT_FAILON
+    } else {
+        EXIT_OK
+    };
+    worst_exit([quantum_code, failon_code])
+}
+
+/// 批次退出碼彙整（ADR-013 決策 9）。
+///
+/// 優先序：**任一目標 `EXIT_ERR` → 整批 1（優先於 2）**；否則任一 `EXIT_FAILON` → 2；否則 0。
+///
+/// 錯誤優先於 fail-on 的理由：`--fail-on-quantum-vulnerable` 為 fail-closed，
+/// 「未取得 CBOM 結果」以 `EXIT_ERR` 表達；若被別的目標的 2 蓋掉，CI 會誤判為
+/// 「有脆弱資產但掃描成功」，而實際上是**根本沒掃到**。
+fn worst_exit(codes: impl IntoIterator<Item = u8>) -> u8 {
+    let mut worst = EXIT_OK;
+    for c in codes {
+        match c {
+            EXIT_ERR => return EXIT_ERR,
+            EXIT_FAILON => worst = EXIT_FAILON,
+            _ => {}
+        }
+    }
+    worst
+}
+
 fn run_one(
     target: &str,
     fail_on: Option<&str>,
     out: Option<PathBuf>,
     cat: &Catalog,
+    opts: CbomOpts,
 ) -> anyhow::Result<u8> {
     println!("{}", cat.t("cli.scanning", &[("target", target)]));
     let sbom = engine::sbom(target)?;
     let grype = engine::vuln(&sbom)?;
     let components = parse::parse_cyclonedx(&sbom)?;
     let findings = parse::parse_grype(&grype)?;
-    let result = assemble(meta_for(target), components, findings);
+    // CBOM 失敗只影響 crypto 區段，不中止主流程（ADR-013 決策 4）
+    let crypto = opts
+        .enabled
+        .then(|| cytrace_core::collect_cbom(&engine::RealEngine, target));
+    if let Some(inv) = &crypto {
+        report_cbom_status(inv, cat);
+    }
+    let result = cytrace_core::assemble_with_crypto(
+        meta_for(
+            target,
+            crypto
+                .as_ref()
+                .map_or(&cytrace_types::CbomStatus::NotRequested, |c| &c.status),
+        ),
+        components,
+        findings,
+        crypto,
+    );
     let html = cytrace_report::render(&result)?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
     std::fs::write(&path, html)?;
@@ -249,31 +366,128 @@ fn run_one(
             &[("path", &path.display().to_string())]
         )
     );
-    if let Some(threshold) = fail_on {
+    // 兩個閘門各自判定後再合併——不可提前 return，否則 fail-on 的 2 會遮蔽量子的 1
+    let failon_triggered = fail_on.is_some_and(|threshold| {
         let th = Severity::from_grype_str(threshold);
-        if failon::triggered(&result.findings, th) {
+        let hit = failon::triggered(&result.findings, th);
+        if hit {
             eprintln!(
                 "{}",
                 cat.t("cli.fail_on_triggered", &[("threshold", threshold)])
             );
-            return Ok(EXIT_FAILON);
         }
-    }
-    Ok(EXIT_OK)
+        hit
+    });
+
+    let quantum = opts.fail_on_quantum.then(|| {
+        let gate = failon::quantum_gate(result.crypto.as_ref());
+        match gate {
+            failon::QuantumGate::Pass => {}
+            failon::QuantumGate::Vulnerable => {
+                eprintln!("{}", cat.t("cli.quantum_gate.vulnerable", &[]))
+            }
+            failon::QuantumGate::NoResult => {
+                eprintln!("{}", cat.t("cli.quantum_gate.no_result", &[]))
+            }
+        }
+        gate
+    });
+
+    Ok(combine_gates(failon_triggered, quantum))
 }
 
-fn meta_for(target: &str) -> Meta {
+/// CBOM 相關旗標（ADR-013）。
+#[derive(Debug, Clone, Copy, Default)]
+struct CbomOpts {
+    enabled: bool,
+    fail_on_quantum: bool,
+}
+
+/// 把 CBOM 錯誤依語系渲染：純鍵查 catalog，不可翻譯的細節附在括號內。
+///
+/// 直接用 `e.to_string()` 會印出鍵本身（`cbom.err.empty_output`），
+/// 使用者看不懂、且 `--lang en-US` 也不會變英文。
+fn render_cbom_error(e: &cytrace_core::CytraceError, cat: &Catalog) -> String {
+    match e {
+        cytrace_core::CytraceError::Cbom { key, detail } => {
+            render_cbom_key(key, detail.as_deref(), cat)
+        }
+        other => other.to_string(),
+    }
+}
+
+/// 把 CBOM 錯誤鍵渲染為使用者可讀訊息。
+///
+/// **細節必須以變數插值**，不可只附在括號後：locale 字串帶 `{{target}}` / `{{secs}}`，
+/// 以 `t(key, &[])` 渲染會把佔位符原樣印出（第六輪複審實測：
+/// 「非 tar / gzip 封存檔，拒絕當成映像：{{target}}（/path/…）」——路徑還重複一次）。
+/// 轉呼 [`Catalog::render_cbom`]——渲染邏輯住在 i18n crate，與 server 共用同一份。
+fn render_cbom_key(key: &str, detail: Option<&str>, cat: &Catalog) -> String {
+    cat.render_cbom(key, detail)
+}
+
+/// 把 CBOM 狀態告知使用者——降級與失敗**必須可見**，不得無聲略過（ADR-013 決策 4/10）。
+fn report_cbom_status(inv: &cytrace_types::CryptoInventory, cat: &Catalog) {
+    use cytrace_types::CbomStatus;
+    match &inv.status {
+        CbomStatus::Completed => {
+            println!(
+                "{}",
+                cat.t("cli.cbom.done", &[("count", &inv.assets.len().to_string())])
+            );
+            // 兩種成因的處置不同，訊息也必須分開：把引擎門檻說成「權限不足」，
+            // 操作員會去 chmod 或改用 root 重跑，而數字永遠不變。
+            if inv.unscanned_unreadable > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned_unreadable",
+                        &[("count", &inv.unscanned_unreadable.to_string())]
+                    )
+                );
+            }
+            if inv.unscanned_undetermined > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned_undetermined",
+                        &[("count", &inv.unscanned_undetermined.to_string())]
+                    )
+                );
+            }
+            if inv.unscanned_oversize > 0 {
+                eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.cbom.unscanned_oversize",
+                        &[("count", &inv.unscanned_oversize.to_string())]
+                    )
+                );
+            }
+        }
+        CbomStatus::EngineAbsent => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
+        CbomStatus::Failed {
+            reason_key,
+            reason_detail,
+        } => {
+            // reason_key 是純 i18n 鍵，依語系渲染；細節以變數插值（見 render_cbom_key）
+            let reason = render_cbom_key(reason_key, reason_detail.as_deref(), cat);
+            eprintln!("{}", cat.t("cli.cbom.failed", &[("reason", &reason)]))
+        }
+        CbomStatus::NotRequested => {}
+    }
+}
+
+fn meta_for(target: &str, cbom: &cytrace_types::CbomStatus) -> Meta {
     Meta {
         target: target.to_string(),
-        tool_versions: ToolVersions {
-            syft: "pinned".into(),
-            grype: "pinned".into(),
-        },
+        tool_versions: engine::tool_versions(cbom),
         db_snapshot: DbSnapshot {
             version: "snapshot".into(),
             built: "unknown".into(),
         },
         generated_at: epoch_to_iso(epoch_secs()),
+        scan_identity: Some(engine::scan_identity()),
     }
 }
 
@@ -292,6 +506,155 @@ fn sanitize(target: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── CBOM 錯誤渲染（第六輪複審：佔位符原樣印給使用者）──
+
+    #[test]
+    fn cbom_error_rendering_fills_placeholders() {
+        // locale 字串帶 {{target}} / {{secs}}；以 t(key, &[]) 渲染會原樣印出佔位符，
+        // 實測輸出「非 tar / gzip 封存檔，拒絕當成映像：{{target}}（/path/…）」——
+        // 路徑還重複出現在括號裡。
+        //
+        // **鍵清單由 catalog 推導，不手抄**：原本這裡列了 5 個鍵，於是第八輪新增
+        // `cbom.err.drain_timeout` 時它不在清單內，這支測試對新鍵零覆蓋（第九輪複審）。
+        /// 不以秒數為細節的 `cbom.err.*` 鍵數（target 類 3 + 無細節類 4）。
+        /// 具名是因為 `+7` 這個裸數字看不出耦合方向：新增 secs 鍵時本測試自動放行
+        /// （權威比對在 `key_lists_are_derived_from_the_catalog`），新增非 secs 鍵才轉紅。
+        const NON_SECS_CBOM_KEYS: usize = 7;
+
+        let locale: serde_json::Value =
+            serde_json::from_str(include_str!("../../../locales/zh-TW.json")).expect("locale");
+        let keys: Vec<String> = locale["cbom"]["err"]
+            .as_object()
+            .expect("cbom.err 命名空間")
+            .keys()
+            .map(|k| format!("cbom.err.{k}"))
+            .collect();
+        assert_eq!(
+            keys.len(),
+            cytrace_i18n::SECS_KEYS.len() + NON_SECS_CBOM_KEYS,
+            "catalog 的 cbom.err.* 鍵數與預期不符（抽到 {}）——抽取失效或鍵集合已變；\n\
+             鍵集合的權威比對在 cytrace-i18n 的 key_lists_are_derived_from_the_catalog",
+            keys.len()
+        );
+
+        for lang in ["zh-TW", "en-US"] {
+            let cat = Catalog::load(lang);
+            for key in &keys {
+                // leak 提到每鍵一次（原本在最內層迴圈，一次 run 洩漏 36 次）
+                let static_key: &'static str = Box::leak(key.clone().into_boxed_str());
+                // 依規則給該鍵一個合適的細節；兩種 detail 形態都要走過
+                let detail = if cytrace_i18n::var_for_cbom_key(key) == "secs" {
+                    "600"
+                } else {
+                    "/tmp/x.bin"
+                };
+                for d in [Some(detail.to_string()), None] {
+                    let e = cytrace_core::CytraceError::Cbom {
+                        key: static_key,
+                        detail: d.clone(),
+                    };
+                    let out = render_cbom_error(&e, &cat);
+                    assert!(!out.contains("{{"), "{lang} {key} 渲染後殘留佔位符：{out}");
+                    assert!(
+                        !out.trim().starts_with("cbom.err."),
+                        "{lang} {key} 渲染出裸鍵：{out}"
+                    );
+                    if let Some(d) = &d {
+                        assert!(out.contains(d.as_str()), "{lang} {key} 須含細節 {d}：{out}");
+                        assert_eq!(
+                            out.matches(d.as_str()).count(),
+                            1,
+                            "{lang} {key} 的細節不得重複出現：{out}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cbom_error_rendering_is_language_aware() {
+        let en = Catalog::load("en-US");
+        let e = cytrace_core::CytraceError::Cbom {
+            key: "cbom.err.empty_output",
+            detail: None,
+        };
+        let out = render_cbom_error(&e, &en);
+        // 只查 CJK：英文訊息本身含破折號與彎引號等非 ASCII 標點，那是正常的
+        assert!(
+            !out.chars().any(|c| matches!(c as u32,
+                0x3000..=0x303F | 0x4E00..=0x9FFF | 0xFF00..=0xFFEF)),
+            "en-US 不得出現中日韓文字（中文散文洩漏）：{out}"
+        );
+    }
+
+    // ── 單一目標內的雙閘門彙整（複審 finding：fail_on 先行 return 會遮蔽量子 exit 1）──
+
+    #[test]
+    fn quantum_no_result_outranks_failon_within_one_target() {
+        // exit 2 = 政策閘（可豁免）；exit 1 = 工具沒跑成功。
+        // 兩者同時成立時必須回 1，否則 CI 會把「根本沒掃到」讀成「有脆弱資產但掃描成功」。
+        assert_eq!(
+            combine_gates(true, Some(failon::QuantumGate::NoResult)),
+            EXIT_ERR
+        );
+    }
+
+    #[test]
+    fn failon_alone_is_exit_failon() {
+        assert_eq!(combine_gates(true, None), EXIT_FAILON);
+        assert_eq!(
+            combine_gates(true, Some(failon::QuantumGate::Pass)),
+            EXIT_FAILON
+        );
+    }
+
+    #[test]
+    fn quantum_vulnerable_alone_is_exit_failon() {
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::Vulnerable)),
+            EXIT_FAILON
+        );
+    }
+
+    #[test]
+    fn quantum_no_result_alone_is_exit_err() {
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::NoResult)),
+            EXIT_ERR
+        );
+    }
+
+    #[test]
+    fn no_gate_triggered_is_ok() {
+        assert_eq!(combine_gates(false, None), EXIT_OK);
+        assert_eq!(
+            combine_gates(false, Some(failon::QuantumGate::Pass)),
+            EXIT_OK
+        );
+    }
+
+    // ── T905：batch 退出碼彙整（ADR-013 決策 9）──
+
+    #[test]
+    fn batch_exit_prefers_error_over_failon() {
+        // 錯誤（含 fail-closed 的閘門未取得結果）優先於 fail-on：
+        // 「沒掃到」絕不能因為別的目標只回 2 就被蓋掉
+        assert_eq!(worst_exit([EXIT_OK, EXIT_FAILON, EXIT_ERR]), EXIT_ERR);
+        assert_eq!(worst_exit([EXIT_ERR, EXIT_FAILON]), EXIT_ERR);
+    }
+
+    #[test]
+    fn batch_exit_reports_failon_when_no_error() {
+        assert_eq!(worst_exit([EXIT_OK, EXIT_FAILON, EXIT_OK]), EXIT_FAILON);
+    }
+
+    #[test]
+    fn batch_exit_is_ok_when_all_ok() {
+        assert_eq!(worst_exit([EXIT_OK, EXIT_OK]), EXIT_OK);
+        assert_eq!(worst_exit([]), EXIT_OK);
+    }
 
     #[test]
     fn parses_report_subcommand() {

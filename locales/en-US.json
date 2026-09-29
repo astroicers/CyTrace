@@ -23,7 +23,20 @@
     "health": {
       "ok": "Service alive: {{addr}}",
       "fail": "Cannot connect: {{addr}}"
-    }
+    },
+    "cbom": {
+      "done": "Cryptographic asset inventory complete: {{count}} items",
+      "engine_absent": "CBOM engine (cbomkit-theia) not installed; cryptographic assets were not inventoried",
+      "failed": "CBOM inventory failed: {{reason}} (SBOM and vulnerability results are unaffected)",
+      "unscanned_unreadable": "Warning: {{count}} items were not scanned due to insufficient permissions; rerun as an identity that can read the target",
+      "unscanned_oversize": "Warning: {{count}} files exceed the engine's 1 MiB limit and were not scanned; this limit cannot be lifted by permissions or flags",
+      "unscanned_undetermined": "Warning: the engine reported detecting {{count}} assets but could not model them; this is an engine coverage limit and cannot be lifted by permissions or flags"
+    },
+    "quantum_gate": {
+      "vulnerable": "Quantum-vulnerable or undetermined cryptographic assets detected; exiting with code 2",
+      "no_result": "--fail-on-quantum-vulnerable was set but no CBOM result was obtained; \"not scanned\" is not \"passed\"; exiting with code 1"
+    },
+    "schema_ahead": "This file was produced by a newer CyTrace (schema v{{found}}; this build supports v{{supported}}); unknown fields are dropped and the report may be incomplete"
   },
   "server": {
     "listening": "CyTrace server listening on {{addr}}",
@@ -108,7 +121,9 @@
       "uploading": "Uploading {{percent}}%",
       "cancel": "Cancel",
       "error_no_file": "Please choose a file first",
-      "error_no_path": "Please enter a scan path"
+      "error_no_path": "Please enter a scan path",
+      "cbom": "Also inventory cryptographic assets (CBOM)",
+      "cbom_hint": "Inventories certificates, keys and TLS configuration and flags quantum-vulnerable items; scans take longer"
     },
     "job": {
       "title": "Scan details",
@@ -153,6 +168,9 @@
       "cancel": "Cancel",
       "unauthorized": "Session expired; please sign in again",
       "error": "Something went wrong"
+    },
+    "errors": {
+      "network": "Cannot reach the server; check that it is still running"
     }
   },
   "report": {
@@ -165,6 +183,57 @@
       "title": "Notes",
       "disclaimer_not_pentest": "This is a generated dependency-risk report, NOT a penetration test or security assessment, and must not be cited as penetration-test findings."
     },
-    "print": "Print / Save PDF"
+    "print": "Print / Save PDF",
+    "crypto": {
+      "title": "Cryptographic assets (CBOM)",
+      "not_executed": "Cryptographic asset inventory was not run",
+      "engine_absent": "CBOM engine not installed; no data in this section",
+      "failed": "CBOM inventory failed; no data in this section",
+      "empty": "No cryptographic assets detected",
+      "scope_note": "Covers certificates, keys and TLS/JCA configuration in the filesystem and image layers; source-code algorithm usage is not detected",
+      "col": {
+        "name": "Name",
+        "type": "Type",
+        "primitive": "Purpose",
+        "key_size": "Key size",
+        "quantum": "Quantum status",
+        "weak_key": "Weak key",
+        "location": "Location",
+        "not_after": "Valid until"
+      },
+      "weak_key_yes": "Yes",
+      "summary": {
+        "total": "Total assets",
+        "vulnerable": "Quantum-vulnerable",
+        "weak_keys": "Weak keys",
+        "expired": "Expired certificates"
+      },
+      "draft_note": "The 2030/2035 dates in NIST IR 8547 are still a draft",
+      "unscanned_unreadable": "{{count}} items were not scanned due to insufficient permissions; this list is incomplete (rerun with sufficient privileges)",
+      "unscanned_oversize": "{{count}} files exceed the engine's 1 MiB limit and were not scanned; this list is incomplete (the limit cannot be lifted by permissions or flags)",
+      "unscanned_undetermined": "The engine reported detecting {{count}} assets but could not model them; this list is incomplete (engine coverage limit)"
+    },
+    "scan_identity": "Scanned as"
+  },
+  "crypto": {
+    "quantum": {
+      "safe": "Quantum-safe",
+      "vulnerable": "Quantum-vulnerable",
+      "not_applicable": "Not applicable",
+      "unknown": "Undetermined"
+    }
+  },
+  "cbom": {
+    "err": {
+      "target_not_local": "Target is not a readable local path; refusing to pass it to the engine: {{target}}",
+      "target_unreadable": "Target is not readable: {{target}}",
+      "target_not_archive": "Not a tar/gzip archive; refusing to treat it as an image: {{target}}",
+      "timeout": "Engine timed out after {{secs}}s and was terminated; the target may contain a named pipe or special file",
+      "drain_timeout": "Timed out after {{secs}}s while draining engine output; coverage gaps cannot be confirmed and this must not be treated as a complete scan",
+      "empty_output": "Engine produced no output — this is not \"zero assets\"",
+      "stdout_not_json": "Engine output is not valid JSON",
+      "not_cyclonedx": "Engine output is not a CycloneDX BOM",
+      "engine": "Engine error"
+    }
   }
 }

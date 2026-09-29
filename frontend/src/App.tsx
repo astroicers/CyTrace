@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { loadScanResult } from './data'
-import { SEVERITY_ORDER, type Severity } from './types'
-import { SeverityBadge, Toolbar } from './components/ui'
+import { SEVERITY_ORDER, type CryptoInventory, type Severity } from './types'
+import { renderCbomFailure } from './cbom'
+import { QuantumBadge, SeverityBadge, Toolbar } from './components/ui'
 
 const result = loadScanResult()
 
@@ -31,6 +32,12 @@ function Cover() {
   const rows: [string, string][] = [
     [t('report.cover'), m.target],
     ['Syft / Grype', `${m.tool_versions.syft} / ${m.tool_versions.grype}`],
+    ...(m.tool_versions.theia
+      ? ([['CBOMkit-theia', m.tool_versions.theia]] as [string, string][])
+      : []),
+    ...(m.scan_identity
+      ? ([[t('report.scan_identity'), m.scan_identity]] as [string, string][])
+      : []),
     ['DB', `${m.db_snapshot.version}（${m.db_snapshot.built}）`],
     ['Generated', m.generated_at],
   ]
@@ -193,6 +200,169 @@ function Sbom() {
   )
 }
 
+/**
+ * 未取得盤點結果時的說明（四態中的三態；ADR-013 決策 4）。
+ *
+ * `Failed` 另外帶**成因**：Rust 端存的是純 i18n 鍵 + 不可翻譯細節，於此依當前語系渲染。
+ * 少了它，操作員拿到交件報表只看到「盤點未完成」，不知道是逾時、目標被拒還是輸出不合法
+ * ——fail-closed 的訊息就斷在 CLI stderr，交件對象完全看不到。
+ */
+function cryptoStatus(
+  crypto: CryptoInventory | null | undefined,
+): { key: string; failure?: { reasonKey?: string; reasonDetail?: string | null } } | null {
+  if (!crypto) return { key: 'report.crypto.not_executed' }
+  const s = crypto.status
+  if (s === 'NotRequested') return { key: 'report.crypto.not_executed' }
+  if (s === 'EngineAbsent') return { key: 'report.crypto.engine_absent' }
+  if (typeof s === 'object' && 'Failed' in s) {
+    return {
+      key: 'report.crypto.failed',
+      failure: {
+        reasonKey: s.Failed.reason_key,
+        reasonDetail: s.Failed.reason_detail,
+      },
+    }
+  }
+  return null
+}
+
+function Crypto() {
+  const { t, i18n } = useTranslation()
+  const crypto = result.crypto
+  const status = cryptoStatus(crypto)
+  const assets = crypto?.assets ?? []
+  const stats = useMemo(() => {
+    const now = Date.now()
+    return {
+      total: assets.length,
+      vulnerable: assets.filter((a) => a.quantum === 'Vulnerable').length,
+      weak: assets.filter((a) => a.weak_key).length,
+      expired: assets.filter(
+        (a) => a.not_after && Date.parse(a.not_after) < now,
+      ).length,
+    }
+  }, [assets])
+
+  return (
+    <Section id="crypto" title={t('report.crypto.title')}>
+      {status ? (
+        <div className="text-sm text-gray-500">
+          <p>{t(status.key)}</p>
+          {status.failure && (
+            <p className="mt-1 font-mono text-xs break-all">
+              {renderCbomFailure(
+                t,
+                status.failure.reasonKey,
+                status.failure.reasonDetail,
+                i18n.language,
+              )}
+            </p>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            {(
+              [
+                ['total', stats.total],
+                ['vulnerable', stats.vulnerable],
+                ['weak_keys', stats.weak],
+                ['expired', stats.expired],
+              ] as const
+            ).map(([key, value]) => (
+              <span key={key}>
+                <span className="text-gray-500">
+                  {t(`report.crypto.summary.${key}`)}:{' '}
+                </span>
+                <span className="font-mono font-semibold">{value}</span>
+              </span>
+            ))}
+          </div>
+
+          {crypto && crypto.unscanned_unreadable +
+            crypto.unscanned_oversize +
+            crypto.unscanned_undetermined >
+            0 && (
+            <div className="mb-3 space-y-1 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
+              {crypto.unscanned_unreadable > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_unreadable', {
+                    count: crypto.unscanned_unreadable,
+                  })}
+                </p>
+              )}
+              {crypto.unscanned_oversize > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_oversize', {
+                    count: crypto.unscanned_oversize,
+                  })}
+                </p>
+              )}
+              {crypto.unscanned_undetermined > 0 && (
+                <p>
+                  ⚠️{' '}
+                  {t('report.crypto.unscanned_undetermined', {
+                    count: crypto.unscanned_undetermined,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
+
+          {assets.length === 0 ? (
+            <p className="text-sm text-gray-500">{t('report.crypto.empty')}</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-gray-300 text-left dark:border-gray-600">
+                    {(
+                      ['name', 'type', 'key_size', 'quantum', 'weak_key', 'location'] as const
+                    ).map((c) => (
+                      <th key={c} scope="col" className="py-1 pr-3">
+                        {t(`report.crypto.col.${c}`)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {assets.map((a, i) => (
+                    <tr
+                      key={`${a.name}-${a.location}-${i}`}
+                      className="border-b border-gray-100 dark:border-gray-800"
+                    >
+                      <td className="py-1 pr-3 font-mono">{a.name}</td>
+                      <td className="py-1 pr-3 text-gray-500">
+                        {a.primitive ?? a.asset_type}
+                      </td>
+                      <td className="py-1 pr-3 font-mono">{a.key_size ?? '—'}</td>
+                      <td className="py-1 pr-3">
+                        <QuantumBadge status={a.quantum} />
+                      </td>
+                      <td className="py-1 pr-3">
+                        {a.weak_key ? t('report.crypto.weak_key_yes') : '—'}
+                      </td>
+                      <td className="py-1 pr-3 font-mono break-all">{a.location}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      <p className="mt-3 text-xs text-gray-500">
+        {t('report.crypto.scope_note')}
+        <br />
+        {t('report.crypto.draft_note')}
+      </p>
+    </Section>
+  )
+}
+
 function Notes() {
   const { t } = useTranslation()
   return (
@@ -226,6 +396,7 @@ export default function App() {
       <RiskSummary onPick={setFilter} active={filter} />
       <Findings filter={filter} />
       <Sbom />
+      <Crypto />
       <Notes />
     </div>
   )

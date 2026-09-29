@@ -1,8 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { Severity } from '../types'
-import { SEVERITY_KEY } from '../types'
+import type { QuantumStatus, Severity } from '../types'
+import { QUANTUM_KEY, SEVERITY_KEY } from '../types'
 import { SUPPORTED_LANGS } from '../i18n'
 
 const SEV_BG: Record<Severity, string> = {
@@ -23,6 +23,26 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
     >
       <span aria-hidden="true">●</span>
       {t(SEVERITY_KEY[severity])}
+    </span>
+  )
+}
+
+const QUANTUM_BG: Record<QuantumStatus, string> = {
+  Safe: 'bg-q-safe',
+  Vulnerable: 'bg-q-vulnerable',
+  NotApplicable: 'bg-q-na',
+  Unknown: 'bg-q-unknown',
+}
+
+/** 量子狀態徽章（ADR-013）。同 SeverityBadge：色彩非唯一資訊載體。 */
+export function QuantumBadge({ status }: { status: QuantumStatus }) {
+  const { t } = useTranslation()
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-semibold text-white ${QUANTUM_BG[status]}`}
+    >
+      <span aria-hidden="true">◆</span>
+      {t(QUANTUM_KEY[status])}
     </span>
   )
 }

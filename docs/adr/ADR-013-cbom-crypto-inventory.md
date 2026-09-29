@@ -1,0 +1,400 @@
+# [ADR-013]: CBOM 密碼學資產盤點（CycloneDX CBOM + cbomkit-theia 第三引擎）
+
+| 欄位 | 內容 |
+|------|------|
+| **狀態** | `Accepted` |
+| **接受日期** | 2026-09-22（使用者顯式授權；Draft 直升，跳過 FIRM 之 POC 驗證——風險已於摘要明示） |
+| **日期** | 2026-09-22 |
+| **決策者** | CyTrace Team |
+
+> **狀態說明：** `Draft`（初稿，禁止實作）→ `FIRM`（POC 驗證，允許 commit，需附驗證證據）→ `Accepted`（人類審核通過）
+
+> ⬆️ 由 `Draft` 升 `Accepted`：使用者 2026-09-22 透過 `/asp:approve-adr ADR-013` 呼叫，
+> 看完指令摘要後回覆「**我同意升**」明確同意（人類顯式授權，非 AI 自行升級，符合 ADR 狀態變更鐵則）。
+>
+> **摘要中已明示、使用者據以決定的事項**：8 章 / 10 條決策；**無 Verification Evidence 章節**
+> （證據改存 `.asp-gate-log/` 兩份檔案）；`roadmap-ref` 具備；**此為 Draft 直升，跳過 FIRM 之 POC 驗證**；
+> 以及六項缺項——(1) 禁中國來源鐵則之個人層級解釋〔升級前已裁定並寫入本檔〕、
+> (2) 證據由 AI 代理產出且**未經人類獨立複核**、(3) Windows 平台實跑未驗〔OCI 兩模式已於升級前補測通過〕、
+> (4) 三項已知風險（registry 回退外連、`dir` 模式靜默漏檢、stdout 污染）之緩解**尚未實作**、
+> (5) **CyTrace 本身零行整合碼通過驗證**——決策 2/4/7/9/10 所述設計未經實作驗證、
+> (6) 治理文件（CLAUDE.md 鐵則、SRS NFR-03/05、README、DELIVERY_SOP、NOTICE、ADR-002 指標）
+> 將有矛盾期，至 T902 / T908 完成為止。
+>
+> **本 repo 之機械驗收限制（誠實記）**：無 `.asp/` 目錄與 `gate.sh`，故 skill 第 6 步的
+> `adr-draft` / `adr-index` 驗收無法執行；`docs/adr/README.md` 索引不存在，故第 5 步的索引同步無對象。
+
+---
+
+## 背景（Context）
+
+交件方除了「依賴有哪些 CVE」，開始要求盤點「系統裡有哪些密碼學資產、哪些在後量子時代會失效」。
+CycloneDX 自 **1.6**（2024-04）起以 `type: "cryptographic-asset"` + `cryptoProperties` 定義
+**CBOM**（Cryptography Bill of Materials），**1.7**（2025-10）再加 Cryptography Registry 封閉清單。
+
+**現況（2026-09-22 實查）：**
+- CyTrace 無任何 crypto / CBOM 實作；SBOM 由 Syft 產出後原樣落地（`engine.rs` → `sbom.cdx.json`），
+  `parse_cyclonedx` 只取 name/version/type/licenses。
+- 現行引擎 **Syft 不產 CBOM**——釘選版 1.45.1（`scripts/versions.env:5`）與上游最新 1.52 皆然
+  （僅以 binary classifier 把 openssl/aws-lc 認成套件）；
+  **Grype** 無此能力；**Trivy** 的 CycloneDX CBOM 輸出（PR #11125）尚未合併。
+- 後量子背景：NIST FIPS 203/204/205（ML-KEM / ML-DSA / SLH-DSA）已定案；
+  **NIST IR 8547 仍為初稿（2024-11 ipd）**，2030 棄用 112-bit 量子脆弱演算法、2035 全面禁用為「提議」日期；
+  NSA CNSA 2.0 已公布演算法清單。
+
+## 評估選項（Options Considered）
+
+### 選項 A：cbomkit-theia 作第三引擎（採用）
+- PQCA（Linux Foundation）維護，原 IBM 捐出；Go、**專案本體 Apache-2.0**（惟**內嵌的 gitleaks 規則庫為 MIT**
+  ——故「交件全為 Apache-2.0」不再成立，見下方「修訂提議」）；v1.1.2（2026-05）且持續提交。
+- 靜態建置（`CGO_ENABLED=0`）與離線性**已於 `v1.1.2@dcd95ac` 實建實測**（兩次不同路徑建置 SHA256 一致；
+  建置與 `dir` / `image` 掃描全程 `--network none` 通過）——見下方「供應鏈審查」表與
+  `.asp-gate-log/20260922T075351Z-factcheck-ADR-013.md`。
+- ⚠ **外連行為的正確描述**：**並非「只有在給 registry 參照時才走網路」**。實測顯示
+  **輸入不可讀時 theia 會自行回退嘗試 docker daemon / podman / containerd / registry**
+  （見下方「新發現二」）——使用者未給 registry 參照也可能送出請求。
+  故決策 2 的輸入限制**與 image 前置可讀性檢查**同為零外連（NFR-01）的必要防線。
+- **殘餘未驗**：Windows 平台實跑、OCI layout 目錄模式（見快照「尚未查證」節）。
+- 偵測：X.509 憑證（簽章/公鑰演算法）、公私鑰與密鑰（內嵌 gitleaks 規則）、`openssl.cnf`（TLS 版本/cipher suite）、
+  `java.security`（disabledAlgorithms 信心值）。輸出 CycloneDX **1.6 JSON**（stdout）。
+- **缺點**：依賴樹大（vendor 153 模組）；不掃原始碼；Windows **僅驗交叉編譯產出格式（PE32+），平台實跑未驗**；
+  失敗路徑有隱含外連回退（見上）。
+
+### 選項 B：自建 Rust 憑證掃描（`x509-parser`）
+- 零新 binary、供應鏈最乾淨；但只涵蓋憑證/公鑰，TLS/JCA 設定、金鑰偵測需自行重寫，工作量大。
+- **保留為備案**：若選項 A 供應鏈審查不通過或 Windows 無法建置，改走此路。
+
+### 選項 C：cdxgen（`--include-crypto`）
+- Apache-2.0、可產 1.7；但 standalone 體積大、多數語言會觸發套件管理器外連（需 secure mode 才收斂）→
+  違反「穩定優先」與零外連原則。否決。
+
+### 選項 D：sonar-cryptography / cbomkit 後端
+- 原始碼層演算法偵測最完整，但需 SonarQube + JVM（或 Quarkus + Postgres）→ 無法單包離線交付。否決。
+
+### 選項 E：等 Syft / Trivy 上游
+- 不增加引擎；但時程不可控。**列為長期觀察**：上游正式支援後可再評估收斂回 Syft。
+
+## 決策（Decision）
+
+1. **引擎**：採選項 A，釘選 **cbomkit-theia** 為第三引擎，版本寫入 `scripts/versions.env`；
+   **自源碼 `go mod vendor` 建置**（不依賴上游 release binary）。
+   **可重現建置條件**（與 syft/grype 釘上游 release tar 的 SHA 本質不同，必須明列）：
+   - 釘 Go toolchain 版本（與上游 go.mod 一致，寫入 `versions.env`）；
+   - 建置旗標固定 `CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -trimpath -buildvcs=false -ldflags="-s -w -buildid="`；
+   - **釘死的是 vendored 原始碼 tarball 的 SHA256 + `go.sum`**；binary SHA256 為建置產物紀錄，隨交付附上。
+   - **建置地點單一化**（避免三處各建產生不同 SHA）：theia binary **只由 Dockerfile 的 go builder stage
+     （或 CI 的等價步驟）建置一次**，產物與其 SHA256 作為釋出資產；`package.sh` / `package.ps1`
+     **沿用現行模式取用該產物**，不各自重建。
+     注意現況：`scripts/package.sh` 由 PATH 複製引擎、`scripts/package.ps1` 自 GitHub releases 下載——
+     而本決策明文「不依賴上游 release binary」，故 **Windows 交付鏈需改為取用我方建置的產物**（併入 T902）。
+   - Go builder base image **須以 digest 釘選**，比照 Dockerfile 既有三個 `FROM ... @sha256` 慣例。
+2. **輸入限制**：**限制實作於 `engine::cbom` 自由函式層**（非僅 `RealEngine`——CLI 走
+   `engine::sbom` / `engine::vuln` 自由函式，不經 `RealEngine`，見 `crates/cytrace-cli/src/main.rs:126`）：
+   只允許 `dir <本地路徑>` 與 `image <docker-save tar / OCI layout>`，**拒絕 registry 參照**（防止觸發外連）。
+   **目標字串轉譯規則**：CyTrace 目標語法沿用 syft（`dir:`、`docker-archive:`、單檔路徑、裸映像名）；
+   轉譯時 —— 既有目錄 → `dir`；既有 tar / OCI layout 目錄 → `image`；
+   **裸映像名或任何無法在本地判定的形態 → 拒絕（回報 i18n 錯誤鍵，不猜測）**。
+   **決定性防線：一律正規化為絕對路徑**（`std::fs::canonicalize`，2026-09-24 修訂）。
+   理由與來歷：theia 解析輸入失敗後會把**字串當成映像參照**，依序回退
+   docker daemon → podman → containerd → **registry**。實測一個 8 bytes 的 gzip 殘檔
+   命名為 `nginx`，它會載入本機真正的 nginx 映像並輸出 10,807 個元件，當成使用者目標寫進報表
+   （報表造假）；截斷的 tar 則會發出 `GET https://index.docker.io/...`（違反 NFR-01）。
+   改傳絕對路徑後 theia 直接 `could not parse reference`，**兩條回退鏈整條關閉**。
+
+   **先前版本的錯誤判斷（留作來歷，勿再走回頭路）**：原以「可讀性前檢（實際開檔成功）」
+   為防線，第二輪複審證明無效——`File::open` 成功只代表讀得到，擋不住名稱解析回退；
+   其後改以 magic bytes 驗 tar/gzip 亦無效，因為殘檔同樣通得過格式檢查。
+   **`env_clear()` 也不是零外連防線**（daemon 走預設 unix socket、registry 不吃環境變數），
+   它只避免 `DOCKER_HOST` 指向非預期 daemon。
+
+   **輔助驗證**：非目錄目標須通過 magic bytes（tar `ustar` @257 / gzip `1f 8b`）；
+   OCI layout 目錄須**實質有效**（`oci-layout` 為含 `imageLayoutVersion` 的合法 JSON，
+   且 `index.json` 與 `blobs/` 齊備）——只判標記檔存在的話，一個空檔就能讓任意目錄被當成映像。
+   可讀性前檢保留（不可讀即拒絕、不 spawn），但定位為輔助而非主防線。
+3. **範圍**：第一階段只盤點**檔案系統 / 映像層**密碼資產（憑證、金鑰、TLS/JCA 設定）。
+   **原始碼層演算法使用偵測列為範圍外**（無符合單包離線的方案），報表需明示此限制。
+4. **預設關閉與降級語意**：CLI `run` / `scan` / `batch` 以 `--cbom` 開啟；console 以勾選項開啟。
+   現行 `CytraceError::Engine`（`crates/cytrace-core/src/error.rs:9`）把「binary 不存在」與「子程序失敗」
+   併為同一型別，且 CLI 以 `?` 直接中止、server 把整個 job 標 Failed —— **沿用它做不到降級**，故新設計：
+   - `engine::cbom` 回傳 `Result<Option<String>>`：**binary 不存在（`io::ErrorKind::NotFound`）→ `Ok(None)`**；
+   - **其餘失敗（子程序非零、輸出非 JSON、解析失敗）→ `Err`，且不得中止 SBOM/CVE 主流程**：
+     於呼叫端捕捉，記為 `CbomStatus::Failed { reason_key }`；
+   - 三種「無 CBOM」狀態在資料契約中必須可區分（見決策 7）：`NotRequested` / `EngineAbsent` / `Failed`。
+   - 主流程 exit code 不受影響 —— **唯一例外見決策 9**。
+5. **輸出物**：`scan` 多落地 `cbom.cdx.json`（theia 原樣輸出，與 `sbom.cdx.json` 同策略，不自行改寫升版）；
+   解析端容忍 CycloneDX 1.6 / 1.7 子集。
+   **落地前必經決策 8 的私鑰檢查**：若 theia 輸出含金鑰內容，依決策 8 處置（不得原樣落地）。
+6. **量子脆弱判定**（Rust core 新模組 `quantum.rs`）：
+   - 移植 cbomkit `opa/quantum_safe.rego`（Apache-2.0）規則：PQC 名稱 / OID 白名單
+     （ML-KEM、ML-DSA、SLH-DSA、Falcon、XMSS、LMS…）、`nistQuantumSecurityLevel` 門檻、對稱演算法 → 不適用；
+   - **量子狀態與弱金鑰是兩條獨立的軸**，不得混為一值：
+     `quantum: Safe / Vulnerable / NotApplicable / Unknown` 與 `weak_key: bool`（附判定依據）分欄輸出
+     （RSA-4096 為 `Vulnerable` 但非 `weak_key`；RSA < 2048、ECC 曲線強度 < 128-bit 安全等級 → `weak_key`）。
+   - **ECC 依曲線名稱判定，不以位元數門檻判定**（Ed25519 / X25519 常報 255 bit，位元數門檻會誤判為弱金鑰）；
+     曲線名稱對照表列於實作，未知曲線 → `Unknown`，不臆測。
+   - 輸出 `Safe / Vulnerable / NotApplicable / Unknown`；**不做 CNSA 2.0 逐項對照**（留待後續）。
+   - 報表中 NIST IR 8547 年限一律標示「草案」。
+7. **資料契約（修訂 ADR-009）**：`ScanResult` 新增 `crypto: Option<CryptoInventory>`，
+   `CryptoInventory` 內含 `status: CbomStatus`（`NotRequested` / `EngineAbsent` / `Failed` / `Completed`），
+   故「CBOM 有跑但 0 資產」與「未執行」可區分。`SCHEMA_VERSION` 1 → 2。
+   - **決策 10 所需的兩個欄位一併入契約**（否則報表顯示不出來，且 `report` 子命令無法從存檔重建）：
+     `CryptoInventory.unscanned_unreadable`（因權限未掃描）與 `CryptoInventory.unscanned_oversize`
+     （因**引擎自身 1 MiB 門檻**未掃描；theia 1.1.2 無旗標可調，操作員無法以權限或參數解除）
+     ——兩者處置相反故分欄，閘門以 `unscanned_total()` 判定；以及 `Meta.scan_identity`（執行身分）。
+     `Meta` 為 ADR-009 凍結的封閉 struct（`crates/cytrace-types/src/lib.rs:102-107`），
+     新增欄位只能經本決策這個修訂出口；兩者皆標 `#[serde(default)]`，
+     並把「未執行」情境下的序列化形態納入 golden 釘死。
+   - **所有新增欄位（含 `Summary` 的 crypto 計數、`ToolVersions` 的 theia 欄位）一律標 `#[serde(default)]`**，
+     v1 檔以 `report` 子命令仍可重建（全 repo 無讀取端檢查 `schema_version`，僅靠 default 相容）。
+   - 讀取端新增：`schema_version` **大於** `SCHEMA_VERSION` 時以 i18n 鍵發出警告
+     （舊版 binary 讀 v2 會靜默丟棄 crypto，此警告是唯一提示）。
+   - golden baseline：新欄位在「未執行」情境下的序列化形態需釘死（`skip_serializing_if` 與否會改變 golden）。
+8. **信任邊界（NFR-09）**：**約束範圍含 `ScanResult`、報表 HTML、日誌，以及原樣落地並可經
+   `/api/v1/jobs/{id}/artifacts/cbom` 下載的 `cbom.cdx.json`**（`crates/cytrace-server/src/router.rs:52`）。
+   只可記錄私鑰「存在、型別、長度、指紋、路徑」，**絕不含金鑰內容**；以含假私鑰 fixture 的測試斷言把關。
+   - **退路（供應鏈審查第 5 項若實測發現 theia 輸出含金鑰內容）**：決策 5 的「不改寫」讓位於 NFR-09——
+     依序採用：(a) 落地前遮蔽該欄位並在檔內註明已遮蔽；(b) 若無法安全遮蔽則不落地 `cbom.cdx.json`、
+     僅保留 `ScanResult` 摘要。兩者皆須在報表 Notes 明示。
+9. **可選閘門**：`--fail-on-quantum-vulnerable`（exit code 2，沿用 `failon.rs` 模式），預設不啟用。
+   - **fail-closed**：指定本旗標時，若 CBOM 因引擎缺席 / 失敗 / 未請求而**未取得結果**，
+     一律 **exit 1（錯誤）並說明原因**，不得回 0——「沒掃到」絕不等於「通過」。
+   - `Unknown` 視為**未通過**（exit 2）；理由：軍規場域寧可誤報不可漏報。
+   - **判定順序（2026-09-26 修訂；兩條軸不可互相遮蔽）**：
+     (1) 引擎缺席 / 失敗 / 未請求 → exit 1；
+     (2) 有 `Vulnerable` 或 `Unknown` 資產 → exit 2；
+     (3) 無脆弱資產但 `unscanned_total() > 0`（清單不完整）→ exit 1；
+     (4) 完成、無脆弱、無漏掃 → exit 0。
+     **清單不完整只能否定「通過」，不能否定「已偵測到脆弱」**——先前版本把
+     `unscanned_total() > 0` 排在脆弱判定之前，導致真實映像（必含 >1 MiB 的
+     libcrypto/libstdc++）恆回 exit 1、三態塌縮，報表裡數千項脆弱資產反被訊息說成「沒掃到」。
+   - CVE 閘門與量子閘門共用 exit 2 時，**輸出須指明是哪一個觸發**（CI 需可區分）。
+   - **批次語意（必須明訂，否則 fail-closed 會被吞掉）**：現行 `batch` 的彙整只認 `EXIT_FAILON`
+     （`crates/cytrace-cli/src/main.rs:143-149`：`worst` 初值 `EXIT_OK`，僅 `== EXIT_FAILON` 會抬高），
+     而決策 4 已把「引擎缺席」改為 `Ok(None)`、不再有錯誤物件可由 `?` 傳播 ——
+     **照現行文字實作，`batch --cbom --fail-on-quantum-vulnerable` 在引擎缺席時會回 0**，
+     正是本決策要防的情境。故明訂退出碼優先序：**任一目標 exit 1 → 整批 1（優先於 2）；
+     否則任一目標 exit 2 → 整批 2**；`run_one` 的彙整條件須一併修改，不可只比對 `EXIT_FAILON`。
+   - 成功指標的 fail-closed 驗證**須涵蓋 `run` 與 `batch` 兩者**。
+10. **執行環境硬性條件（T901b 實測後新增）**：
+    - **必須提供可寫 `HOME`**：`HOME` 不可寫時 theia 會把非 JSON 訊息印到 **stdout** 汙染輸出。
+      `engine::cbom` 一律以 `HOME=<專用暫存目錄>` 啟動；且**解析前先驗證 stdout 為合法 JSON**，
+      失敗即歸為 `CbomStatus::Failed`（決策 4），不得把污染後的內容當結果。
+    - **空輸出不得視為「無密碼資產」**：實測顯示輸入不可讀時 theia 會 **stdout 空白 + exit 0**
+      （並回退嘗試 registry）。故 `engine::cbom` 遇**空輸出或非 JSON** 一律歸 `CbomStatus::Failed`，
+      **絕不映射為「掃到 0 項」**。
+    - **可讀性前檢：兩模式皆適用**（image 不可讀會觸發 registry 回退，見新發現二）。
+      **靜默漏檢**則僅 `dir` 模式會發生——實測顯示權限不足時 theia 完全未回報 `0600` 私鑰、
+      無警告、exit 0；`image`（tar）模式讀 layer 內容，不受宿主權限影響。故：
+      - CLI 模式以呼叫者身分執行，**掃描前檢查目標可讀性**，遇不可讀項目須計數並在報表顯性標示
+        「因權限未掃描 N 項」——**不得無聲略過**；
+      - 容器 / server 模式（distroless nonroot 65532）同理；沿用 `f98e021` 對 image SBOM 的處置慣例，
+        必要時以指定 UID 執行，並把採用的身分寫入報表 meta。
+    - 成功指標新增對應測試（見下）。
+
+## 修訂提議（人類已裁定：**接受三引擎**，2026-09-22）
+
+> **裁定來歷**：2026-09-22，使用者於對話中經 AskUserQuestion 明示選擇「接受三引擎」
+> （選項另有「否決，改自建 Rust 掃描」與「整份退回」）。本裁定為人類授權，非 AI 自行決定。
+> **此裁定不等同 ADR 升 `Accepted`**——狀態仍為 `Draft`，升級須另經 `/asp:approve-adr`。
+
+引入第三引擎與**已 Accepted 的治理文字正面衝突**。本節只**列出**待改清單，
+**不在本分支修改任何一份**；待 ADR-013 升 `Accepted` 後由 ROADMAP **T908** 處理
+（比照 ADR-011 對 NFR-09 的作法、T809 先例）。
+
+| 文件 | 現行文字 | 衝突點 |
+|------|----------|--------|
+| `CLAUDE.md`（供應鏈純淨鐵則） | 「交件僅含 Syft/Grype（Apache-2.0）」 | 新增第三引擎 theia |
+| `docs/SRS.md` NFR-05 | 「僅 Apache-2.0 第三方（Syft/Grype）」 | 同上；且 theia 內嵌 gitleaks 規則庫為 **MIT** |
+| `docs/SRS.md` NFR-03 | 報表標註工具版本 | `ToolVersions` 需新增 theia 欄位（`#[serde(default)]`） |
+| `README.md`、`docs/DELIVERY_SOP.md`（bin 清單 / NOTICE「皆 Apache-2.0」） | 兩引擎清單 | 需更新為三引擎並標註 MIT 成分 |
+| `docs/adr/ADR-002` 成功指標 | 「全為 Apache-2.0」 | 依實況修訂 |
+
+**已裁定「接受」** → 上表列為 ADR 升 `Accepted` 後的後續任務（ROADMAP T908），本 ADR 據以續行。
+（「否決」情境已不適用：原將改走選項 B 或整份退回。）
+
+## 供應鏈審查（核准前必須完成；實測見 ROADMAP T901b，須人類授權隔離環境）
+
+本專案鐵則禁止中國來源依賴。theia 依賴樹需逐模組審查原產地與授權，審查結果附於本節：
+
+**實測環境**（2026-09-22 執行，ROADMAP T901b）：拋棄式 `golang:1.26.1` 容器，原始碼為
+`git clone --branch v1.1.2` → commit `dcd95ac86d1cbe6e867ff3ee059b9ef77bac6a59`，clone 置於 repo 外暫存區；
+**抓取階段**（`go mod vendor`）開網路，**建置與執行階段一律 `--network none`**，不掛家目錄、不掛 docker.sock。
+
+| 項目 | 狀態 |
+|------|------|
+| 依賴清單 + 授權彙整 | ✅ vendor **153 模組**，其中 **134 個模組帶自己的 LICENSE 檔**（差額 19 為同一 repo 下共用上層授權的子模組，例如 `golang.org/x/*`、`go.opentelemetry.io/*` 家族）；深度掃描共 **122 份授權檔**（含子目錄內的附屬授權）。類型：Apache 42、MIT 42（另 7 份為未標題的 MIT 全文）、BSD 4、ISC 1、**MPL-2.0 3**。**無 GPL / AGPL / LGPL**（判定指令：`grep -rlniE "GNU (GENERAL\|AFFERO\|LESSER) PUBLIC LICENSE" vendor --include="LICENSE*"` → 僅 3 筆命中，逐一開檔確認皆為 **MPL-2.0 相容性條款**中提及 GNU 之字樣，非 GPL 授權） |
+| MPL-2.0 三項 | ✅ `hashicorp/golang-lru`、`hashicorp/go-version`、`cyphar/filepath-securejoin`。檔案級弱 copyleft，靜態連結散布可接受，**須列入 NOTICE**（掛 T902，見下） |
+| **全量原產地盤點（153 模組）** | ✅ 已做。**域名層**：`github.com` 132、`golang.org` 6、`go.opentelemetry.io` 5、`google.golang.org` 3、其餘 7 個各 1；**無 `.cn`、無 gitee，無任何中國企業網域**。**著作權層**：對全 vendor 的 LICENSE 與 `.go` 檔掃描中國企業／城市關鍵字（alibaba/aliyun/tencent/baidu/huawei/bytedance/xiaomi/pingcap/qiniu/didi/beijing/shanghai/shenzhen/hangzhou/china 等）→ **零命中**。**組織層**：72 個 GitHub 擁有者逐一檢視，**無任何中國企業或中國開源組織**（無 OpenSCA 類專案） |
+| 個人維護者國籍 | ⚖️ **已裁定不納管**（見下方「鐵則涵蓋範圍之裁定」）。已知具個人身分線索者：`huandu/xstrings`（`Copyright (c) 2015 Huan Du`）、`STARRY-S/zip`（`Copyright (c) 2023, Starry`），依本裁定不構成違反 |
+| `huandu/xstrings` 是否為 theia 獨有 | ✅ **否**：釘選的 **syft v1.45.1 與 grype v0.114.0 的 `go.sum` 同樣含 `huandu/xstrings v1.5.0`（經 `Masterminds/sprig v3.3.0`）**——現行交件早已包含，非 theia 增量。是否排除須三引擎一致裁定 |
+| 內嵌 gitleaks 規則庫授權 | ✅ `zricethezav/gitleaks/v8 v8.30.1` **MIT**、`gitleaks/go-gitdiff v0.9.1` **MIT** |
+| `GOOS=windows` 建置（ADR-010） | ✅ 交叉編譯成功，產物為 PE32+ x86-64 console executable |
+| 可重現建置 | ✅ 以決策 1 的參數於**兩個不同路徑**各建一次，SHA256 相同：`672a3d06ce32d1a242f0f4c10dc0280c257fa4717ecf9c7c6e5f2718bf3adecf`（linux/amd64，27,947,134 bytes，`statically linked, stripped`） |
+| 假私鑰 fixture：輸出不含金鑰內容（決策 8） | ✅ **通過**。RSA-2048 / RSA-1024 / Ed25519 私鑰與一組隨機假 AWS 憑證皆被偵測，輸出只含型別、長度、格式（PEM）、OID 與檔案路徑；三個私鑰檔的任一 40 字元片段、access key id 與 secret 值**皆未出現在輸出中**；`PRIVATE KEY` 標記 0 命中。→ 決策 5「原樣落地」與 NFR-09 **不衝突**，退路暫不需啟用 |
+| theia 是否污染 stdout | ⚠ **會**。`HOME` 不可寫時，`could not create application folder …` 會印到 **stdout**，使 JSON 解析失敗（exit code 仍為 0）。→ 見決策 10 |
+| `--network none` 離線性 | ✅ 建置與 `dir` 掃描全程 `--network none` 成功；唯獨需可寫 `HOME` |
+| `image` 模式三種輸入 | ✅ **全數通過**：`docker save` tar、**OCI layout 目錄**、**OCI layout tar** 皆掃描成功（3,499–3,714 元件，含 base image CA 憑證庫）；三者私鑰偵測結果一致（RSA-2048 / RSA-1024 / ED25519）。**私鑰偵測不受宿主權限影響**——以 nonroot(65534) 與 root 掃同一輸入，結果完全相同；輸出同樣不含金鑰內容 |
+| CycloneDX 1.6 schema 合規 | ✅ 以 **vendored schema 離線驗證**（`bom-1.6.schema.json` + `spdx` + `jsf-0.82`，Draft7Validator）：`dir`、`docker save` tar、OCI 目錄、OCI tar **四種輸入的輸出皆零違規** |
+| 輸入不可讀時的行為（image 模式） | ⚠ **危險**：tar 不可讀時錯誤只寫 stderr、**stdout 空白、exit code 仍為 0**；且會**依序回退嘗試 docker daemon / podman / containerd / registry**，stderr 可見 `Get "https://index.docker.io/v2/"` —— **隱含外連**，見決策 2 與決策 10 |
+
+### 鐵則涵蓋範圍之裁定：「禁中國來源依賴」及於組織，不及於個人
+
+> **來歷**：2026-09-22，AI 提出本解釋並說明理由，使用者於對話中以「按你的建議」採納。
+> （非逐字裁決語句，僅為採納既有建議；如需更強的正式裁定，應於升 `Accepted` 時一併複述確認。）
+
+**裁定內容**：`CLAUDE.md` 供應鏈純淨鐵則與 `docs/SRS.md` NFR-05 所禁止的「中國來源依賴」，
+規範對象為**中國來源的專案、組織或企業**（鐵則原文舉例為 OpenSCA-cli），
+**不及於個別貢獻者的國籍或居住地**。
+
+**理由**：
+
+1. 鐵則原文的舉例即為專案層級，非個人層級。
+2. 個人國籍無法由 repo 內容驗證，納入等同訂下一條執行不了、也無法稽核的規則。
+3. 若改採個人納管，**現行交件立即不合規**——已 Accepted 的 ADR-002 選定的 syft / grype
+   同樣含 `huandu/xstrings`（經 `Masterminds/sprig`）。該議題範圍遠大於 CBOM，須另案處理。
+
+**連帶要求（併入 T902）**：出貨 NOTICE 現行宣告「本產品不含中國大陸來源依賴（如 OpenSCA-cli）」
+（`scripts/package.sh:59`）須加註涵蓋範圍，例如「本宣告之審查範圍為依賴之來源網域、著作權聲明與
+維護組織；不含個別貢獻者之國籍」。**本 ADR 不修改該檔**（Draft 期間禁動生產碼），僅記錄要求。
+
+### ⚠ 新發現一：`dir` 模式下權限不足會靜默漏檢
+
+同一份 fixture，以**非 root（65534）**執行 `dir` 掃描時，三個 `0600 root:root` 的私鑰檔**完全未被偵測**，
+只找到 `0644` 的那一個；**無錯誤、無警告，exit code 仍為 0**。
+這與既有的 image SBOM 問題同類（見 commit `f98e021`：syft 需 `--user 0:0` 才掃得到 tar）。
+對 CyTrace 影響重大——容器交付跑 distroless **nonroot（65532）**，掃描掛載目錄時會**靜默低報**私鑰。
+
+**範圍界定（實測釐清）**：此問題**只存在於 `dir` 模式**。`image`（tar）模式讀的是 layer 內容，
+不受宿主檔案權限影響，nonroot 與 root 結果一致。
+
+### ⚠ 新發現二：`image` 模式輸入不可讀時會回退嘗試外連
+
+tar 檔不可讀時，theia 依序嘗試 docker daemon → podman → containerd → **registry**，
+stderr 出現 `failed to get image descriptor from registry: Get "https://index.docker.io/v2/"`。
+在 `--network none` 下該嘗試失敗，但**在有網路的環境會真的送出請求**——違反零外連鐵則。
+且此情境下 **stdout 空白、exit code 仍為 0**，呼叫端若只看 exit code 會誤判為「掃描成功、無密碼資產」。
+→ 決策 2「拒絕 registry 參照」因此不只是防呆，而是**必要防線**；並見決策 10 的空輸出處置。
+
+## 後果（Consequences）
+
+**正面影響：**
+- 交件新增 CBOM，可回應後量子遷移盤點需求；沿用既有單檔報表與離線交付鏈。
+- 引擎選自中立基金會（PQCA / LF），本體與 Syft/Grype 同為 Apache-2.0。
+
+**負面影響 / 技術債：**
+- 第三個 Go binary：離線包與 image 體積增加（預估數十 MB），版本 bump 與驗證多一條線。
+- theia 自源碼建置需 Go toolchain 進建置環境（Dockerfile 新增 go builder stage）。
+- 範圍不含原始碼演算法偵測；使用者若誤以為「CBOM 全覆蓋」會高估安全性 → 報表 Notes 區需明示。
+- 量子判定規則為名稱 / OID 對照，準確度受 theia 偵測品質限制。
+
+**後續追蹤：**
+- 觀察 Syft / Trivy 上游 CBOM 支援，成熟後評估收斂。
+- CNSA 2.0 逐項對照、NIST IR 8547 定稿後更新年限文案。
+
+## 成功指標（Success Metrics）
+
+| 指標 | 目標值 | 驗證方式 | 檢查時間 |
+|------|--------|----------|----------|
+| 零外連（正常路徑） | `--network none` 下 `run --cbom` 成功 | 離線 E2E | 每次 release |
+| 私鑰不外洩 | 報表 / ScanResult / 日誌 / **落地的 `cbom.cdx.json`** 皆不含 fixture 金鑰內容 | 單元測試斷言 | 每次 CI |
+| v1 相容 | v1 ScanResult 以 `report` 可重建 | 回歸測試 | 每次 CI |
+| golden 穩定 | CBOM fixture golden 不變 | `tests/golden` | 每次 CI |
+| 降級不影響主流程 | theia 缺席 / 執行失敗兩情境下，SBOM/CVE 報表正常、exit code 不變 | 整合測試（T907） | 每次 CI |
+| 閘門 fail-closed | 指定 `--fail-on-quantum-vulnerable` 而未取得 CBOM 結果 → exit 1（非 0）；**`run` 與 `batch` 皆須驗** | 整合測試（T907） | 每次 CI |
+| 零外連（失敗路徑） | 以**不可讀 tar** 觸發：斷言 theia **未被 spawn**、stderr 無任何 registry 嘗試字串 | 整合測試（T907） | 每次 CI |
+| 版本可稽核（NFR-03） | 報表標示 theia 版本 | 報表欄位檢查 | 每次 CI |
+| CycloneDX 合規 | `cbom.cdx.json` 通過 vendored 1.6 schema 驗證 | 離線 schema 驗證 | 每次 CI |
+| 不得退回映像參照 | 交給 theia 的路徑必為絕對路徑（殘檔命名為 `nginx` 不得載入他人映像） | 單元測試 `target_path_is_always_absolute` | 每次 CI |
+| 漏掃計數 fail-closed | 解析不出檔名時**寧可多算不可少算**（惡意檔名不得使計數歸零） | 單元測試 `skipped_count_never_undercounts_*` | 每次 CI |
+| 不完整不遮蔽脆弱 | 有脆弱資產時，漏掃不得把判定改成 `NoResult` | 單元測試 `incomplete_scan_does_not_mask_*` | 每次 CI |
+| 併發不互相污染 | 暫存路徑（theia HOME / SBOM）每次呼叫唯一；unscanned 不跨 job 串 | 併發測試 ×3 | 每次 CI |
+| 無暫存殘留 | 所有離開路徑（含引擎缺席）皆不留暫存目錄 | `engine_leaves_no_temp_home_behind` | 每次 CI |
+| **真引擎 × 真實輸入形態** | **十二**個案例全綠：零資產目標、憑證與私鑰、不可讀 symlink、symlink 循環、FIFO、超大檔、OpenSSH 金鑰、殘檔映像名、非封存檔、**大輸出不塞管線**、**混合目標量綱**、**raw JSON 無私鑰材料** | `make test-real-engine`（CI job `real-engine`，以 Dockerfile theia-builder stage 建引擎） | 每次 CI |
+| 缺工具不得假綠燈 | real_engine 層缺 theia / openssl / ssh-keygen / mkfifo 時**測試失敗**，不得靜默 `return` 後回報通過 | `require_theia()` 與各案例的 `panic!`（實測：移出 PATH 後該案例轉紅） | 每次 CI |
+| 憑證自承計數對帳 | 憑證數取自 theia 的 `numberOfDetectedCertificates=N`（**它從不印** `Found N certificate(s)`），否則憑證類未建模缺口恆為 0 → fail-open | `certificate_count_is_parsed_from_the_real_logrus_field`（凍結的 v1.1.2 實地 stderr）**＋** real_engine 案例 13 直接對真引擎斷言 `admitted_certs`（欄位改名當場轉紅；實測改名後確實 FAILED） | 每次 CI |
+| 憑證不得重複計數 | 同一行同時出現兩種格式時憑證數不得翻倍（否則憑空生出未確定項、假 NoResult） | `certificate_count_is_never_double_counted` | 每次 CI |
+| NOTICE gate 無白列 | 對帳只看 NOTICE 區段（非整個腳本檔），且每一列抹去後都必須轉紅 | `notice-parity-check.py --self-test`（26 個變異全數轉紅；實證：ps1 的 NOTICE 刪掉 Syft 段後初版仍命中 `.PARAMETER SyftVersion` 而放行） | 每次 CI |
+| `reason_detail` 無中文散文 | **全部** `CytraceError` 變體（含 `Io` / `DbMissing`）的細節皆不得夾帶本型別的中文前綴 | `reason_detail_never_carries_chinese_prose_for_any_variant`（逐變體）＋ `CytraceError::untranslatable_detail` 單一出口 | 每次 CI |
+| 逾時無 panic 可達狀態 | 上界 86400s：`u64::MAX` 秒能通過解析但 `Instant + Duration` 依定義 panic | `timeout_rejects_values_that_would_panic_on_instant_add` | 每次 CI |
+| **raw `cbom.cdx.json` 無私鑰材料** | 逐元件斷言 `type: private-key` 不得帶 `value`；raw 無 PEM 標記；並斷言 private-key 元件數 > 0（防空轉） | real_engine 案例 12 `raw_cbom_json_never_carries_private_key_material` | 每次 CI |
+| NOTICE 兩平台對帳 | 兩支腳本的 **NOTICE 區段**（非整個腳本檔）皆含 15 項法律必要實體，含 ring 的 ISC + OpenSSL/BoringSSL 混合授權與 Apache-2.0 §4(b) 的「未修改原始碼」聲明 | `scripts/notice-parity-check.py`（`make lint` 與 CI lint job） | 每次 CI |
+| 逾時無「無限制」可達狀態 | `CYTRACE_CBOM_TIMEOUT_SECS=0` / 負值 / 非數字一律回退預設 600s | `timeout_falls_back_to_default_for_invalid_values` | 每次 CI |
+| 子程序不洩漏 | 逾時**與 `try_wait` 失敗**兩條離開路徑皆 kill + wait 子程序並抽乾兩條 reader | `cbom_with_timeout` 共用 `reap_and_fail!` | 每次 CI |
+| 抽乾不得無上限阻塞 | 以 channel `recv_timeout`（5s 寬限）取代 `JoinHandle::join`：`kill` 只殺直接子程序，孫程序持有管線寫端時 `join` 永不返回＝逾時形同失效 | `large_output_does_not_deadlock_the_pipe`（285 KB 仍不塞管線）；theia v1.1.2 實測不 spawn 子程序，此路徑目前不可達，屬防上游變更 | 每次 CI |
+| CBOM 訊息渲染邊界 | 依**原文是否含佔位符**決定插值或括號（非事後猜細節有無出現）；空細節不留懸空分隔符 | `cytrace-i18n` 四支 `render_cbom_*` 測試 | 每次 CI |
+| 報表顯示失敗成因 | `#crypto` 區段除四態訊息外，`Failed` 另顯示依當前語系渲染的成因（含目標路徑 / 逾時秒數） | `frontend/src/cbom.ts` + 端到端實跑（報表內嵌 `reason_key` / `reason_detail`） | 每次 release |
+| 兩份渲染實作不得漂開 | 前端是 `Catalog::render_cbom` 的第二份實作（報表有執行期語言切換器，不能在 Rust 端預渲染）；鍵清單與變數名規則須一致 | `frontend_cbom_key_list_matches_this_one` / `frontend_var_name_rule_matches_this_one`（實測：任一側少一鍵或改規則即轉紅） | 每次 CI |
+| 成因文字的行為把關 | 契約測試比對不到**行為**差異，故另有實地渲染檢查：9 鍵 × 2 語系 + 5 類邊界 + console 顯示分工 = 42 案，且 **import 真實作與真規則**（`renderCbomFailure`、`SECS_KEYS`、`describeJobError`），不複製任何一份 | `frontend/scripts/cbom-message-check.mts`（Node 22 型別剝離，零新依賴）。實測：把實作的空細節分支、括號規則、未知鍵回退、`SECS_KEYS` 成員、console 的 detail 分工各改壞一次，五次皆轉紅 | 每次 CI（亦在 `make lint`） |
+| 每支機械支撐都有反空轉哨兵 | 檢查本身失效時（正則失配、清單為空、抽取落空）必須轉紅，不得因「沒有問題被回報」而綠 | `i18n-check.py` 分別清點 Rust / 前端兩側鍵數（實測任一側正則或 glob 失效即紅）；`cbom-message-check.mts` 案例數下限；`every_message_uses_...` 佔位符總數下限；`golden.rs` 先釘結構再做否定式斷言；`frontend_secs_key_table_...` 雙側非空 | 每次 CI |
+| 內嵌產物與源碼同步 | 契約測試讀 `frontend/src/*.ts`，**出貨的是 commit 進 repo 的產物**（rust-embed）。改了 src 忘了重產 → 全綠而交付舊邏輯 | CI `前端` job 的「產物與源碼同步」步驟：重建後 `git diff --quiet`，不符即紅並指出要跑哪個 target | 每次 CI |
+| console 錯誤顯示分工 | 訊息與 `detail` 由 `describeJobError` **一次**決定（回報 `detailConsumed`），`<pre>` 只看它的回報——兩處各判一次必然不同步 | `cbom-message-check.mts` 的 console 段 6 案 × 2 語系；實測把 `detailConsumed` 改錯即報「訊息已含 detail 卻未宣告用掉」 | 每次 CI |
+| server 失敗訊息不外洩散文與裸鍵 | **真正在跑的** `job_error_of`（非 `from_core`）的 `detail` 走 `untranslatable_detail()`，`i18n_key` 對 CBOM 用成因鍵而非不存在的 `server.err.cbom` | `job_error_detail_never_carries_prose_or_bare_keys` / `cbom_job_error_keeps_the_specific_cause_key`（實測：退回 `to_string()` 或壓成 `server.err.{kind}` 皆轉紅） | 每次 CI |
+| 抽不到引擎輸出即失敗 | `recv_timeout` 的 `Err` 不得被吞成空 buffer——否則 `skipped` / `admitted_*` 歸零、閘門對沒掃完的目標回 Pass | `drain_or_fail` + 四支單元測試（永不送值的 channel、已就緒、真的空、reader 掛掉）＋ real_engine 案例 14 釘住正常路徑確實抽到 stderr | 每次 CI |
+| `detail = None` 不漏佔位符 | 兩側同規則插 `?`；`reason_detail` 序列化時可省略，故此狀態實際可達 | `none_detail_never_leaks_placeholders`（8 鍵 × 2 語系） | 每次 CI |
+| 未知鍵兩側同規則 | 一律回退 `cbom.err.engine` 並保留細節，不得把裸鍵印給交件對象 | `unknown_keys_fall_back_instead_of_printing_the_raw_key` | 每次 CI |
+| NOTICE 哨兵自身有效 | 六個結構性檢查（區段數、抽取過寬、空值、inline、組合重建、scope 語意）**各自**都有會紅的哨兵，每組斷言該檢查的特徵訊息而非「有任何問題」 | **逐一拿掉六個檢查，六次皆轉紅**（2026-09-28 實測）。此前該列宣稱「六個」而 evidence 只有四個的實測，其中兩條經實測判別力為零：`inline` 沒有任何注入單獨對到它、`scope` 那組從未呼叫 `check()`（第十一輪複審 finding B/C/D，皆先實測確認再修）。更早的「逐列變異」版本其通過條件恆等於正常執行 | 每次 CI（亦在 `make lint`） |
+| 反空轉下限須貼近實值 | 下限遠低於實值時只抓得到「整組失效」，抓不到「部分退化」 | `i18n-check.py` 由 20/20 收到 34/80（實值 48/116，留約三成緩衝）並印出兩側實值；實測讓前端正則只認雙引號 → 前端側 0 鍵、轉紅。`cbom-message-check.mts` 的下限改由組成推導並**分段**（報表側／console 側各一），實測刪掉 console 迴圈 → 報「console 側只跑了 0 個案例」 | 每次 CI |
+| NOTICE 按**產出組合**驗 | 對「含 theia」與「不含 theia」兩種實際 NOTICE 各驗一次，而非驗兩者聯集 | 實測把 Apache-2.0 §4(b) 聲明移回 theia 條件段，檢查精確指出「不含 theia 的包」缺該兩列 | 每次 CI |
+| 鍵清單由 catalog 推導 | `cbom.err.*` 的三處清單（Rust 測試、前端、CLI 測試）不得手抄，須與 catalog 的命名空間逐鍵相符 | `key_lists_are_derived_from_the_catalog_not_hand_copied`；本測試在加入前是**紅的**——第八輪新增 `drain_timeout` 時三處全漏，於是前端回退成「引擎錯誤」、成因靜默消失，而契約測試比的是兩份都漏的手抄清單（第九輪複審 blocker 1） | 每次 CI |
+| 文案佔位符與規則一致 | catalog 中每個鍵的文案所用佔位符，必須是變數名規則指派給它的那一個 | `every_message_uses_the_placeholder_its_rule_assigns`；本測試在加入前是**紅的**——`drain_timeout` 文案用 `{{secs}}` 而規則給 `target`，`{{secs}}` 原樣印給使用者（第九輪複審 blocker 2，第六輪修過的同一個畫面） | 每次 CI |
+| 變數名規則為明表 | `SECS_KEYS`（兩側各一份）取代「只有 `cbom.err.timeout` 用 secs」的單一比較 | `frontend_secs_key_table_matches_this_one` 比對**清單內容**而非原始碼字串形狀（前一版釘的是寫法，規則改寫成明表它就紅） | 每次 CI |
+| zh-TW 字形也釘住 | 附加括號在 zh-TW 須為全角、en-US 須為半角，**雙向**皆有斷言 | 實測把 zh-TW 括號改半角即轉紅（原本只檢查 en-US，字形規則只守住一半） | 每次 CI |
+| en-US 不夾全角標點 | 附加括號依語系選用（半角 / 全角），**含括號分支** | `english_messages_never_use_fullwidth_punctuation`（原測試只覆蓋插值分支故漏了一輪） | 每次 CI |
+| stdout 純淨 | theia 輸出非合法 JSON 時歸為 `Failed`，不得誤判為空結果 | 單元測試（餵污染輸出） | 每次 CI |
+| 權限漏檢顯性化 | 目標含不可讀檔案時，報表顯示「因權限未掃描 N 項」 | 整合測試（`0600` fixture 以非 owner 身分掃） | 每次 CI |
+
+> **為何需要獨立的真引擎測試層**（六輪複審的共同教訓）：M9 共經六輪獨立複審、
+> 打出 16 項阻斷級，而**第四輪之後的全部缺陷都只有真引擎跑得出來**——零資產目標輸出
+> `components: null`、`dir` 模式追隨 symlink、FIFO 導致永久掛死、OpenSSH 格式私鑰
+> 只在 stderr 留痕。fixture 與 fake engine 對這些**一個都測不到**：fixture 的形狀是
+> 我們自己寫的（於是寫成我們以為的樣子），fake engine 的行為是我們自己定義的
+> （於是不會有引擎的怪癖）。此層存在的目的就是補上這個盲區。
+>
+> **第六輪又添一例，而且是我們自己寫的測試在說謊**：`admitted_counts_are_parsed_per_category`
+> 餵的 stderr 寫著 `Found 3 certificate(s) in etc/ssl/bundle.pem`——**theia 從不這樣印**。
+> 憑證走 logrus 結構化欄位 `numberOfDetectedCertificates=N`，於是實作的 certs 恆為 0、
+> 憑證類的「偵測到卻未建模」恆算出 0，閘門一律放行。一個綠燈的測試把一條 fail-open
+> 鎖在原地將近四輪，因為它驗的是我們想像出來的格式。凡計數依賴引擎的 stderr 文字，
+> 該文字就必須有一份**實地抓取、未經改寫**的樣本進測試（2026-09-27 已補，見 fact-check）。
+>
+> **並非每次實測都會抓到缺陷，這也要照實記**：修好解析後實測四組 dir 目標與一個
+> 475 MB 真實映像（grafana:13.2.2，1071 張憑證），detected 與 modelled **完全相符**，
+> 且該欄位每次掃描只印一行（不會每層累加）。也就是說本修正在 v1.1.2 上**不改變任何
+> 現行結論**；它的價值在於引擎行為漂移時會被抓到，而不是修掉了一個當下的誤判。
+>
+> **第八輪把這個教訓推進一層：驗證本身也會驗錯對象。** 第七輪我為 NOTICE gate 做了
+> 「負向驗證」，但試的是 sh 側的 `Syft`——那裡剛好只有小寫 `syft`，於是驗過了；
+> 真正的白列在 ps1（`.PARAMETER SyftVersion`）。第八輪我為前端渲染寫了檢查腳本，
+> 卻手抄了一份 `render()`，於是它驗的是自己的副本：把**實作**的空細節分支與括號規則
+> 各改壞一次，腳本兩次都是綠的。兩次都不是「忘了驗」，而是**驗了、通過了、而那個通過
+> 不含資訊**。凡是宣稱「已證明擋得住」的東西，要交的證據是「把它要擋的東西真的改壞一次，
+> 它轉紅」——改壞的必須是**被保護的那一份**，不是檢查自己的副本，也不是隨手挑的那一邊。
+>
+> 同一輪還有一條同型的：`--self-test` 對 REQUIRED 逐列做變異，看似證明「無白列」，
+> 但 `re.sub` 抹掉全部命中後 `re.search` 依構造必然失敗，故通過條件恆等於正常執行。
+> 把變異上移到打包腳本原始檔仍不改變這件事（實測：抽取退化成吃整檔時兩者雙雙通過）。
+> 白列真正的防線是結構性檢查（區段數、範圍哨兵），故改為對**那些檢查**注入故障。
+>
+> 同一批實測順帶關掉 NFR-09 的一個證據缺口：theia 對 `type: private-key` 的元件
+> **不填 `value`**（只有公鑰帶 base64 值），故原樣落地的 `cbom.cdx.json` 不含私鑰內容。
+> **這是引擎行為，不是本產品的保證**——上游一改，交件報表就會夾帶私鑰而程式碼毫無察覺，
+> 故以案例 12 逐元件斷言作警報。
+
+## 關聯（Relations）
+
+- **修訂（核准後必須同步改，否則文件互相矛盾）**：
+  - ADR-009（ScanResult schema v2）
+  - **SRS NFR-05**（`docs/SRS.md:63`「僅 Apache-2.0 第三方（Syft/Grype）」→ 納入 theia；
+    並註記其內嵌 gitleaks 規則為 MIT，非全數 Apache-2.0）
+  - **SRS NFR-03**（`docs/SRS.md:61` 工具版本標註 → `ToolVersions` 新增 theia 欄位，標 `#[serde(default)]`）
+  - **CLAUDE.md 供應鏈鐵則**（「交件僅含 Syft/Grype（Apache-2.0）」→ 三引擎）
+  - **ADR-002 成功指標**（「全為 Apache-2.0」→ 依 gitleaks MIT 實況修訂）
+  - **ADR-007**（交付包裝）：`DELIVERY_SOP` 的 bin 清單目前只有 `cytrace` / `syft` / `grype`，須納入 theia；
+    NOTICE 須加列 **MPL-2.0 三項**與 gitleaks MIT
+    （落點：`scripts/package.sh:48-61`、`scripts/package.ps1:83-89`，掛 **T902**——NOTICE 產生器所在處）
+  - **ADR-012**（容器化）：Dockerfile 需新增 go builder stage 建 theia，四階段結構與 base image digest 釘選規則同步
+- 沿用：ADR-002（引擎選型原則、禁中國來源）、ADR-005（單檔報表）、ADR-010（雙平台）、ADR-004（i18n）、ADR-008（測試與 golden，套用既有規範）
+- 關聯文件：SDS §3（子程序編排：Syft / Grype → 加入 theia）、SDS §4（`Meta` 結構新增 `scan_identity`）
+- 參考：ROADMAP M9（T901 / T901b / T902–T907）
+- 證據：`.asp-gate-log/20260922T075351Z-factcheck-ADR-013.md`（外部事實查證凍結快照）、
+  `.asp-gate-log/20260922T075351Z-review-ADR-013.md`（獨立複審 NEEDS_WORK + 流程偏差揭露，錨點 `acb0142`）

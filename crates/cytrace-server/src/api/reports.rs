@@ -75,7 +75,7 @@ pub struct ArtifactKind {
     kind: String,
 }
 
-/// `GET /api/v1/jobs/{id}/artifacts/{kind}`：sbom | grype。
+/// `GET /api/v1/jobs/{id}/artifacts/{kind}`：sbom | grype | cbom（ADR-013）。
 pub async fn artifact(
     State(app): State<AppState>,
     lang: Lang,
@@ -84,6 +84,7 @@ pub async fn artifact(
     let file = match p.kind.as_str() {
         "sbom" => "sbom.cdx.json",
         "grype" => "grype.json",
+        "cbom" => "cbom.cdx.json",
         _ => return Err(ApiError::new(lang, ErrorKind::NotFound)),
     };
     artifact_json(&app, lang, &p.id, file)

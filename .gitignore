@@ -30,3 +30,6 @@ dist-console/
 # ── 作業系統 ──
 .DS_Store
 Thumbs.db
+.asp-managed-deny.json
+frontend/pnpm-workspace.yaml
+__pycache__/

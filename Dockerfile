@@ -55,10 +55,28 @@ RUN set -eux; \
     tar -xzf grype.tgz grype; \
     chmod +x syft grype
 
+# ── Stage 3b：CBOM 引擎（cbomkit-theia，自源碼建置；ADR-013 決策 1）──
+# 與 syft/grype 不同：不用上游 release binary，改為釘 commit 自建，
+# 並以固定參數確保可重現；建置產物 SHA256 須與 versions.env 相符，不符即 build fail。
+# base image 以 digest 釘選（比照其他 stage；對應 versions.env 的 THEIA_GO_IMAGE）
+FROM golang:1.26.1@sha256:cd78d88e00afadbedd272f977d375a6247455f3a4b1178f8ae8bbcb201743a8a AS theia-builder
+ARG THEIA_COMMIT=dcd95ac86d1cbe6e867ff3ee059b9ef77bac6a59
+ARG THEIA_LINUX_AMD64_SHA256=672a3d06ce32d1a242f0f4c10dc0280c257fa4717ecf9c7c6e5f2718bf3adecf
+WORKDIR /src
+RUN set -eux; \
+    git clone --no-checkout https://github.com/cbomkit/cbomkit-theia.git .; \
+    git checkout "${THEIA_COMMIT}"; \
+    test "$(git rev-parse HEAD)" = "${THEIA_COMMIT}"; \
+    go mod vendor; \
+    CGO_ENABLED=0 GOFLAGS=-mod=vendor \
+      go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o /out/cbomkit-theia .; \
+    echo "${THEIA_LINUX_AMD64_SHA256}  /out/cbomkit-theia" | sha256sum -c -
+
 # ── Stage 4：runtime（distroless static，non-root）──
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 COPY --from=rust-builder /usr/local/bin/cytrace /usr/local/bin/cytrace
 COPY --from=engines /engines/syft /engines/grype /usr/local/bin/
+COPY --from=theia-builder /out/cbomkit-theia /usr/local/bin/cbomkit-theia
 # /data 由 65532 擁有（掛 volume 時，空 volume 繼承此目錄的 ownership → 可寫）
 COPY --from=rust-builder --chown=65532:65532 /scaffold/data /data
 # 離線鐵則烤死進 image（含 update-check——現行裸機 wrapper 未關的 outbound 洩漏點）

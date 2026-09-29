@@ -62,6 +62,13 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            # PR 專用（產出 pr-<n>）：上面三條規則在 pull_request 事件下全部不適用，
+            # 於是 tags 為空 → build 無標籤 → 後續 `docker run --rm "$IMG"` 拿到空字串而失敗
+            #   ##[warning]No Docker image version has been generated. Check tags input.
+            # PR 不 push，標籤只是給本機 load 的 image 一個名字供冒煙使用。
+            # 與 provenance 那條同一個既有缺陷家族：整條 PR 路徑（load → 冒煙）從未跑過，
+            # 因為此 repo 在本分支之前從未開過 PR。
+            type=ref,event=pr
 
       # tag / dispatch 時登入 GHCR（PR 不登入、不 push）
       - name: GHCR login
@@ -86,10 +93,22 @@ jobs:
             GRYPE_VERSION=${{ env.GRYPE_VERSION }}
             SYFT_LINUX_AMD64_SHA256=${{ env.SYFT_LINUX_AMD64_SHA256 }}
             GRYPE_LINUX_AMD64_SHA256=${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+            THEIA_COMMIT=${{ env.THEIA_COMMIT }}
+            THEIA_LINUX_AMD64_SHA256=${{ env.THEIA_LINUX_AMD64_SHA256 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
+          # provenance / sbom attestation 會讓 buildx 產出 manifest list（即使單平台），
+          # 而 `load: true` 用的 docker exporter 不支援匯出 manifest list：
+          #   ERROR: failed to build: docker exporter does not currently support
+          #          exporting manifest lists
+          # 故 PR（load 本機供冒煙）時關閉，tag（push 到 GHCR）時保留——交付物才需要
+          # 供應鏈證明，冒煙用的本機 image 不需要。
+          #
+          # **既有缺陷，由本分支的 PR 首次暴露**：docker.yml 雖有 pull_request 觸發，
+          # 但此 repo 在此之前從未開過 PR（歷史 run 全為 push tag 或 workflow_dispatch），
+          # 所以 load 那條路一次都沒跑過。
+          provenance: ${{ github.event_name == 'pull_request' && 'false' || 'mode=max' }}
+          sbom: ${{ github.event_name != 'pull_request' }}
 
       # 冒煙：PR（load 的本機 image）與 tag（剛 push）都跑，通過才算數
       - name: 冒煙 --version

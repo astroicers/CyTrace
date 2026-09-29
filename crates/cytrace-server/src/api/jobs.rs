@@ -19,6 +19,9 @@ const VALID_FAIL_ON: [&str; 6] = ["critical", "high", "medium", "low", "negligib
 pub struct CreateJobBody {
     target: TargetSpec,
     fail_on: Option<String>,
+    /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
+    #[serde(default)]
+    cbom: bool,
 }
 
 #[derive(Deserialize)]
@@ -51,13 +54,14 @@ pub(crate) fn submit(
     target_desc: String,
     scan_target: String,
     fail_on: Option<String>,
+    cbom: bool,
 ) -> Result<JobRecord, ApiError> {
     let record = JobRecord::new(target_desc, fail_on)
         .map_err(|e| ApiError::new(lang, ErrorKind::Internal).with_detail(e.to_string()))?;
     app.jobs
         .insert(record.clone())
         .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
-    runner::spawn(app.clone(), record.id.clone(), scan_target);
+    runner::spawn(app.clone(), record.id.clone(), scan_target, cbom);
     Ok(record)
 }
 
@@ -80,6 +84,7 @@ pub async fn create(
         format!("mounted:{root}/{path}"),
         format!("dir:{}", resolved.display()),
         body.fail_on.clone(),
+        body.cbom,
     )?;
     Ok((StatusCode::ACCEPTED, Json(record)).into_response())
 }
@@ -108,6 +113,8 @@ pub async fn upload(
 
     let mut saved: Option<(std::path::PathBuf, String)> = None;
     let mut fail_on: Option<String> = None;
+    // 上傳路徑的 CBOM 開關（multipart 欄位 `cbom=true`；ADR-013，預設關閉）
+    let mut cbom = false;
     let limit = app.cfg.max_upload_bytes;
 
     loop {
@@ -158,6 +165,13 @@ pub async fn upload(
                     }
                 }
                 saved = Some((dest, upload::sanitize_filename(&fname)));
+            }
+            Some("cbom") => {
+                cbom = field
+                    .text()
+                    .await
+                    .map(|v| matches!(v.trim(), "1" | "true" | "on"))
+                    .unwrap_or(false);
             }
             Some("fail_on") => {
                 fail_on = field
@@ -220,6 +234,7 @@ pub async fn upload(
         record.id.clone(),
         prep.scan_target,
         !app.cfg.keep_input,
+        cbom,
     );
     Ok((StatusCode::ACCEPTED, Json(record)).into_response())
 }

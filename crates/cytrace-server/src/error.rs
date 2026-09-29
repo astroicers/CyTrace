@@ -164,7 +164,13 @@ impl ApiError {
         self
     }
 
-    /// CytraceError → ApiError 對映（Engine/Parse/Io/Config/DbMissing）。
+    /// CytraceError → ApiError 對映（Engine/Parse/Io/Config/DbMissing/Cbom）。
+    ///
+    /// **目前無生產呼叫者**：job 執行緒的 CBOM 失敗全部落在 `CbomStatus` 裡
+    /// （`collect_cbom` 依設計永不回 `Err`），SBOM/CVE 失敗由 runner 自行記錄。
+    /// 保留本對映是為了 handler 日後直接回傳 core error 時有一致出口；因為無人呼叫，
+    /// 它也從未被驗證過（第六輪複審 minor），故下方測試逐變體釘住 kind、狀態碼與
+    /// **detail 不得為裸 i18n 鍵**。
     pub fn from_core(lang: Lang, err: &CytraceError) -> Self {
         let kind = match err {
             CytraceError::Engine(_) => ErrorKind::Engine,
@@ -172,8 +178,26 @@ impl ApiError {
             CytraceError::Io(_) => ErrorKind::Io,
             CytraceError::Config(_) => ErrorKind::Config,
             CytraceError::DbMissing(_) => ErrorKind::DbMissing,
+            // CBOM 引擎失敗歸引擎類（掃描整體仍可完成，只是 crypto 區段缺）
+            CytraceError::Cbom { .. } => ErrorKind::Engine,
         };
-        ApiError::new(lang, kind).with_detail(err.to_string())
+        // Cbom 的 Display 是「鍵：細節」——直接當 detail 就是把裸鍵送出 API。
+        // 改以請求語系渲染，與 CLI 共用 Catalog::render_cbom（單一實作）。
+        //
+        // 其餘變體的 Display 各帶一段中文前綴（「引擎子程序錯誤：」…），直接當 detail
+        // 會讓 `--lang en-US` 的 API 回應夾中文（第七輪複審：與 collect_cbom 同一種錯法，
+        // 只是位置在 server）。故一律走 CytraceError::untranslatable_detail。
+        let detail = match err {
+            CytraceError::Cbom { key, detail } => {
+                Some(lang.catalog().render_cbom(key, detail.as_deref()))
+            }
+            other => other.untranslatable_detail(),
+        };
+        let api = ApiError::new(lang, kind);
+        match detail {
+            Some(d) => api.with_detail(d),
+            None => api,
+        }
     }
 }
 
@@ -222,5 +246,47 @@ mod tests {
         assert_eq!(e.kind.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let e = ApiError::from_core(Lang::ZhTw, &CytraceError::DbMissing("x".into()));
         assert_eq!(e.kind.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let e = ApiError::from_core(Lang::ZhTw, &CytraceError::Parse("x".into()));
+        assert_eq!(e.kind, ErrorKind::Parse);
+        let e = ApiError::from_core(Lang::ZhTw, &CytraceError::Config("x".into()));
+        assert_eq!(e.kind, ErrorKind::Config);
+    }
+
+    #[test]
+    fn cbom_error_detail_is_translated_not_a_bare_key() {
+        // Cbom 的 Display 是「鍵：細節」；若直接當 detail，API 消費者收到的是裸鍵。
+        let err = CytraceError::Cbom {
+            key: "cbom.err.timeout",
+            detail: Some("600".into()),
+        };
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            let e = ApiError::from_core(lang, &err);
+            assert_eq!(e.kind, ErrorKind::Engine, "CBOM 失敗歸引擎類");
+            let d = e.detail.as_deref().expect("應帶 detail");
+            assert!(
+                !d.contains("cbom.err."),
+                "detail 不得含裸 i18n 鍵，實為 {d}"
+            );
+            assert!(!d.contains("{{"), "detail 不得殘留佔位符，實為 {d}");
+            assert!(d.contains("600"), "逾時秒數須插值進訊息，實為 {d}");
+        }
+    }
+
+    #[test]
+    fn cbom_error_detail_follows_request_language() {
+        let err = CytraceError::Cbom {
+            key: "cbom.err.target_not_archive",
+            detail: Some("/tmp/firmware.bin".into()),
+        };
+        let zh = ApiError::from_core(Lang::ZhTw, &err).detail.unwrap();
+        let en = ApiError::from_core(Lang::EnUs, &err).detail.unwrap();
+        assert_ne!(zh, en, "兩語系訊息不得相同（否則等於沒吃 lang）");
+        // en-US 不得夾中日韓字元（英文文案含破折號等非 ASCII 標點屬正常）
+        assert!(
+            !en.chars().any(|c| matches!(c as u32,
+                0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF)),
+            "en-US 訊息不得含中文字元或全角標點，實為 {en}"
+        );
+        assert!(zh.contains("/tmp/firmware.bin") && en.contains("/tmp/firmware.bin"));
     }
 }

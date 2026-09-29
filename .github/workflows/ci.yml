@@ -34,6 +34,36 @@ jobs:
           fi
       - name: i18n 鍵一致（NFR-06）
         run: python3 scripts/i18n-check.py
+      # 兩支打包腳本各寫一份 NOTICE，改一邊忘一邊就出授權聲明不實的交付包。
+      # 第二步驗哨兵本身：初版對整檔比對，NOTICE 刪光對應段仍綠（第七輪 blocker）；
+      # 而「逐列變異」的判別力等於正常執行（第八輪 finding C），故改為對抽取邏輯注入故障。
+      - name: NOTICE 兩平台對帳（ADR-013）
+        run: |
+          python3 scripts/notice-parity-check.py
+          python3 scripts/notice-parity-check.py --verify-sentinels
+
+  real-engine:
+    name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain（釘選於 rust-toolchain.toml）
+        run: rustup show
+      - name: 讀引擎釘選版本
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+      # 與交付鏈同一條建置路徑（Dockerfile theia-builder stage），確保測的是會出貨的那支
+      - name: 建置 cbomkit-theia（自源碼，驗 SHA256）
+        run: |
+          docker build --target theia-builder -t theia-builder .
+          cid=$(docker create theia-builder)
+          docker cp "$cid:/out/cbomkit-theia" /usr/local/bin/cbomkit-theia
+          docker rm "$cid"
+          chmod +x /usr/local/bin/cbomkit-theia
+          echo "${THEIA_LINUX_AMD64_SHA256}  /usr/local/bin/cbomkit-theia" | sha256sum -c -
+      # M9 六輪複審中，第四輪之後的全部阻斷級都只有真引擎跑得出來（零資產目標輸出 null、
+      # dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、憑證計數欄位名與想像不符）
+      - name: 真引擎 × 真實輸入形態
+        run: make test-real-engine
 
   supply-chain:
     name: 供應鏈（cargo-deny：license / 來源白名單）
@@ -61,6 +91,11 @@ jobs:
         run: cd frontend && pnpm install --frozen-lockfile
       - name: typecheck
         run: cd frontend && pnpm typecheck
+      # frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作。Rust 側契約測試比對
+      # 鍵清單與變數名規則，擋不到行為差異——實際漂開過兩次（空細節漏佔位符、en-US 夾全角），
+      # 兩次都是報表會把該字面印給交件對象看。
+      - name: CBOM 成因渲染（雙語 × 邊界，ADR-013）
+        run: node --experimental-strip-types frontend/scripts/cbom-message-check.mts
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）
@@ -78,6 +113,26 @@ jobs:
           fi
       - name: build console SPA
         run: cd frontend && pnpm build:console
+      # 契約測試與渲染檢查讀的是 frontend/src/*.ts，**出貨的是 commit 進 repo 的產物**
+      # （rust-embed 內嵌 report-template.html 與 assets/console/）。改了 src 卻忘了重產，
+      # 所有檢查照樣全綠，而交付的是舊邏輯——與本分支一路修的病灶同型：
+      # 「檢查一份東西、出貨另一份東西」（第十輪複審待補證據 3）。
+      # 故在此比對重建產物與 commit 版本；不符即紅並指出要跑哪個 target。
+      - name: 產物與源碼同步（rust-embed 內嵌的是 commit 版本）
+        run: |
+          cp frontend/dist/index.html crates/cytrace-report/assets/report-template.html
+          rm -rf crates/cytrace-server/assets/console
+          mkdir -p crates/cytrace-server/assets/console
+          cp -r frontend/dist-console/. crates/cytrace-server/assets/console/
+          # `git diff` 看不見**未追蹤**的新檔：產物多出一個沒被 index.html 參照的檔案時
+          # 會靜默通過，而交件包內嵌的 assets/ 缺它（第十一輪複審 finding F）。
+          if [ -n "$(git status --porcelain --untracked-files=all -- crates/cytrace-report/assets crates/cytrace-server/assets)" ]; then
+            echo "✗ 內嵌產物與前端源碼不同步——改了 frontend/src 卻沒重產產物。"
+            echo "  修法：make frontend && make frontend-console，然後把產物一併 commit。"
+            git diff --stat -- crates/cytrace-report/assets crates/cytrace-server/assets
+            exit 1
+          fi
+          echo "✓ 內嵌產物與源碼一致"
       - name: console 零外連自檢
         run: bash scripts/console-egress-check.sh frontend/dist-console
 
@@ -96,4 +151,30 @@ jobs:
           $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
           & (Join-Path $b.FullName "bin\cytrace.exe") --version
+      # NOTICE 與包內實際內容必須一致——否則會出一個授權聲明不實的交付包（ADR-013）
+      - name: NOTICE 與包內引擎一致
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $notice = Get-Content (Join-Path $b.FullName "NOTICE") -Raw
+          if (-not ($notice -match "does not cover the nationality")) {
+            throw "NOTICE 缺少禁中國來源宣告的涵蓋範圍註記"
+          }
+          # ring 為 ISC 與 OpenSSL/BoringSSL 混合授權，須保留聲明；Windows 交付同樣含
+          # cytrace serve 故同樣連結 ring。第六輪複審 finding J：ps1 曾整段漏掉。
+          foreach ($t in @("ring", "rustls", "cargo-deny")) {
+            if (-not ($notice -match [regex]::Escape($t))) {
+              throw "NOTICE 缺 $t 段（Windows 交付同樣連結 ring，授權聲明不得省略）"
+            }
+          }
+          if (Test-Path (Join-Path $b.FullName "bin\cbomkit-theia.exe")) {
+            foreach ($t in @("CBOMkit-theia","MPL-2.0","gitleaks")) {
+              if (-not ($notice -match [regex]::Escape($t))) { throw "包內含 theia 但 NOTICE 缺 $t" }
+            }
+          } else {
+            if (-not ($notice -match "does not include the CBOM engine")) {
+              throw "包內無 theia 但 NOTICE 未明示"
+            }
+          }
+          Write-Host "NOTICE 與包內引擎一致"
           Write-Host "OK package: $($b.Name)"

@@ -3,7 +3,8 @@
 //! 只擷取需要的欄位，其餘以 `#[serde(default)]` 容忍，避免上游 schema 微調即失敗。
 
 use crate::error::{CytraceError, Result};
-use cytrace_types::{Component, Severity, Vulnerability};
+use crate::quantum;
+use cytrace_types::{Component, CryptoAsset, Severity, Vulnerability};
 use serde::Deserialize;
 
 // ─── Grype JSON（子集）─────────────────────────────────────────────
@@ -138,6 +139,165 @@ pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
                 kind: c.kind,
                 licenses,
             }
+        })
+        .collect())
+}
+
+// ─── CBOM（CycloneDX cryptographic-asset 子集；ADR-013 決策 7）────────
+//
+// 只取判定與報表需要的欄位——**絕不**取金鑰內容（NFR-09）。
+// 容忍 1.6 / 1.7：兩版的 cryptoProperties 形狀在本子集內相同。
+
+#[derive(Deserialize)]
+struct CbomDoc {
+    /// theia 對**零資產目標**輸出的是 `"components": null`（非缺鍵、非空陣列），
+    /// 故必須容忍 null——否則最常見的輸入（乾淨來源樹）會被判成解析失敗，
+    /// 交件報表上寫「盤點失敗」，`--fail-on-quantum-vulnerable` 也恆 exit 1。
+    #[serde(default)]
+    components: Option<Vec<CbomComponent>>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CbomComponent {
+    #[serde(default, rename = "bom-ref")]
+    bom_ref: Option<String>,
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "type")]
+    kind: String,
+    #[serde(default, rename = "cryptoProperties")]
+    crypto_properties: Option<CryptoProps>,
+    #[serde(default)]
+    evidence: Option<CbomEvidence>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CbomEvidence {
+    #[serde(default)]
+    occurrences: Vec<CbomOccurrence>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CbomOccurrence {
+    #[serde(default)]
+    location: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct CryptoProps {
+    #[serde(default, rename = "assetType")]
+    asset_type: String,
+    #[serde(default, rename = "algorithmProperties")]
+    algorithm: Option<AlgorithmProps>,
+    #[serde(default, rename = "certificateProperties")]
+    certificate: Option<CertificateProps>,
+    #[serde(default, rename = "relatedCryptoMaterialProperties")]
+    material: Option<MaterialProps>,
+}
+
+#[derive(Deserialize, Clone)]
+struct AlgorithmProps {
+    #[serde(default)]
+    primitive: Option<String>,
+    #[serde(default)]
+    curve: Option<String>,
+    #[serde(default, rename = "nistQuantumSecurityLevel")]
+    nist_level: Option<u8>,
+}
+
+#[derive(Deserialize, Clone)]
+struct CertificateProps {
+    #[serde(default, rename = "notValidAfter")]
+    not_valid_after: Option<String>,
+    /// 指向簽章演算法元件的 bom-ref（CycloneDX）。
+    #[serde(default, rename = "signatureAlgorithmRef")]
+    signature_algorithm_ref: Option<String>,
+    /// 指向公鑰材料元件的 bom-ref。
+    #[serde(default, rename = "subjectPublicKeyRef")]
+    subject_public_key_ref: Option<String>,
+}
+
+#[derive(Deserialize, Clone)]
+struct MaterialProps {
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    #[serde(default)]
+    size: Option<u32>,
+}
+
+/// 解析 theia 產出的 CBOM，取出密碼學資產並完成量子／弱金鑰判定。
+///
+/// 只保留 `type == "cryptographic-asset"` 的元件；其餘（如 `file`）一律略過。
+pub fn parse_cbom(json: &str) -> Result<Vec<CryptoAsset>> {
+    let doc: CbomDoc =
+        serde_json::from_str(json).map_err(|e| CytraceError::Parse(format!("cbom: {e}")))?;
+
+    // 先建 bom-ref → (名稱, 曲線, NIST 等級) 索引：憑證的量子狀態由其
+    // signatureAlgorithmRef / subjectPublicKeyRef 指向的元件決定，而非憑證的 subject 名稱。
+    let components_for_index = doc.components.clone().unwrap_or_default();
+    let index: std::collections::HashMap<&str, (&str, Option<&str>, Option<u8>)> =
+        components_for_index
+            .iter()
+            .filter_map(|c| {
+                let r = c.bom_ref.as_deref()?;
+                let alg = c.crypto_properties.as_ref()?.algorithm.as_ref();
+                Some((
+                    r,
+                    (
+                        c.name.as_str(),
+                        alg.and_then(|a| a.curve.as_deref()),
+                        alg.and_then(|a| a.nist_level),
+                    ),
+                ))
+            })
+            .collect();
+
+    let components = doc.components.unwrap_or_default();
+    Ok(components
+        .iter()
+        .filter(|c| c.kind == "cryptographic-asset")
+        .filter_map(|c| {
+            let props = c.crypto_properties.as_ref()?;
+            let alg = props.algorithm.as_ref();
+            let curve = alg.and_then(|a| a.curve.as_deref());
+            let key_size = props.material.as_ref().and_then(|m| m.size);
+
+            // 憑證：改以所引用之演算法判定（ADR-013 決策 6）；引用缺席或指不到才退回自身名稱
+            let referenced = props
+                .certificate
+                .as_ref()
+                .and_then(|cert| {
+                    cert.signature_algorithm_ref
+                        .as_deref()
+                        .or(cert.subject_public_key_ref.as_deref())
+                })
+                .and_then(|r| index.get(r).copied());
+            let (q_name, q_curve, q_level) = match referenced {
+                Some((n, cv, lv)) => (n, cv, lv),
+                None => (c.name.as_str(), curve, alg.and_then(|a| a.nist_level)),
+            };
+
+            let quantum = quantum::classify_with_level(q_name, q_curve, q_level);
+            Some(CryptoAsset {
+                quantum,
+                weak_key: quantum::weak_key(&c.name, curve, key_size),
+                name: c.name.clone(),
+                asset_type: props.asset_type.clone(),
+                location: c
+                    .evidence
+                    .as_ref()
+                    .and_then(|e| e.occurrences.first())
+                    .map(|o| o.location.clone())
+                    .unwrap_or_default(),
+                primitive: alg
+                    .and_then(|a| a.primitive.clone())
+                    .or_else(|| props.material.as_ref().and_then(|m| m.kind.clone())),
+                key_size,
+                not_after: props
+                    .certificate
+                    .as_ref()
+                    .and_then(|c| c.not_valid_after.clone()),
+            })
         })
         .collect())
 }

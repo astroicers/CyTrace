@@ -57,12 +57,14 @@ mod tests {
                 tool_versions: ToolVersions {
                     syft: "1.0".into(),
                     grype: "0.74".into(),
+                    theia: None,
                 },
                 db_snapshot: DbSnapshot {
                     version: "5".into(),
                     built: "2026-06-01".into(),
                 },
                 generated_at: "2026-06-24T00:00:00Z".into(),
+                scan_identity: None,
             },
             components: vec![],
             findings: vec![Vulnerability {
@@ -78,6 +80,7 @@ mod tests {
                 counts_by_severity: BTreeMap::new(),
                 overall_risk: Severity::High,
             },
+            crypto: None,
         }
     }
 

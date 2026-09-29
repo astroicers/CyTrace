@@ -64,6 +64,25 @@ function Get-Engine($name, $ver) {
 Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
 
+# 引擎釘選版本的單一事實源（與 package.sh 一致）
+$TheiaVersion = (Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=' |
+  ForEach-Object { $_.Line -replace '^THEIA_VERSION=', '' } | Select-Object -First 1)
+if (-not $TheiaVersion) { $TheiaVersion = "unknown" }
+
+# 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
+#
+# 注意：**不可**比照上方從 GitHub release 下載——ADR-013 明定自源碼建置、不依賴上游
+# release binary。Windows 版須由我方 CI（GOOS=windows 交叉編譯，參數見 versions.env 註解）
+# 產出後作為釋出資產，再由本腳本取用；在該資產就緒前，Windows 包不含 CBOM 引擎，
+# `--cbom` 會降級為「未盤點」，不影響 SBOM 與弱點比對。
+$TheiaExe = Join-Path $PSScriptRoot "..\dist\cbomkit-theia.exe"
+if (Test-Path $TheiaExe) {
+  Say "collect cbomkit-theia (self-built artifact)"
+  Copy-Item $TheiaExe "$Bundle\bin\cbomkit-theia.exe"
+} else {
+  Write-Host "  WARN: no cbomkit-theia.exe at dist\; bundle ships without the CBOM engine"
+}
+
 # 3) grype DB 離線快照（跨平台通用）
 if (-not $SkipDb) {
   if (Test-Path $DbPath) {
@@ -80,12 +99,39 @@ Say "self-SBOM"
   --exclude './target/**' --exclude './delivery/**' -o cyclonedx-json -q |
   Out-File -Encoding utf8 "$Bundle\cytrace.sbom.cdx.json"
 
-# 5) NOTICE
+# 5) NOTICE（theia 段落依**實際是否收進包內**輸出，與 package.sh 等價）
+if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
+  $TheiaNotice = @"
+  - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) - cryptographic asset inventory (CBOM; ADR-013)
+    Built from source (tag v$TheiaVersion), not an upstream release binary.
+    Its dependencies include the following non-Apache-2.0 components:
+      * gitleaks v8 (MIT), gitleaks/go-gitdiff (MIT) - embedded secret detection rules
+      * MPL-2.0 (file-level weak copyleft): hashicorp/golang-lru, hashicorp/go-version,
+        cyphar/filepath-securejoin
+"@
+} else {
+  $TheiaNotice = "  (This bundle does not include the CBOM engine; cytrace --cbom degrades to `"not inventoried`".)"
+}
+
 @"
 CyTrace $Version - Third-party NOTICE
-Bundled Apache-2.0 tools (unmodified): Syft, Grype (Anchore).
-Rust dependency licenses: see cytrace.sbom.cdx.json.
+Bundled tools (unmodified). See each upstream vendor directory for the full
+dependency and license list; this product distributes build artifacts only
+and the source was not modified (Apache-2.0 section 4(b)):
+  - Syft  (Anchore, Apache-2.0) - SBOM generation
+  - Grype (Anchore, Apache-2.0) - vulnerability matching
+$TheiaNotice
+
+TLS for the web service mode (cytrace serve, ADR-011) is provided by rustls + ring:
+  - ring - licensed under a mix of ISC and OpenSSL/BoringSSL terms (see the ring crate
+    LICENSE). Licenses and versions of all Rust dependencies (tokio/axum/argon2 and the
+    rest) are in the bundled cytrace.sbom.cdx.json.
+
 Supply chain: no China-sourced dependencies (e.g. OpenSCA-cli).
+  Scope of this statement: dependency source domains, copyright notices and maintaining
+  organizations; it does not cover the nationality or residence of individual contributors
+  (see ADR-013 "scope of the no-China-sourced rule").
+Rust dependencies are gated in CI by cargo-deny (license / source allowlist).
 "@ | Out-File -Encoding utf8 "$Bundle\NOTICE"
 
 # 6) 離線執行 wrapper（固定用包內引擎與 DB、強制離線）

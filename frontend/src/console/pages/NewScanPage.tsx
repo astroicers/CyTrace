@@ -14,6 +14,7 @@ export function NewScanPage() {
   const [mode, setMode] = useState<Mode>('upload')
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [failOn, setFailOn] = useState('')
+  const [cbom, setCbom] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -48,7 +49,7 @@ export function NewScanPage() {
     setBusy(true)
     setErrorMsg(null)
     setProgress(0)
-    const handle = uploadScan(file, failOnParam, setProgress)
+    const handle = uploadScan(file, failOnParam, setProgress, cbom)
     uploadRef.current = handle
     handle.promise
       .then((job) => navigate({ page: 'job', id: job.id }))
@@ -69,7 +70,7 @@ export function NewScanPage() {
     setBusy(true)
     setErrorMsg(null)
     api
-      .createMountedJob(root, path.trim(), failOnParam)
+      .createMountedJob(root, path.trim(), failOnParam, cbom)
       .then((job) => navigate({ page: 'job', id: job.id }))
       .catch((err) => {
         setErrorMsg(err instanceof ApiError ? t(err.message) : t('console.common.error'))
@@ -183,6 +184,20 @@ export function NewScanPage() {
             </div>
           </>
         )}
+
+        {/* CBOM 盤點（ADR-013；預設關閉） */}
+        <div className="grid gap-1">
+          <label className="flex items-center gap-2 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={cbom}
+              onChange={(e) => setCbom(e.target.checked)}
+              className="h-4 w-4"
+            />
+            {t('console.scan.cbom')}
+          </label>
+          <p className="text-xs text-gray-500">{t('console.scan.cbom_hint')}</p>
+        </div>
 
         {/* fail-on 門檻 */}
         <div className="grid gap-2">
