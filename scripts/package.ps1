@@ -99,6 +99,10 @@ Say "self-SBOM"
   --exclude './target/**' --exclude './delivery/**' -o cyclonedx-json -q |
   Out-File -Encoding utf8 "$Bundle\cytrace.sbom.cdx.json"
 
+# 4b) 變更記錄（與 Linux 包對稱）
+Say "collect CHANGELOG"
+Copy-Item "$Root\CHANGELOG.md" "$Bundle\CHANGELOG.md"
+
 # 5) NOTICE（theia 段落依**實際是否收進包內**輸出，與 package.sh 等價）
 if (Test-Path "$Bundle\bin\cbomkit-theia.exe") {
   $TheiaNotice = @"

@@ -148,7 +148,7 @@ jobs:
         shell: pwsh
         run: |
           $b = Get-ChildItem -Directory delivery | Select-Object -First 1
-          $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json")
+          $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json","CHANGELOG.md")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
           & (Join-Path $b.FullName "bin\cytrace.exe") --version
       # NOTICE 與包內實際內容必須一致——否則會出一個授權聲明不實的交付包（ADR-013）

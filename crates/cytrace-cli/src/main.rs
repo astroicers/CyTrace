@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
 use cytrace_core::{engine, failon, parse};
 use cytrace_i18n::Catalog;
-use cytrace_types::{DbSnapshot, Meta, Severity};
+use cytrace_types::{Meta, Severity};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -482,10 +482,8 @@ fn meta_for(target: &str, cbom: &cytrace_types::CbomStatus) -> Meta {
     Meta {
         target: target.to_string(),
         tool_versions: engine::tool_versions(cbom),
-        db_snapshot: DbSnapshot {
-            version: "snapshot".into(),
-            built: "unknown".into(),
-        },
+        // 真值取自 grype db status；失敗回 "unavailable" sentinel（見 engine::db_snapshot）
+        db_snapshot: engine::db_snapshot(),
         generated_at: epoch_to_iso(epoch_secs()),
         scan_identity: Some(engine::scan_identity()),
     }

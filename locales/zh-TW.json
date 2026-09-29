@@ -176,6 +176,7 @@
   "report": {
     "title": "依賴風險報表",
     "cover": "機關識別",
+    "db_unavailable": "無法取得 DB 快照資訊（時效稽核不可用）",
     "summary": "風險總評",
     "findings": "弱點明細",
     "sbom": "軟體產品文件表",

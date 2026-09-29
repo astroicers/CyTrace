@@ -1,5 +1,10 @@
 # CyTrace 容器部署（ADR-012）
 
+> **air-gapped 場域注意**：本檔範例用 `:latest`。離線 tar 只封 semver tag
+>（如 `0.3.0`），`docker load` 後須先補打：
+> `docker tag ghcr.io/astroicers/cytrace:X.Y.Z ghcr.io/astroicers/cytrace:latest`
+>（見 DELIVERY_SOP §7.2）。
+
 CyTrace 容器跑 `cytrace serve` Web 服務模式（登入控制台 + 掃描/報表 API）。
 容器是**新增交付形態**，不取代 ADR-007 的裸機離線包。
 

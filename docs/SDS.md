@@ -1,5 +1,13 @@
 # SDS — CyTrace 軟體設計規格書
 
+> **v0.3.0 增補（2026-09-29）**：本文主體寫於雙引擎時期，尚未全文改寫。
+> CBOM（第三引擎 CBOMkit-theia）的設計權威是 **ADR-013**（含決策 1–10 與成功指標），
+> `ScanResult` schema v2 的稽核契約見 **ADR-009 修訂節**。以下各節先以行內註記對齊：
+> §1 管線多一條 `--cbom → cbomkit-theia` 分支；§2 crates 為 6（另有 `-i18n`／`-server`）；
+> §3 子程序編排同樣涵蓋 theia（專用可寫 HOME、逾時、管線併發抽乾、fail-closed，
+> 細節見 `crates/cytrace-core/src/engine.rs` 的文件註解）；§4 資料模型加 `crypto` 區段。
+> 全文改寫另開票，不阻擋 v0.3.0（release 準備複審 major #24 的處置記錄）。
+
 | 欄位 | 內容 |
 |------|------|
 | **文件** | Software Design Specification |

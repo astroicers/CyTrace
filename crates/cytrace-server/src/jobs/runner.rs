@@ -8,7 +8,7 @@ use crate::state::AppState;
 use cytrace_core::engine::ScanEngine;
 use cytrace_core::error::CytraceError;
 use cytrace_core::{failon, parse, timefmt};
-use cytrace_types::{DbSnapshot, Meta, Severity, Summary};
+use cytrace_types::{Meta, Severity, Summary};
 use std::path::Path;
 
 /// 送出 job（不清理 input）——掛載目標用。
@@ -163,10 +163,8 @@ fn run_pipeline(
                 .as_ref()
                 .map_or(&cytrace_types::CbomStatus::NotRequested, |c| &c.status),
         ),
-        db_snapshot: DbSnapshot {
-            version: "snapshot".into(),
-            built: "unknown".into(),
-        },
+        // 真值取自 grype db status；失敗回 "unavailable" sentinel（見 engine::db_snapshot）
+        db_snapshot: cytrace_core::engine::db_snapshot(),
         generated_at: timefmt::epoch_to_iso(timefmt::epoch_secs()),
         scan_identity: Some(cytrace_core::engine::scan_identity()),
     };

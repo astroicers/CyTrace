@@ -97,11 +97,13 @@ docker run -d --read-only --tmpfs /tmp -p 8443:8443 \
 
 ## 架構（概要）
 
-**Rust CLI 核心**（Cargo workspace 4 crates：`cytrace-types`／`-core`／`-report`／`-cli`；呼叫 Syft+Grype 子程序、serde 解析、嚴重度分級、`--fail-on`）
+**Rust CLI 核心**（Cargo workspace 6 crates：`cytrace-types`／`-core`／`-i18n`／`-report`／`-server`／`-cli`；呼叫 Syft＋Grype＋CBOMkit-theia 子程序、serde 解析、嚴重度與量子脆弱分級、`--fail-on` / `--fail-on-quantum-vulnerable`）
 ＋ **visual-web-stack DOM 子集前端**（React/Vite/Tailwind/Radix/react-i18next，build 成單檔內聯，由核心 `include_str!` 內嵌進 binary）。
 
 ```
-cytrace run <目標> → Syft(SBOM) → Grype(離線DB,CVE) → 解析/分級 → 內嵌前端 → 單檔 HTML 報表 + SBOM
+cytrace run <目標> ─→ Syft(SBOM) ─→ Grype(離線DB, CVE) ─┐
+        └─ --cbom → CBOMkit-theia(憑證/金鑰/演算法) ─────┤→ 解析/分級(嚴重度＋量子脆弱)
+                                                          → 內嵌前端 → 單檔 HTML 報表 + SBOM(+CBOM)
 ```
 
 ## 文件
@@ -112,7 +114,7 @@ cytrace run <目標> → Syft(SBOM) → Grype(離線DB,CVE) → 解析/分級 �
 | [docs/SDS.md](docs/SDS.md) | 軟體設計規格（Cargo workspace、子程序編排、資料模型） |
 | [docs/UIUX_SPEC.md](docs/UIUX_SPEC.md) | 報表檢視器 UI/UX（雙語、嚴重度色票、a11y） |
 | [docs/DELIVERY_SOP.md](docs/DELIVERY_SOP.md) | 離線交付與 DB 更新／簽章 SOP |
-| [docs/adr/](docs/adr/) | 架構決策紀錄 ADR-001 ～ ADR-010 |
+| [docs/adr/](docs/adr/) | 架構決策紀錄 ADR-001 ～ ADR-013 |
 | [ROADMAP.yaml](ROADMAP.yaml) | Autopilot 任務清單（唯一 live 狀態權威） |
 
 ## 開發治理（ASP）

@@ -79,13 +79,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: build（PR：load 本機供冒煙；tag：push）
+      - name: build（一律 load 本機供冒煙；push 在冒煙後的第二段）
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          load: ${{ github.event_name == 'pull_request' }}
-          push: ${{ github.event_name != 'pull_request' }}
+          load: true
+          push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
@@ -97,20 +97,17 @@ jobs:
             THEIA_LINUX_AMD64_SHA256=${{ env.THEIA_LINUX_AMD64_SHA256 }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # provenance / sbom attestation 會讓 buildx 產出 manifest list（即使單平台），
-          # 而 `load: true` 用的 docker exporter 不支援匯出 manifest list：
-          #   ERROR: failed to build: docker exporter does not currently support
-          #          exporting manifest lists
-          # 故 PR（load 本機供冒煙）時關閉，tag（push 到 GHCR）時保留——交付物才需要
-          # 供應鏈證明，冒煙用的本機 image 不需要。
-          #
-          # **既有缺陷，由本分支的 PR 首次暴露**：docker.yml 雖有 pull_request 觸發，
-          # 但此 repo 在此之前從未開過 PR（歷史 run 全為 push tag 或 workflow_dispatch），
-          # 所以 load 那條路一次都沒跑過。
-          provenance: ${{ github.event_name == 'pull_request' && 'false' || 'mode=max' }}
-          sbom: ${{ github.event_name != 'pull_request' }}
+          # 第一段 build 一律 load 本機供冒煙、關 attestation——provenance/sbom 會讓
+          # buildx 產出 manifest list（即使單平台），而 load 用的 docker exporter 不支援：
+          #   ERROR: docker exporter does not currently support exporting manifest lists
+          # 供應鏈 attestation 只有交付物需要，由冒煙後的第二段 push 帶上（見下）。
+          provenance: false
+          sbom: false
 
-      # 冒煙：PR（load 的本機 image）與 tag（剛 push）都跑，通過才算數
+      # 冒煙：PR 與 tag 都對 load 進本機的 image 跑，**通過才 push**——
+      # 原實作 push（含 latest）先於冒煙，冒煙失敗時壞 image 已公開且 GHCR 留殘檔
+      # （v0.2.0 前例；release 準備複審 finding #10）。兩段式的第二段吃 gha cache，
+      # 重建成本近零。
       - name: 冒煙 --version
         run: |
           IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
@@ -128,6 +125,28 @@ jobs:
           docker logs cytrace-smoke
           docker rm -f cytrace-smoke
 
+      # 冒煙通過 → 第二段：push 到 GHCR（帶供應鏈 attestation；gha cache 命中，秒級）
+      - name: push（冒煙通過後；tag / dispatch 才跑）
+        if: steps.rel.outputs.is_release == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SYFT_VERSION=${{ env.SYFT_VERSION }}
+            GRYPE_VERSION=${{ env.GRYPE_VERSION }}
+            SYFT_LINUX_AMD64_SHA256=${{ env.SYFT_LINUX_AMD64_SHA256 }}
+            GRYPE_LINUX_AMD64_SHA256=${{ env.GRYPE_LINUX_AMD64_SHA256 }}
+            THEIA_COMMIT=${{ env.THEIA_COMMIT }}
+            THEIA_LINUX_AMD64_SHA256=${{ env.THEIA_LINUX_AMD64_SHA256 }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
       # release（tag push 或 workflow_dispatch）：docker save + SHA256SUMS + image SBOM → 掛 Release
       - name: 產離線 tar + SBOM + digest
         if: steps.rel.outputs.is_release == 'true'
@@ -138,7 +157,10 @@ jobs:
           # push（load:false）後 image 不在本地，docker save 需先 pull 回來
           docker pull "$IMG"
           docker save "$IMG" -o "cytrace-${VER}-image.tar"
-          sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS
+          # 檔名**不得**叫 SHA256SUMS：release.yml 已用該名上傳 binaries 的校驗檔，
+          # 同一個 Release 上同名資產後到者覆蓋先到者——v0.2.0/v0.2.1 實證 image tar
+          # 最終無校驗和、SOP §7.1 的 sha256sum -c 必失敗（release 準備複審 blocker）。
+          sha256sum "cytrace-${VER}-image.tar" > SHA256SUMS-image
           docker buildx imagetools inspect "$IMG" --format '{{.Manifest.Digest}}' > IMAGE_DIGEST.txt || \
             docker inspect "$IMG" --format '{{index .RepoDigests 0}}' > IMAGE_DIGEST.txt
           # image SBOM（dogfooding）：用 image 內建 syft 掃剛存的 tar。
@@ -160,9 +182,10 @@ jobs:
           tag_name: ${{ steps.rel.outputs.tag }}
           files: |
             cytrace-*-image.tar
-            SHA256SUMS
+            SHA256SUMS-image
             IMAGE_DIGEST.txt
             cytrace-image.sbom.cdx.json
           body: |
             容器映像（ADR-012）。離線搬運：見 docs/DELIVERY_SOP.md §7。
+            校驗：`sha256sum -c SHA256SUMS-image`（binaries 的校驗檔是另一份 `SHA256SUMS`）。
             交付工作站以 minisign 簽 `cytrace-*-image.tar`（私鑰不進 CI）。

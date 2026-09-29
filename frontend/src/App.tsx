@@ -38,7 +38,14 @@ function Cover() {
     ...(m.scan_identity
       ? ([[t('report.scan_identity'), m.scan_identity]] as [string, string][])
       : []),
-    ['DB', `${m.db_snapshot.version}（${m.db_snapshot.built}）`],
+    // "unavailable" 是 core 的 fail-closed sentinel（grype db status 取不到時）；
+    // 原樣印英文 sentinel 對操作員無意義，譯為明確的「無法取得」訊息（NFR-03/NFR-06）
+    [
+      'DB',
+      m.db_snapshot.version === 'unavailable'
+        ? t('report.db_unavailable')
+        : `${m.db_snapshot.version}（${m.db_snapshot.built}）`,
+    ],
     ['Generated', m.generated_at],
   ]
   return (

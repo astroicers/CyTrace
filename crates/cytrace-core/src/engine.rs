@@ -148,6 +148,54 @@ fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()))
 }
 
+/// 漏洞 DB 快照的版本與建置時間（NFR-03 / ADR-003 稽核欄位）。
+///
+/// 事實源是 `grype db status -o json` 的 `schemaVersion` 與 `built`。
+/// **這個欄位曾經是假的**：CLI 與 server 都硬編碼 `"snapshot"` / `"unknown"`，
+/// 而 SOP §5 與 ADR-003 宣稱「報表顯示 DB 快照版本／日期供時效稽核」——
+/// 宣稱存在的稽核控制實質不存在（release 準備複審 major #18）。
+///
+/// fail-closed：任何一步失敗（grype 缺席、非零退出、JSON 壞、欄位缺）一律回
+/// `"unavailable"` sentinel——**不得**假裝有值；前端把 sentinel 譯為可讀訊息。
+/// 掃描主流程不因此失敗：DB 缺失的硬性攔截在 vuln 比對那層，此處只負責稽核標示。
+pub fn db_snapshot() -> cytrace_types::DbSnapshot {
+    parse_db_status(
+        Command::new("grype")
+            .args(["db", "status", "-o", "json"])
+            .env("GRYPE_CHECK_FOR_APP_UPDATE", "false")
+            .env("GRYPE_DB_AUTO_UPDATE", "false")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .as_deref(),
+    )
+}
+
+/// 解析 `grype db status -o json`。抽成純函式以便餵真實樣本測試——
+/// 憑證計數那課的教訓：凡依賴引擎輸出格式，就要有一份實地抓取的樣本進測試。
+pub fn parse_db_status(stdout: Option<&str>) -> cytrace_types::DbSnapshot {
+    const UNAVAILABLE: &str = "unavailable";
+    let fallback = || cytrace_types::DbSnapshot {
+        version: UNAVAILABLE.into(),
+        built: UNAVAILABLE.into(),
+    };
+    let Some(raw) = stdout else { return fallback() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return fallback();
+    };
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_string)
+    };
+    match (field("schemaVersion"), field("built")) {
+        (Some(version), Some(built)) => cytrace_types::DbSnapshot { version, built },
+        _ => fallback(),
+    }
+}
+
 /// 執行掃描的身分（ADR-013 決策 10）。
 ///
 /// `dir` 模式的偵測完整度取決於權限，故報表須標示當時是誰在跑。
@@ -688,6 +736,44 @@ mod tests {
     /// 隨機紅的測試比沒有測試更糟：它會訓練讀者把紅燈解釋成「又是那個 flaky」，
     /// 於是真的缺陷也被同一句話蓋過去。
     static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // ── DB 快照解析（NFR-03 稽核欄位；曾為硬編碼假值）──
+
+    /// **這段 stdout 是 grype v0.114 的真實輸出**（2026-09-29 實地抓取，未經改寫）。
+    /// 憑證計數那課的教訓：想像的 fixture 會長成想像的樣子。
+    #[test]
+    fn db_status_is_parsed_from_the_real_grype_output() {
+        let real = r#"{
+ "schemaVersion": "v6.1.9",
+ "from": "https://grype.anchore.io/databases/v6/vulnerability-db_v6.1.9_2026-09-23T00:31:12Z_1790145099.tar.zst?checksum=sha256%3A93487281c93d3cb3649878932ff9003991b607136b14cb0943b74846bfd611a8",
+ "built": "2026-09-23T06:31:39Z",
+ "path": "/home/ubuntu/.cache/grype/db/6/vulnerability.db",
+ "valid": false,
+ "error": "the vulnerability database was built 5 days ago (max allowed age is 5 days)"
+}"#;
+        let snap = parse_db_status(Some(real));
+        assert_eq!(snap.version, "v6.1.9");
+        assert_eq!(snap.built, "2026-09-23T06:31:39Z");
+        // `valid:false` 不影響稽核標示：時效判斷是稽核者的事，我們負責如實轉錄
+    }
+
+    #[test]
+    fn db_status_failure_is_an_explicit_sentinel_not_a_fake_value() {
+        // 失敗不得假裝有值——那正是本欄位過去的樣子（硬編碼 "snapshot"/"unknown"，
+        // SOP 宣稱的時效稽核控制因此實質不存在）
+        for bad in [
+            None,
+            Some(""),
+            Some("not json"),
+            Some("{}"),
+            Some(r#"{"schemaVersion":"v6"}"#),           // 缺 built
+            Some(r#"{"schemaVersion":"","built":"x"}"#), // 空字串視同缺
+        ] {
+            let snap = parse_db_status(bad);
+            assert_eq!(snap.version, "unavailable", "輸入 {bad:?}");
+            assert_eq!(snap.built, "unavailable");
+        }
+    }
 
     // ── 抽乾：抽不到不得當成「空的」（第八輪複審 finding D）──
 

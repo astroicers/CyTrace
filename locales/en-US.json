@@ -176,6 +176,7 @@
   "report": {
     "title": "Dependency Risk Report",
     "cover": "Organization",
+    "db_unavailable": "DB snapshot info unavailable (age audit not possible)",
     "summary": "Risk Summary",
     "findings": "Vulnerabilities",
     "sbom": "Software Bill of Materials",
