@@ -28,8 +28,23 @@ say "build musl 靜態 cytrace"
 ( cd "$ROOT" && RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target "$TARGET" -p cytrace-cli >/dev/null 2>&1 )
 cp "$ROOT/target/$TARGET/release/cytrace" "$BUNDLE/bin/cytrace"
 
-# 2) 釘選引擎
-say "收集釘選引擎 syft/grype"
+# 2) 釘選引擎——**版本必須符 versions.env**，不驗就是「收集 PATH 上剛好有的版本」。
+# 實地翻車記錄（2026-09-29）：build 機的 syft 漂到 1.51.1（釘選 1.45.1），
+# 它預設輸出 CycloneDX 1.7，grype 0.114 直接 `sbom format not recognized`——
+# 不驗版本的包在場域會整條 vuln 管線壞掉（release 準備複審 major #16）。
+say "收集釘選引擎 syft/grype（驗版本 against versions.env）"
+require_engine_version() { # $1=name $2=expected
+  local got
+  got=$("$1" --version 2>/dev/null | head -1 | awk '{print $2}')
+  if [ "$got" != "$2" ]; then
+    echo "✗ $1 版本 $got ≠ 釘選版 $2（scripts/versions.env）"
+    echo "  build 機請安裝釘選版；環境漂移的引擎不得進交付包"
+    exit 1
+  fi
+  echo "  ✓ $1 $got"
+}
+require_engine_version syft  "${SYFT_VERSION:?versions.env 未載入}"
+require_engine_version grype "${GRYPE_VERSION:?versions.env 未載入}"
 cp "$(command -v syft)" "$BUNDLE/bin/syft"
 cp "$(command -v grype)" "$BUNDLE/bin/grype"
 
@@ -53,12 +68,22 @@ fi
 
 # 3) grype DB 離線快照
 DBROOT="${GRYPE_DB_CACHE_DIR:-$HOME/.cache/grype/db}"
-if [ -d "$DBROOT" ]; then
+if [ -d "$DBROOT" ] && [ -n "$(ls -A "$DBROOT" 2>/dev/null)" ]; then
   say "打包 grype DB 快照（$DBROOT）"
   cp -r "$DBROOT"/* "$BUNDLE/db/"
+elif [ "${WITHOUT_DB:-0}" = "1" ]; then
+  echo "  ℹ️  WITHOUT_DB=1：本包刻意不含 DB 快照（例如 DB 另通道交付）"
 else
-  echo "  ⚠️  找不到 grype DB（$DBROOT）；請先 'grype db update'"
+  # fail-hard（比照 theia）：原本只警告仍 exit 0、結尾照樣印「✅ 完成」——
+  # 可以產出一個無 DB 的「完整」簽章包，場域拆包才發現比對整條不能用
+  #（release 準備複審 major #17）
+  echo "✗ 找不到 grype DB（$DBROOT）；先 'grype db update'，或顯式 WITHOUT_DB=1"
+  exit 1
 fi
+
+# 3b) 變更記錄——air-gapped 場域唯一的版本說明（release 準備複審 major #21）
+say "收入 CHANGELOG"
+cp "$ROOT/CHANGELOG.md" "$BUNDLE/CHANGELOG.md"
 
 # 4) 自產 SBOM（dogfooding，FR-009）— 排除 dev-only node_modules/target
 say "產 CyTrace 自產 SBOM"

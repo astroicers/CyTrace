@@ -142,3 +142,24 @@ fn batch_propagates_exit_one_over_two() {
     ]);
     assert_eq!(code, 1, "批次彙整同樣須讓 exit 1 優先");
 }
+
+/// db_snapshot 在 shim 環境（grype 對 `db status` 回 vuln fixture）須為 sentinel，
+/// **不得**把不相干的 JSON 誤轉成假快照值。
+///
+/// release-prep 複審 minor #4：真值路徑此前零整合覆蓋——shim 讓整條整合測試
+/// 全走 sentinel，唯一真值覆蓋是繞過管線的純 parser 單元測試。本測試把
+/// 「shim 下確實收斂到 sentinel」這半釘住；真值那半由 parser 單元測試（凍結的
+/// grype 0.114 實地樣本）與 release 前的釘選版 E2E 承接。
+#[test]
+fn db_snapshot_is_sentinel_when_grype_cannot_report_status() {
+    let e = Env::new("dbsnap");
+    let out_html = e.out("r.html");
+    let code = e.run(&["run", &e.target(), "--out", &out_html]);
+    assert_eq!(code, 0, "shim 掃描應成功");
+    let html = fs::read_to_string(&out_html).expect("讀報表");
+    assert!(
+        html.contains(r#""db_snapshot":{"version":"unavailable","built":"unavailable"}"#),
+        "shim 的 grype 對 db status 回 vuln fixture（無 schemaVersion/built），\n\
+         db_snapshot 必須收斂到顯性 sentinel，而非假值或缺欄"
+    );
+}

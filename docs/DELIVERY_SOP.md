@@ -15,11 +15,20 @@ cytrace-<版本>/
 ├── cytrace.sbom.cdx.json  # CyTrace 自產 SBOM（dogfooding，FR-009）
 ├── NOTICE                 # 第三方授權（Syft/Grype/theia 本體 Apache-2.0；theia 相依另含 MIT/MPL-2.0）
 ├── cytrace-offline        # 離線執行 wrapper（設定 PATH 與 GRYPE_DB_CACHE_DIR）
+├── CHANGELOG.md           # 版本變更說明（air-gapped 場域唯一來源）
 ├── SHA256SUMS             # 完整性
 └── SHA256SUMS.minisig     # 真實性（minisign detached 簽章）
 ```
 
 ## 2. 產生安裝包（有網段 / build 機）
+
+**前置（Linux，一次性）**：CBOM 引擎自源碼可重現建置（ADR-013 決策 1；需 Docker）：
+```bash
+scripts/build-theia.sh   # 產 cbomkit-theia 並驗 SHA256（versions.env 釘死）
+```
+沒有它 `make package` 會 fail-hard（刻意不含 CBOM 時以 `WITHOUT_CBOM=1` 顯式豁免）。
+build 機的 syft/grype **版本必須等於 versions.env 釘選版**，否則打包直接失敗——
+環境漂移的引擎（如 syft 1.51 輸出 CycloneDX 1.7）會讓場域的 grype 整條讀不懂。
 
 ```bash
 make package            # 或 scripts/package.sh <輸出目錄>
@@ -81,18 +90,26 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 （slim + `/db` volume），故交付含兩件 artifact：**映像 tar** ＋ **DB 快照**（同 §5 那份）。
 
 ### 7.1 取得與封存（有網段交付工作站）
-1. `docker pull ghcr.io/astroicers/cytrace:vX.Y.Z`（需 GHCR 私有 read PAT）。
+1. `docker pull ghcr.io/astroicers/cytrace:X.Y.Z`（需 GHCR 私有 read PAT）。
+   > **tag push 路徑**的 image tag 無 `v` 前綴（semver pattern 去前綴；v0.2.1 實證
+   > 為 `0.2.1`），照舊文件 pull `:vX.Y.Z` 會 404。**workflow_dispatch 補發例外**：
+   > raw 規則原樣用輸入值——輸入 `v0.3.0` 就發 `:v0.3.0`，且不更新 `latest`；
+   > 補發後請以實際 image tag 取代本節的 `X.Y.Z`。
 2. 核對 digest：`docker buildx imagetools inspect ... --format '{{.Manifest.Digest}}'`
    對 GitHub Release 的 `IMAGE_DIGEST.txt`。
 3. 取 Release 附的 `cytrace-vX.Y.Z-image.tar`（CI 產物即權威）或本機 `docker save`。
-4. `sha256sum -c SHA256SUMS`。
+4. `sha256sum -c SHA256SUMS-image`（binaries 的校驗檔是另一份 `SHA256SUMS`——
+   兩個 workflow 各附各的，檔名刻意錯開）。
 5. **minisign 簽 tar**（交付工作站私鑰，同 ADR-007 信任錨；私鑰不進 CI）：
    `minisign -Sm cytrace-vX.Y.Z-image.tar`。
 
 ### 7.2 攜入與載入（場域）
 1. 光碟 / 單向匣攜入 → `minisign -Vm cytrace-vX.Y.Z-image.tar`（帶外預置公鑰）＋ `sha256sum -c`。
 2. `docker load -i cytrace-vX.Y.Z-image.tar`。
-3. 核對載入結果：`docker images --digests`。
+3. 補打 `latest` 標籤（離線 tar 只封 semver tag，而 DOCKER.md / docker-compose.yml
+   範例用 `:latest`——不補打則照範例起站會 image not found）：
+   `docker tag ghcr.io/astroicers/cytrace:X.Y.Z ghcr.io/astroicers/cytrace:latest`
+4. 核對載入結果：`docker images --digests`。
    > 注意：`docker load` **不還原 RepoDigest**（registry digest）。核對的是 image ID /
    > config digest，與 §7.1 的 registry manifest digest 是不同概念——文件與驗收單須寫清楚。
 

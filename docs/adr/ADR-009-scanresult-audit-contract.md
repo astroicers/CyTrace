@@ -65,3 +65,27 @@ CyTrace 的核心稽核能力是 `cytrace report <json>`：由先前產出的 **
 ## 關聯（Relations）
 
 - 參考：ADR-005（單檔報表）、ADR-008（golden baseline 欄位正規化）、SDS §4/§7/§9、SRS FR-003/FR-006、ROADMAP T303
+
+## 修訂：schema v2（2026-09-29，隨 ADR-013 / M9）
+
+T903 宣稱「修訂 ADR-009」但當時只動了程式，本節補上契約文件（release 準備複審
+major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON 會誤判欄位缺漏）。
+
+- `schema_version`: **1 → 2**。
+- 新增頂層欄位 `crypto`（`Option<CryptoInventory>`，`#[serde(default)]`）：
+  `status`（`NotRequested` / `EngineAbsent` / `Completed` / `{ Failed: { reason_key,
+  reason_detail? } }`，externally-tagged；`reason_key` 為純 i18n 鍵、`reason_detail`
+  為不可翻譯細節）、`assets[]`（`name` / `asset_type` / `quantum` / `weak_key` /
+  `location` / `primitive?` / `key_size?` / `not_after?`；**不含金鑰內容**，NFR-09）、
+  三個未掃描計數（`unscanned_unreadable` / `unscanned_oversize` /
+  `unscanned_undetermined`）。
+- `meta.tool_versions` 新增 `theia?`（僅 CBOM 完成時填）；`meta` 新增
+  `scan_identity?`（執行 uid，ADR-013 決策 10）。
+- `meta.db_snapshot` 語意收緊：自本版起為 **grype db status 的真值**
+  （`schemaVersion` / `built`）；取不到時為 sentinel `"unavailable"`（顯性失敗，
+  不得假值）。v1 時期的 `"snapshot"` / `"unknown"` 為硬編碼假值，不具稽核效力。
+- **向後相容政策不變**：v2 的 `cytrace report` 讀 v1 JSON 須可重建
+  （`crypto` 缺欄位 → `None`；由回歸測試釘住）。
+- 序列化形狀由 `cbom_status_serialization_matches_the_frontend_contract`
+  （`crates/cytrace-types`）與跨語言契約測試（`crates/cytrace-i18n/tests/cbom_keys.rs`）
+  機械釘住。
