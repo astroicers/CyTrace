@@ -4,9 +4,7 @@
 >（`make package` 會收入包內），是離線環境唯一的版本變更說明。
 > 格式依 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)；版本依 SemVer。
 
-## [0.3.0] - 未發布
-<!-- 打 tag 前把「未發布」改為當日日期（release.yml 的版本閘只驗號碼不驗此行；
-     本行陳舊化目前無機械承接，靠本注記與 PR checklist） -->
+## [0.3.0] - 2026-09-30
 
 ### 新增
 
