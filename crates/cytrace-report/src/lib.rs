@@ -30,12 +30,13 @@ pub fn render(result: &ScanResult) -> Result<String> {
 /// 同 [`render`]，但可指定樣板（供測試與 M3 內嵌樣板共用）。樣板須含 [`DATA_SENTINEL`]。
 pub fn render_with_template(result: &ScanResult, template: &str) -> Result<String> {
     if !template.contains(DATA_SENTINEL) {
+        // 鍵值形式的診斷資料：untranslatable_detail 會原樣帶出這段內文到 API（經 runner）
         return Err(CytraceError::Config(format!(
-            "報表樣板缺少注入點 {DATA_SENTINEL}"
+            "template missing sentinel {DATA_SENTINEL}"
         )));
     }
     let json = serde_json::to_string(result)
-        .map_err(|e| CytraceError::Parse(format!("序列化 ScanResult: {e}")))?;
+        .map_err(|e| CytraceError::Parse(format!("scan-result serialize: {e}")))?;
     let tag = format!(
         "<script id=\"cytrace-data\" type=\"application/json\">{}</script>",
         escape_for_script(&json)

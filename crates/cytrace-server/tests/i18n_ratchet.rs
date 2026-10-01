@@ -12,25 +12,37 @@
 
 use std::path::Path;
 
-/// T912 待辦：已知印在操作員終端、尚未 i18n 的字面值片段。**只能刪，不該加**。
-const T912_BACKLOG: &[(&str, &str)] = &[
-    ("config.rs", "CYTRACE_BIND 不是合法位址"),
-    ("config.rs", "缺少 CYTRACE_ADMIN_PASSWORD_HASH"),
-    ("config.rs", "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串"),
-    ("config.rs", "CYTRACE_SESSION_TTL_HOURS 不是整數"),
-    ("config.rs", "TLS 憑證與金鑰必須成對設定"),
-    ("config.rs", "{key} 不是整數"),
-    ("config.rs", "CYTRACE_MAX_EXTRACT_MB 不是整數"),
-    ("jobs/registry.rs", "無法建立資料目錄"),
-    ("jobs/registry.rs", "損毀的 job 記錄"),
-    ("jobs/registry.rs", "job.json 落盤失敗"),
-    ("targets.rs", "格式應為 name=/abs/path："),
-    ("targets.rs", "格式應為 name=/abs/path（絕對路徑）"),
-    ("tls.rs", "TLS 憑證載入失敗"),
+/// T912 待辦：已知印在操作員終端、尚未 i18n 的字面值片段與**出現次數**。**只能減，不該加**。
+///
+/// 計次數而非只看片段是否存在：只看存在的話，一筆清單能豁免任意多個同片段字面值——
+/// 複製既有錯誤訊息（例如再貼一處「job.json 落盤失敗」送進 API）正是新散文最常見的來源
+/// （T909 對抗式複審 v14：反證票 1/3、未達確認門檻；但複製一行即可繞過是實測可重現的，故仍修）。
+const T912_BACKLOG: &[(&str, &str, usize)] = &[
+    ("config.rs", "CYTRACE_BIND 不是合法位址", 1),
+    ("config.rs", "缺少 CYTRACE_ADMIN_PASSWORD_HASH", 1),
+    (
+        "config.rs",
+        "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串",
+        1,
+    ),
+    ("config.rs", "CYTRACE_SESSION_TTL_HOURS 不是整數", 1),
+    ("config.rs", "TLS 憑證與金鑰必須成對設定", 1),
+    ("config.rs", "{key} 不是整數", 1),
+    ("config.rs", "CYTRACE_MAX_EXTRACT_MB 不是整數", 1),
+    // 只含全形冒號、無漢字——初版 is_cjk 只認 U+4E00–9FFF，這條看不到
+    ("config.rs", "CYTRACE_SCAN_ROOTS：", 1),
+    ("jobs/registry.rs", "無法建立資料目錄", 1),
+    ("jobs/registry.rs", "損毀的 job 記錄", 1),
+    ("jobs/registry.rs", "job.json 落盤失敗", 2),
+    ("targets.rs", "格式應為 name=/abs/path：", 1),
+    ("targets.rs", "格式應為 name=/abs/path（絕對路徑）", 1),
+    ("tls.rs", "TLS 憑證載入失敗", 1),
 ];
 
+/// 與 tests/jobs.rs 的 `has_cjk` 同範圍：漢字 + CJK 標點 + 全形字元。
+/// 初版只認漢字，只含全形標點的字面值（`"CYTRACE_SCAN_ROOTS：{e}"`）完全看不到。
 fn is_cjk(c: char) -> bool {
-    matches!(c as u32, 0x4E00..=0x9FFF)
+    matches!(c as u32, 0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF)
 }
 
 /// 抽出一行裡所有含 CJK 的雙引號字面值。
@@ -93,13 +105,21 @@ fn server_cjk_literals_only_shrink() {
         }
     }
 
+    // 每筆清單項目的實際出現次數
+    let count_of = |bf: &str, frag: &str| {
+        found
+            .iter()
+            .filter(|(f, l)| f == bf && l.contains(frag))
+            .count()
+    };
+
     // 方向 1：清單外的新中文字面值
     let unexpected: Vec<_> = found
         .iter()
         .filter(|(file, lit)| {
             !T912_BACKLOG
                 .iter()
-                .any(|(bf, frag)| file == bf && lit.contains(frag))
+                .any(|(bf, frag, _)| file == bf && lit.contains(frag))
         })
         .collect();
     assert!(
@@ -113,15 +133,18 @@ fn server_cjk_literals_only_shrink() {
             .join("\n")
     );
 
-    // 方向 2：清單內已消失的項目（T912 修掉後須從清單移除）
-    let stale: Vec<_> = T912_BACKLOG
+    // 方向 2：次數必須精確相符——多了是複製了既有散文，少了是 T912 修掉後沒更新清單
+    let drift: Vec<_> = T912_BACKLOG
         .iter()
-        .filter(|(bf, frag)| !found.iter().any(|(f, l)| f == bf && l.contains(frag)))
+        .filter_map(|(bf, frag, want)| {
+            let got = count_of(bf, frag);
+            (got != *want).then(|| format!("  {bf} 「{frag}」：清單記 {want} 處，實際 {got} 處"))
+        })
         .collect();
     assert!(
-        stale.is_empty(),
-        "T912_BACKLOG 有項目已不存在於程式碼——請從清單移除（清單陳舊會讓同樣字串加回來時不被抓）：\n{:?}",
-        stale
+        drift.is_empty(),
+        "T912_BACKLOG 與程式碼次數不符（多了＝複製了既有中文散文；少了＝修掉後請更新清單）：\n{}",
+        drift.join("\n")
     );
 
     // 反空轉：清單非空時必須真的看到中文字面值，否則抽取邏輯可能失效

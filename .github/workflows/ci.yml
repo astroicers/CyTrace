@@ -96,6 +96,10 @@ jobs:
       # 兩次都是報表會把該字面印給交件對象看。
       - name: CBOM 成因渲染（雙語 × 邊界，ADR-013）
         run: node --experimental-strip-types frontend/scripts/cbom-message-check.mts
+      # 送給 server 的語系必須是畫面實際語系（i18n.resolvedLanguage），否則中文介面會跳
+      # 英文錯誤、非 Latin-1 的存檔值會讓每次請求都被包成 network 錯誤（T909 複審 v1）。
+      - name: console 送出語系 == 畫面語系（T909）
+        run: node --experimental-strip-types frontend/scripts/console-lang-check.mts
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）

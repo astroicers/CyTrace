@@ -876,6 +876,9 @@ async fn t909_invalid_status_filter_is_localized() {
             "server.err.invalid_status",
         );
         assert!(msg.contains("bogus"), "{lang}: {msg}");
+        // detail 精確等於原始值：has_cjk 只擋中文，英文說明句流回 detail 也是同一個 bug
+        // 的鏡像（T909 對抗式複審 v17，3/3 確認）
+        assert_eq!(v["error"]["detail"], "bogus", "{lang}: detail 應為原始值");
     }
 }
 
@@ -894,6 +897,11 @@ async fn t909_missing_file_field_is_localized() {
             &v,
             StatusCode::BAD_REQUEST,
             "server.err.missing_file_field",
+        );
+        assert!(
+            v["error"]["detail"].is_null(),
+            "{lang}: 缺欄位沒有可附的原始值，detail 應為空：{}",
+            v["error"]["detail"]
         );
     }
 }
@@ -921,6 +929,10 @@ async fn t909_upload_too_large_is_localized() {
             "server.err.upload_too_large",
         );
         assert!(msg.contains("1048576"), "{lang}: 上限值須插值：{msg}");
+        assert_eq!(
+            v["error"]["detail"], "1048576",
+            "{lang}: detail 應為上限值本身"
+        );
     }
 }
 
@@ -960,10 +972,9 @@ async fn t909_extract_too_large_uses_archive_specific_key() {
             StatusCode::PAYLOAD_TOO_LARGE,
             "server.err.extract_too_large",
         );
-        let d = v["error"]["detail"].as_str().unwrap_or("");
-        assert!(
-            d.starts_with("extracted_bytes>"),
-            "{lang}: detail 應為鍵值診斷資料：{d}"
+        assert_eq!(
+            v["error"]["detail"], "extracted_bytes>1048576",
+            "{lang}: detail 應為鍵值診斷資料"
         );
     }
 }
@@ -1057,41 +1068,211 @@ async fn t909_login_malformed_json_returns_json_contract() {
     }
 }
 
-/// console 的每條 API 請求路徑都必須送出 **UI 語系**（非瀏覽器預設）作為 `Accept-Language`。
+/// console 的**每一條** API 請求路徑都必須帶 **UI 語系**（非瀏覽器預設）。
 ///
-/// server 依此渲染錯誤 message；不送的話，console 切 en-US 而瀏覽器是 zh-TW 時照收中文
-/// （T909 的前端那一半）。fetch（client.ts）與上傳 XHR（upload.ts）是兩條獨立路徑，
-/// 只修一條是這個專案反覆踩過的坑，故兩條都釘。
+/// server 依請求語系渲染錯誤 message。三種請求形態、三種帶法：
+/// - `fetch`（client.ts `request`）→ `Accept-Language` header
+/// - 上傳 XHR（upload.ts）→ `Accept-Language` header
+/// - `<a href>` 導覽（`artifactUrl`）→ 無法設 header，走 `?lang=`（`withLang`）
+///
+/// 初版只比對兩個寫死的檔案，第三條路徑完全看不到（T909 對抗式複審 major）。本版掃整個
+/// `frontend/src/console/`：任何 `/api/v1/` 字面值必須落在已知會帶語系的位置，且不得出現
+/// 第四種請求構造（`fetch(`／`XMLHttpRequest` 只准在 client.ts／upload.ts）。
 #[test]
 fn t909_console_requests_send_ui_language() {
-    let base = concat!(
+    let root = std::path::PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../frontend/src/console/api"
+        "/../../frontend/src/console"
+    ));
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ts" | "tsx")) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    assert!(
+        files.len() >= 10,
+        "只找到 {} 個前端檔——掃描可能失效",
+        files.len()
     );
-    let client = std::fs::read_to_string(format!("{base}/client.ts")).expect("讀 client.ts");
-    let upload = std::fs::read_to_string(format!("{base}/upload.ts")).expect("讀 upload.ts");
 
-    // 反空轉：確認讀到的是真的請求實作，不是空檔或搬了家
-    assert!(
-        client.contains("fetch(path"),
-        "client.ts 找不到 fetch 呼叫——檢查在空轉"
-    );
-    assert!(
-        upload.contains("new XMLHttpRequest()"),
-        "upload.ts 找不到 XHR——檢查在空轉"
-    );
+    let client = std::fs::read_to_string(root.join("api/client.ts")).unwrap();
+    let upload = std::fs::read_to_string(root.join("api/upload.ts")).unwrap();
 
-    // 事實源：UI 語系取自 i18n 實例，而非 navigator.language
+    // 三種帶法各自成立
     assert!(
-        client.contains("export function uiLanguage()") && client.contains("i18n.language"),
-        "client.ts 須以 i18n.language 提供 uiLanguage()"
+        client.contains("export function uiLanguage()") && client.contains("effectiveLang(i18n)"),
+        "client.ts 須以 effectiveLang(i18n) 提供 uiLanguage()（單一事實源；行為由 \
+         frontend/scripts/console-lang-check.mts 驗）"
     );
     assert!(
         client.contains("'Accept-Language': uiLanguage()"),
-        "fetch 路徑未送 UI 語系——en-US console 會收到瀏覽器語系（可能是中文）的錯誤訊息"
+        "fetch 路徑未送 UI 語系"
     );
     assert!(
         upload.contains("setRequestHeader('Accept-Language', uiLanguage())"),
         "上傳 XHR 路徑未送 UI 語系"
     );
+    assert!(
+        client.contains("export function withLang(")
+            && client.contains("lang=${encodeURIComponent(uiLanguage())}"),
+        "導覽式請求須經 withLang 以 ?lang= 帶 UI 語系"
+    );
+
+    let mut problems = Vec::new();
+    let mut api_literals = 0usize;
+    for f in &files {
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = std::fs::read_to_string(f).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
+                continue;
+            }
+            // 不得出現第四種請求構造
+            if (t.contains("fetch(") && rel != "api/client.ts")
+                || (t.contains("XMLHttpRequest") && rel != "api/upload.ts")
+            {
+                problems.push(format!(
+                    "{rel}:{}: 新的請求構造（只准在 client.ts/upload.ts）：{t}",
+                    n + 1
+                ));
+            }
+            if !t.contains("/api/v1/") {
+                continue;
+            }
+            api_literals += 1;
+            // 已知會帶語系的位置：request<…>(…)（經 fetch）、xhr.open（XHR）、withLang(…)（導覽）
+            let ok = t.contains("request<")
+                || t.contains("xhr.open(")
+                || t.contains("withLang(")
+                // request 呼叫跨行時，路徑字面值單獨成行（前一行是 `request<…>(`）
+                || text.lines().nth(n.wrapping_sub(1)).is_some_and(|prev| prev.contains("request<"));
+            if !ok {
+                problems.push(format!(
+                    "{rel}:{}: /api/v1/ 字面值未經會帶語系的路徑：{t}",
+                    n + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        api_literals >= 10,
+        "只看到 {api_literals} 個 /api/v1/ 字面值——掃描可能失效"
+    );
+    assert!(
+        problems.is_empty(),
+        "console 有請求路徑沒帶 UI 語系：\n{}",
+        problems.join("\n")
+    );
+}
+
+/// rejection 原生**不是 400** 的案例：狀態語意須保留（413 不得被壓成 400）。
+///
+/// 初版 `bad_request` 一律回 400/validation，而 t909 測試挑的 rejection 原生都是 400，
+/// 所以驗不出這件事（T909 對抗式複審）。public router 未停用 body limit，axum 預設 2 MiB。
+#[tokio::test]
+async fn t909_oversized_login_body_keeps_413() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let big = format!("{{\"password\":\"{}\"}}", "x".repeat(2 * 1024 * 1024 + 16));
+    for lang in LANGS {
+        let mut req = with_csrf_and(Request::post("/api/v1/session"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::from(big.clone()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 1, 0, 3], 40002))));
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "login_413",
+            lang,
+            st,
+            &v,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "server.err.payload_too_large",
+        );
+        assert_eq!(
+            v["error"]["kind"], "payload_too_large",
+            "{lang}: 成因須是「太大」而非「格式不合法」"
+        );
+    }
+}
+
+/// Path rejection 經**每一條**帶 Path 的路由都走 JSON 契約（初版只驗了 jobs/{id}）。
+#[tokio::test]
+async fn t909_path_rejection_on_every_path_route() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for route in [
+        "/api/v1/jobs/%FF%FE",
+        "/api/v1/jobs/%FF%FE/report",
+        "/api/v1/jobs/%FF%FE/result",
+        "/api/v1/jobs/%FF%FE/artifacts/sbom",
+    ] {
+        for lang in LANGS {
+            let req = Request::get(format!("{route}?lang={lang}"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap();
+            let (st, v) = send_json(&env.app, req).await;
+            assert_api_error(
+                route,
+                lang,
+                st,
+                &v,
+                StatusCode::BAD_REQUEST,
+                "server.err.bad_request",
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn t909_rejections_on_report_query_and_delete_path() {
+    // e2e 原本只打到 list 的 Query 與 GET 的 Path；report 的 ApiQuery、DELETE 的 ApiPath
+    // 若被改回裸 extractor，只剩靜態閘把關，而當時的靜態閘比不到全限定寫法
+    // （T909 對抗式複審 v18，2/3 確認）。
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        // download 是 Option<u8>：xyz 解析失敗發生在 handler 本體之前，job 存不存在都一樣
+        let req = Request::get(format!("/api/v1/jobs/any/report?download=xyz&lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "report?download",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+
+        let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/%FF%FE?lang={lang}")))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "DELETE path",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+    }
 }

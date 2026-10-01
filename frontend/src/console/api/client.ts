@@ -1,5 +1,6 @@
 // Thin fetch wrapper：同源相對路徑、cookie 認證、統一錯誤 normalize、401 集中攔截。
 import i18n from '../../i18n'
+import { effectiveLang } from '../../langs'
 import { ApiError } from './types'
 import type { JobList, JobRecord, SessionInfo, VersionInfo } from './types'
 
@@ -8,10 +9,11 @@ import type { JobList, JobRecord, SessionInfo, VersionInfo } from './types'
  *
  * server 依 `Accept-Language` 渲染錯誤 message。不送的話瀏覽器會帶自己的預設值——
  * 使用者把 console 切成 en-US、瀏覽器是 zh-TW，錯誤訊息照樣是中文（T909：
- * 「en-US 用戶端不得收到中文」的前端那一半）。fetch 與上傳的 XHR 共用本函式。
+ * 「en-US 用戶端不得收到中文」的前端那一半）。fetch、上傳的 XHR 與 `withLang` 共用本函式。
+ * 取的是**解析後**的語系，理由見 `effectiveLang`。
  */
 export function uiLanguage(): string {
-  return i18n.language || 'zh-TW'
+  return effectiveLang(i18n)
 }
 
 // 變更型請求強制帶此標頭（後端 CSRF 第 2 層防禦，ADR-011）。
@@ -101,9 +103,22 @@ export const api = {
     request<void>(`/api/v1/jobs/${id}`, { method: 'DELETE' }),
 }
 
-/** 報表/產物同源 URL（另開分頁或下載，不經 JSON client）。 */
+/**
+ * 在 URL 附上 UI 語系（`?lang=`）。
+ *
+ * `<a href>` 導覽請求無法設 header，所以 `Accept-Language` 那條路走不到——
+ * 錯誤回應（404、壞路徑）會依**瀏覽器**語系渲染。server 的協商順序是
+ * `?lang=` > `Accept-Language`，故導覽式請求以查詢參數帶語系
+ * （T909 對抗式複審：原本只修了 fetch 與 XHR，第三條路徑漏了）。
+ */
+export function withLang(url: string): string {
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}lang=${encodeURIComponent(uiLanguage())}`
+}
+
+/** 報表/產物同源 URL（另開分頁或下載，不經 JSON client）。一律經 `withLang`。 */
 export const artifactUrl = {
   report: (id: string, download = false) =>
-    `/api/v1/jobs/${id}/report${download ? '?download=1' : ''}`,
-  result: (id: string) => `/api/v1/jobs/${id}/result`,
+    withLang(`/api/v1/jobs/${id}/report${download ? '?download=1' : ''}`),
+  result: (id: string) => withLang(`/api/v1/jobs/${id}/result`),
 }

@@ -165,7 +165,10 @@ impl ApiError {
 
     /// 指定比 `kind` 更具體的訊息鍵（依請求語系渲染，插值 `vars`）。
     ///
-    /// 回應的 `i18n_key` 欄位同步改為此鍵，讓用戶端可自行依 UI 語系重新渲染。
+    /// 回應的 `i18n_key` 欄位同步改為此鍵——**作為成因識別碼**（供程式判斷、統計），
+    /// 不是給用戶端重新渲染用：回應不含插值參數，拿 `i18n_key` 自行 `t()` 會印出佔位符。
+    /// 要顯示的文字以 `message` 為準；用戶端請以 `Accept-Language` / `?lang=` 指定語系
+    /// （初版文件曾承諾可重新渲染，與回應形狀不符——T909 對抗式複審，2/3 確認）。
     pub fn with_message(mut self, key: &'static str, vars: &[(&'static str, &str)]) -> Self {
         self.message_key = Some((key, vars.iter().map(|(k, v)| (*k, v.to_string())).collect()));
         self
@@ -224,10 +227,24 @@ impl ApiError {
 /// （`Failed to deserialize the JSON body…`），完全繞過 ADR-011 §7 的
 /// `{"error":{…}}` 格式：zh-TW 用戶端收到英文、console 的 client 解不出 JSON 而退回泛用訊息
 /// （T909 分類 workflow 反向追蹤發現，6 處）。rejection 的文字是函式庫診斷，放 `detail`。
+///
+/// **保留 rejection 原本的狀態語意**：初版一律壓成 400/validation——登入送 >2 MiB 的 body
+/// （axum 預設上限）原本 413 變 400、訊息說「格式不合法」而成因其實是太大；route 與 handler
+/// 對不上的 500（伺服器 bug）變 400 怪到用戶端頭上（T909 對抗式複審 v6，3/3 確認）。
+/// 對映：413 → PayloadTooLarge；5xx → Internal；其餘（400/415/422）→ Validation（400）——
+/// 後者刻意收斂成 400：415/422 在本 API 沒有獨立的處置差異，用戶端都該修正請求。
 pub fn bad_request<R: IntoResponse + std::fmt::Display>(lang: Lang, rejection: R) -> ApiError {
+    let text = rejection.to_string();
+    let status = rejection.into_response().status();
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        return ApiError::new(lang, ErrorKind::PayloadTooLarge).with_detail(text);
+    }
+    if status.is_server_error() {
+        return ApiError::new(lang, ErrorKind::Internal).with_detail(text);
+    }
     ApiError::new(lang, ErrorKind::Validation)
         .with_message("server.err.bad_request", &[])
-        .with_detail(rejection.to_string())
+        .with_detail(text)
 }
 
 impl IntoResponse for ApiError {

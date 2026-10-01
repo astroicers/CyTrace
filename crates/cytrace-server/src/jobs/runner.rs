@@ -175,8 +175,14 @@ fn run_pipeline(
             .map_err(|e| CytraceError::Parse(format!("scan-result serialize: {e}")))?,
     )?;
 
-    let html = cytrace_report::render(&result)
-        .map_err(|e| CytraceError::Parse(format!("report render: {e}")))?;
+    // `{e}` 會帶出 CytraceError 的 Display——每個變體都有中文前綴（「設定錯誤：…」），
+    // 只換外層前綴等於沒修（T909 完整性批判抓到的漏網）。取不翻譯的內文。
+    let html = cytrace_report::render(&result).map_err(|e| {
+        CytraceError::Parse(format!(
+            "report render: {}",
+            e.untranslatable_detail().unwrap_or_default()
+        ))
+    })?;
     std::fs::write(job_dir.join("report.html"), html)?;
 
     let triggered = fail_on

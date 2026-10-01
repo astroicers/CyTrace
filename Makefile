@@ -26,6 +26,7 @@ frontend-check:
 	@# frontend/src/cbom.ts 是 Catalog::render_cbom 的第二份實作；Rust 側的契約測試比對
 	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
+	node --experimental-strip-types frontend/scripts/console-lang-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -85,7 +86,9 @@ lint: fmt-check clippy
 	@node -e 'const [maj]=process.versions.node.split(".").map(Number); if (maj < 22) { console.error("✗ Node " + process.versions.node + " 過舊：--experimental-strip-types 需 22+"); process.exit(1) }'
 	@test -d frontend/node_modules/i18next || { echo "✗ 缺 frontend/node_modules/i18next（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
-	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染，零 warning）"
+	@# console 送出的語系必須等於畫面語系（T909 複審 v1）；與上一支同一套前置
+	node --experimental-strip-types frontend/scripts/console-lang-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:
