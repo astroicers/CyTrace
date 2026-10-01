@@ -100,8 +100,7 @@ pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVer
         syft: query_version("syft").unwrap_or_else(|| "unknown".into()),
         grype: query_version("grype").unwrap_or_else(|| "unknown".into()),
         theia: matches!(cbom, cytrace_types::CbomStatus::Completed)
-            .then(|| option_env!("CYTRACE_THEIA_VERSION").map(str::to_string))
-            .flatten(),
+            .then(|| env!("CYTRACE_THEIA_VERSION").to_string()),
     }
 }
 
