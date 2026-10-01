@@ -1,6 +1,18 @@
 // Thin fetch wrapper：同源相對路徑、cookie 認證、統一錯誤 normalize、401 集中攔截。
+import i18n from '../../i18n'
 import { ApiError } from './types'
 import type { JobList, JobRecord, SessionInfo, VersionInfo } from './types'
+
+/**
+ * 送給 server 的語系：**console 的 UI 語系**，不是瀏覽器的。
+ *
+ * server 依 `Accept-Language` 渲染錯誤 message。不送的話瀏覽器會帶自己的預設值——
+ * 使用者把 console 切成 en-US、瀏覽器是 zh-TW，錯誤訊息照樣是中文（T909：
+ * 「en-US 用戶端不得收到中文」的前端那一半）。fetch 與上傳的 XHR 共用本函式。
+ */
+export function uiLanguage(): string {
+  return i18n.language || 'zh-TW'
+}
 
 // 變更型請求強制帶此標頭（後端 CSRF 第 2 層防禦，ADR-011）。
 const CSRF_HEADER = 'X-CyTrace-Request'
@@ -20,7 +32,7 @@ interface Options {
 
 async function request<T>(path: string, opts: Options = {}): Promise<T> {
   const method = opts.method ?? 'GET'
-  const headers: Record<string, string> = {}
+  const headers: Record<string, string> = { 'Accept-Language': uiLanguage() }
   const mutating = method !== 'GET' && method !== 'HEAD'
   if (mutating) headers[CSRF_HEADER] = '1'
   let body: BodyInit | undefined

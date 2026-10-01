@@ -59,7 +59,12 @@
       "queue_full": "掃描佇列已滿，請稍後再送出",
       "payload_too_large": "上傳或解壓內容超過大小上限",
       "unsupported_archive": "不支援的壓縮格式（僅 zip / tar / tar.gz）",
-      "extract_too_large": "解壓內容超過大小上限"
+      "extract_too_large": "解壓內容超過大小上限",
+      "invalid_fail_on": "fail_on 不合法：{{value}}（可用：{{allowed}}）",
+      "invalid_status": "status 篩選值不合法：{{value}}",
+      "missing_file_field": "上傳請求缺少 file 欄位",
+      "upload_too_large": "上傳超過大小上限（{{limit}} bytes）",
+      "bad_request": "請求格式不合法"
     },
     "job": {
       "interrupted": "伺服器重啟時中斷；請重新建立掃描"

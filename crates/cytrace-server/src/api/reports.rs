@@ -1,8 +1,9 @@
 //! 報表與稽核產物端點（ADR-011 §4）：線上檢視 / 下載 / ScanResult / sbom·grype。
 
 use crate::error::{ApiError, ErrorKind, Lang};
+use crate::extract::{ApiPath, ApiQuery};
 use crate::state::AppState;
-use axum::extract::{Path, Query, State};
+use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -31,8 +32,8 @@ fn read_artifact(app: &AppState, id: &str, file: &str) -> Option<Vec<u8>> {
 pub async fn report(
     State(app): State<AppState>,
     lang: Lang,
-    Path(id): Path<String>,
-    Query(q): Query<DownloadQuery>,
+    ApiPath(id): ApiPath<String>,
+    ApiQuery(q): ApiQuery<DownloadQuery>,
 ) -> Result<Response, ApiError> {
     if app.jobs.get(&id).is_none() {
         return Err(ApiError::new(lang, ErrorKind::NotFound));
@@ -64,7 +65,7 @@ pub async fn report(
 pub async fn result(
     State(app): State<AppState>,
     lang: Lang,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> Result<Response, ApiError> {
     artifact_json(&app, lang, &id, "scan-result.json")
 }
@@ -79,7 +80,7 @@ pub struct ArtifactKind {
 pub async fn artifact(
     State(app): State<AppState>,
     lang: Lang,
-    Path(p): Path<ArtifactKind>,
+    ApiPath(p): ApiPath<ArtifactKind>,
 ) -> Result<Response, ApiError> {
     let file = match p.kind.as_str() {
         "sbom" => "sbom.cdx.json",

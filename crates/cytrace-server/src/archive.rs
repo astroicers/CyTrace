@@ -14,7 +14,11 @@ use std::path::{Component, Path, PathBuf};
 /// entry 數上限（固定；超過此數的正常交付目標不存在）。
 pub const MAX_ENTRIES: usize = 100_000;
 
-/// 解壓失敗分類（→ JobError；i18n 鍵 `server.err.*`）。
+/// 解壓失敗分類（i18n 鍵 `server.err.*`）。
+///
+/// 解壓在 upload handler 內同步執行，失敗時 job 尚未 insert——故經 **ApiError** 直接回給
+/// 請求者，不經 runner / JobError（舊註解寫「→ JobError」與實況不符，T909 分類時查出）。
+/// `detail` 只放鍵值形式的診斷資料（`entries=N`、`extracted_bytes>N`），說明句走 [`Self::i18n_key`]。
 #[derive(Debug, PartialEq, Eq)]
 pub enum ArchiveError {
     /// 路徑穿越 / 絕對路徑 / Prefix——整包拒收。
@@ -196,9 +200,8 @@ fn copy_limited<R: Read>(src: &mut R, out: &Path, budget: u64) -> Result<u64, Ar
         .map_err(|e| ArchiveError::Malformed(e.to_string()))?;
     if n > budget {
         let _ = std::fs::remove_file(out);
-        return Err(ArchiveError::TooLarge(format!(
-            "解壓量超過上限（已解 {n} bytes）"
-        )));
+        // 鍵值形式的診斷資料（與 entries=N 等兄弟站點同慣例）；說明句走 i18n 鍵
+        return Err(ArchiveError::TooLarge(format!("extracted_bytes>{budget}")));
     }
     Ok(n)
 }

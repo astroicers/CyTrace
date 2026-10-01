@@ -931,7 +931,7 @@ milestones:
         spec: null
         srs_ref: NFR-06
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: review
         source_ref: "第八輪獨立複審 finding L（CBOM 分支，2026-09-27）"
@@ -993,6 +993,31 @@ milestones:
           CI 冒煙以 `-WithoutCbom` 顯式豁免。
           待辦：CI 以 GOOS=windows 交叉編譯並驗可重現（SHA 釘進 versions.env）、作為釋出
           資產；package.ps1 改取用之並驗 SHA；移除 CI 的 -WithoutCbom；Windows 實機驗證。
+
+      - id: T912
+        title: "操作員終端訊息 i18n（serve 啟動錯誤、CLI 錯誤、CytraceError Display 前綴）"
+        type: MODIFICATION
+        priority: 3
+        adr: null
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T909 分類 workflow（2026-10-01；53 agents，33 站點 + 反向追蹤，3 項判定經反證翻轉）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-01"
+        description: |
+          T909 的分類把非測試中文字面值按輸出面切開，**operator_terminal 共 25 處**不屬 T909
+          （票面範圍是 API），由本票承接：
+          - serve 啟動：config.rs ×8（含 :129）、tls.rs:16、targets.rs ×2、
+            registry.rs ×5（:21、:60–61、:104、:125）
+          - CLI：main.rs:115（eprintln 印 CytraceError Display）、:243、:415、clap 錯誤
+          - CytraceError 的 `#[error]` Display 中文前綴（error.rs:9/13/17/21）——經 main.rs:115
+            印到終端；`--lang en-US` 下照樣吐中文
+          難點：serve 啟動時尚無請求語系，需決定依環境變數或 `--lang` 渲染。
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

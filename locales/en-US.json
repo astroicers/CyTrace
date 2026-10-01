@@ -59,7 +59,12 @@
       "queue_full": "Scan queue is full; try again later",
       "payload_too_large": "Upload or extracted content exceeds size limit",
       "unsupported_archive": "Unsupported archive format (zip / tar / tar.gz only)",
-      "extract_too_large": "Extracted content exceeds size limit"
+      "extract_too_large": "Extracted content exceeds size limit",
+      "invalid_fail_on": "Invalid fail_on: {{value}} (allowed: {{allowed}})",
+      "invalid_status": "Invalid status filter: {{value}}",
+      "missing_file_field": "Upload request is missing the file field",
+      "upload_too_large": "Upload exceeds the size limit ({{limit}} bytes)",
+      "bad_request": "Malformed request"
     },
     "job": {
       "interrupted": "Interrupted by server restart; please re-submit the scan"

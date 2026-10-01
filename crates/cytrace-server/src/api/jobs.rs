@@ -2,10 +2,11 @@
 //! 上傳型 job（multipart）於 T805 增補。
 
 use crate::error::{ApiError, ErrorKind, Lang};
+use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
 use crate::jobs::{runner, JobRecord, JobStatus};
 use crate::state::AppState;
 use crate::{targets, upload};
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -38,7 +39,12 @@ pub(crate) fn precheck(app: &AppState, lang: Lang, fail_on: Option<&str>) -> Res
     if let Some(th) = fail_on {
         if !VALID_FAIL_ON.contains(&th) {
             return Err(ApiError::new(lang, ErrorKind::Validation)
-                .with_detail(format!("fail_on 不合法：{th}")));
+                // 可用值由 VALID_FAIL_ON 插值，不在文案裡手抄一份（改一邊忘一邊的反模式）
+                .with_message(
+                    "server.err.invalid_fail_on",
+                    &[("value", th), ("allowed", &VALID_FAIL_ON.join(" / "))],
+                )
+                .with_detail(th));
         }
     }
     if app.jobs.active_count() >= app.cfg.max_queued {
@@ -69,7 +75,7 @@ pub(crate) fn submit(
 pub async fn create(
     State(app): State<AppState>,
     lang: Lang,
-    Json(body): Json<CreateJobBody>,
+    ApiJson(body): ApiJson<CreateJobBody>,
 ) -> Result<Response, ApiError> {
     precheck(&app, lang, body.fail_on.as_deref())?;
     let TargetSpec::Mounted { root, path } = &body.target;
@@ -96,7 +102,7 @@ pub async fn create(
 pub async fn upload(
     State(app): State<AppState>,
     lang: Lang,
-    mut multipart: Multipart,
+    ApiMultipart(mut multipart): ApiMultipart,
 ) -> Result<Response, ApiError> {
     // 先建唯一 job 記錄與目錄（尚不 insert registry；失敗即刪目錄，不留 queued job）。
     let mut record = JobRecord::new("upload:".into(), None)
@@ -147,7 +153,11 @@ pub async fn upload(
                             if written > limit {
                                 cleanup(&job_dir);
                                 return Err(ApiError::new(lang, ErrorKind::PayloadTooLarge)
-                                    .with_detail(format!("上傳超過 {limit} bytes")));
+                                    .with_message(
+                                        "server.err.upload_too_large",
+                                        &[("limit", &limit.to_string())],
+                                    )
+                                    .with_detail(limit.to_string()));
                             }
                             if let Err(e) = out.write_all(&chunk) {
                                 cleanup(&job_dir);
@@ -187,7 +197,8 @@ pub async fn upload(
 
     let Some((saved_path, original_name)) = saved else {
         cleanup(&job_dir);
-        return Err(ApiError::new(lang, ErrorKind::Validation).with_detail("缺少 file 欄位"));
+        return Err(ApiError::new(lang, ErrorKind::Validation)
+            .with_message("server.err.missing_file_field", &[]));
     };
 
     // 欄位齊全 → precheck（DB/fail_on/佇列）
@@ -215,7 +226,10 @@ pub async fn upload(
                 "extract_too_large" => ErrorKind::PayloadTooLarge,
                 _ => ErrorKind::UnsupportedArchive,
             };
-            return Err(ApiError::new(lang, kind).with_detail(ae.detail().to_string()));
+            // 用 ArchiveError 自己的精確鍵（此前在生產碼無呼叫者，全被壓成粗粒度 kind 的泛用訊息）
+            return Err(ApiError::new(lang, kind)
+                .with_message(ae.i18n_key(), &[])
+                .with_detail(ae.detail().to_string()));
         }
         Err(e) => {
             cleanup(&job_dir);
@@ -250,14 +264,15 @@ pub struct ListQuery {
 pub async fn list(
     State(app): State<AppState>,
     lang: Lang,
-    Query(q): Query<ListQuery>,
+    ApiQuery(q): ApiQuery<ListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let status = match q.status.as_deref() {
         None => None,
         Some(raw) => Some(
             serde_json::from_value::<JobStatus>(json!(raw)).map_err(|_| {
                 ApiError::new(lang, ErrorKind::Validation)
-                    .with_detail(format!("status 不合法：{raw}"))
+                    .with_message("server.err.invalid_status", &[("value", raw)])
+                    .with_detail(raw)
             })?,
         ),
     };
@@ -273,7 +288,7 @@ pub async fn list(
 pub async fn get(
     State(app): State<AppState>,
     lang: Lang,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> Result<Json<JobRecord>, ApiError> {
     app.jobs
         .get(&id)
@@ -285,7 +300,7 @@ pub async fn get(
 pub async fn delete(
     State(app): State<AppState>,
     lang: Lang,
-    Path(id): Path<String>,
+    ApiPath(id): ApiPath<String>,
 ) -> Result<StatusCode, ApiError> {
     let record = app
         .jobs

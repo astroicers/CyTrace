@@ -172,11 +172,11 @@ fn run_pipeline(
     std::fs::write(
         job_dir.join("scan-result.json"),
         serde_json::to_string_pretty(&result)
-            .map_err(|e| CytraceError::Parse(format!("ScanResult 序列化：{e}")))?,
+            .map_err(|e| CytraceError::Parse(format!("scan-result serialize: {e}")))?,
     )?;
 
     let html = cytrace_report::render(&result)
-        .map_err(|e| CytraceError::Parse(format!("報表渲染：{e}")))?;
+        .map_err(|e| CytraceError::Parse(format!("report render: {e}")))?;
     std::fs::write(job_dir.join("report.html"), html)?;
 
     let triggered = fail_on

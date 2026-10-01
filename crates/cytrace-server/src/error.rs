@@ -135,6 +135,12 @@ impl ErrorKind {
 }
 
 /// API 錯誤。`detail` 是給稽核/除錯的原始資訊（不翻譯）；`message` 走 locales。
+///
+/// **分工是契約，不是建議**（T909）：`detail` 只放不可翻譯的**資料**——使用者輸入的值、
+/// 數字上限、第三方函式庫的診斷文字（與路徑、退出碼同類）。**任何由本專案撰寫的
+/// 說明句都必須走 i18n 鍵**：kind 的泛用鍵不夠具體時，用 [`ApiError::with_message`]
+/// 指定更細的鍵與插值參數。曾有四處把中文散文塞進 `detail`（`fail_on 不合法：…` 等），
+/// `--lang en-US` 的用戶端照收中文——那正是違反這條分工的後果。
 #[derive(Debug)]
 pub struct ApiError {
     pub lang: Lang,
@@ -142,6 +148,8 @@ pub struct ApiError {
     pub detail: Option<String>,
     /// 429 時的 `Retry-After` 秒數。
     pub retry_after: Option<u64>,
+    /// 比 `kind` 更具體的訊息鍵與其插值參數；`None` 時用 kind 的泛用鍵。
+    pub message_key: Option<(&'static str, Vec<(&'static str, String)>)>,
 }
 
 impl ApiError {
@@ -151,7 +159,16 @@ impl ApiError {
             kind,
             detail: None,
             retry_after: None,
+            message_key: None,
         }
+    }
+
+    /// 指定比 `kind` 更具體的訊息鍵（依請求語系渲染，插值 `vars`）。
+    ///
+    /// 回應的 `i18n_key` 欄位同步改為此鍵，讓用戶端可自行依 UI 語系重新渲染。
+    pub fn with_message(mut self, key: &'static str, vars: &[(&'static str, &str)]) -> Self {
+        self.message_key = Some((key, vars.iter().map(|(k, v)| (*k, v.to_string())).collect()));
+        self
     }
 
     pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
@@ -201,10 +218,31 @@ impl ApiError {
     }
 }
 
+/// axum extractor 的 rejection → 本專案的 JSON 錯誤格式。
+///
+/// 不經這層的話，`Json`/`Query`/`Path`/`Multipart` 解析失敗會由 axum 直接回**英文純文字**
+/// （`Failed to deserialize the JSON body…`），完全繞過 ADR-011 §7 的
+/// `{"error":{…}}` 格式：zh-TW 用戶端收到英文、console 的 client 解不出 JSON 而退回泛用訊息
+/// （T909 分類 workflow 反向追蹤發現，6 處）。rejection 的文字是函式庫診斷，放 `detail`。
+pub fn bad_request<R: IntoResponse + std::fmt::Display>(lang: Lang, rejection: R) -> ApiError {
+    ApiError::new(lang, ErrorKind::Validation)
+        .with_message("server.err.bad_request", &[])
+        .with_detail(rejection.to_string())
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let key = self.kind.i18n_key();
-        let message = self.lang.catalog().t(&key, &[]);
+        let (key, message) = match &self.message_key {
+            Some((k, vars)) => {
+                let v: Vec<(&str, &str)> = vars.iter().map(|(a, b)| (*a, b.as_str())).collect();
+                (k.to_string(), self.lang.catalog().t(k, &v))
+            }
+            None => {
+                let k = self.kind.i18n_key();
+                let m = self.lang.catalog().t(&k, &[]);
+                (k, m)
+            }
+        };
         let body = json!({
             "error": {
                 "kind": self.kind.as_str(),
