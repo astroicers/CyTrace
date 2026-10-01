@@ -6,7 +6,7 @@
 > §1 管線多一條 `--cbom → cbomkit-theia` 分支；§2 crates 為 6（另有 `-i18n`／`-server`）；
 > §3 子程序編排同樣涵蓋 theia（專用可寫 HOME、逾時、管線併發抽乾、fail-closed，
 > 細節見 `crates/cytrace-core/src/engine.rs` 的文件註解）；§4 資料模型加 `crypto` 區段。
-> 全文改寫另開票，不阻擋 v0.3.0（release 準備複審 major #24 的處置記錄）。
+> 全文改寫見 **ROADMAP T910**（不阻擋 v0.3.0；release 準備複審 major #24 的處置記錄）。
 
 | 欄位 | 內容 |
 |------|------|
