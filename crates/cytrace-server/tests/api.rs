@@ -1,6 +1,8 @@
 //! Router 整合測試（`tower::ServiceExt::oneshot`，不開真實 socket、不需引擎 binary）。
 
 use axum::body::Body;
+// 測試以 ConnectInfo 注入對端位址（模擬 serve() 的 connect_info），非 handler 裸用
+#[allow(clippy::disallowed_types)]
 use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
@@ -44,6 +46,7 @@ fn app() -> Router {
     build_router(test_config_with(&[])).expect("router 應可建")
 }
 
+#[allow(clippy::disallowed_types)]
 fn peer(n: u8) -> ConnectInfo<SocketAddr> {
     ConnectInfo(SocketAddr::from(([10, 0, 0, n], 55555)))
 }

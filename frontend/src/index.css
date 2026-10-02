@@ -1,4 +1,7 @@
 @import 'tailwindcss';
+/* 不掃開發用檢查腳本：其文字（如 `static`）原本會長進出貨的 console CSS 與報表樣板，
+   只改腳本註解就讓產物 hash 改變（T909 第三輪完整性批判）。 */
+@source not '../scripts';
 
 /* next-themes 以 class 切換深色 */
 @custom-variant dark (&:where(.dark, .dark *));

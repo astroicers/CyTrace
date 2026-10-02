@@ -4,10 +4,15 @@
 //! （`Failed to deserialize the JSON body…`）——完全繞過 [`ApiError`]：zh-TW 用戶端收到英文、
 //! console 的 client 解不出 `{"error":{…}}` 而退回泛用訊息（T909 分類 workflow 反向追蹤發現）。
 //!
-//! handler 一律用本模組的型別取代 axum 原生 extractor。回退由兩道機械閘擋住：
-//! `Path`/`Query`/`Multipart` 由 clippy `disallowed-types`（workspace `clippy.toml`）；
-//! `Json` 由本模組的簽名級文字閘（見 `tests`）。分析找到 6 處、人工清點出 10 處——
-//! 靠窮舉是會漏的。例外：`ConnectInfo`（見 `tests::ALLOWED_BARE` 的理由）。
+//! handler 一律用本模組的型別取代 axum 原生 extractor；回應的 JSON 用 [`JsonOut`]。
+//! 回退由 clippy `disallowed-types`（workspace `clippy.toml`）擋住——`Path`/`Query`/`Multipart`/
+//! `Json`/`ConnectInfo` 全列。clippy 看的是**解析後的型別**，別名（含分組 `use`）、
+//! `extract::Json`、`type` 別名、closure handler、跨檔 re-export 都繞不過。
+//!
+//! `Json` 原本因為「同時是回應型別」而沒列，改由一支簽名級文字閘把關——兩輪複審各找到一批
+//! 繞過寫法（第二輪 claims#3、第三輪 server#0），列舉寫法的文字比對永遠追不完。回應改用
+//! [`JsonOut`] 之後就能全面禁用。合法的裸用處（本模組、`ConnectInfo` 的登入節流）各自以
+//! `#[allow]` 附理由豁免。
 
 // 本模組是 axum 原生 extractor 唯一的合法使用處（clippy.toml disallowed-types）
 #![allow(clippy::disallowed_types)]
@@ -15,6 +20,7 @@
 use crate::error::{bad_request, ApiError, Lang};
 use axum::extract::{FromRequest, FromRequestParts, Multipart, Path, Query, Request};
 use axum::http::request::Parts;
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 
 /// 從 request parts 協商語系（與 [`Lang`] 的 extractor 同一規則：`?lang=` > `Accept-Language`）。
@@ -105,287 +111,43 @@ where
     }
 }
 
+/// 回應用的 JSON 包裝。handler 的回應一律用它——`axum::Json` 同時是 extractor，
+/// 全面禁用它（clippy.toml）才能讓裸 `Json` 的請求解析在任何寫法下都被擋下。
+pub struct JsonOut<T>(pub T);
+
+impl<T: serde::Serialize> IntoResponse for JsonOut<T> {
+    fn into_response(self) -> Response {
+        Json(self.0).into_response()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    //! `Path`/`Query`/`Multipart` 由 clippy `disallowed-types` 擋（看解析後的型別，
-    //! 排版、別名、全限定路徑、所在檔案都繞不過）。`Json` 同時是回應型別無法用 clippy 禁，
-    //! 由本模組的**簽名級**文字閘把關。
-    //!
-    //! 初版逐行比對、只看行尾為 `,`/`)` 的行、只掃 `src/api/` 一層——rustfmt 收成單行的
-    //! 簽名、`axum::Json<T>` 全限定寫法、`as` 別名、router.rs 裡的 handler 全都漏過；
-    //! 反空轉 `wrapped >= 10` 只證明「讀到了檔」，沒證明「抓得到違規」
-    //! （T909 對抗式複審 v3／v6／v9，3/3、3/3、2/3 確認）。本版：
-    //! 1. 以 `fn` 簽名為單位解析參數（括號配對、頂層逗號切分），與排版無關；
-    //! 2. 型別比對涵蓋 `Json<` / `axum::Json<` / `axum::extract::Json<` 與別名（整句解析 `use`，
-    //!    含分組與多行；另認 `type X<T> = axum::Json<T>`——第二輪複審 claims#3）；
-    //! 3. 掃整個 `src/`（遞迴）；
-    //! 4. **正向對照**：先對內嵌的已知違規樣本跑比對器，斷言全數抓到——
-    //!    反空轉驗的是偵測能力，不是讀檔。
-
-    /// `ConnectInfo` 的 rejection 只在 server 未以 `into_make_service_with_connect_info`
-    /// 啟動時發生（正式 `serve()` 必定有），屬伺服器組態 bug 而非用戶端輸入。
-    /// 刻意不包裝，於此明列；新增例外必須附理由。
-    const ALLOWED_BARE: &[(&str, &str)] = &[("api/session.rs", "ConnectInfo")];
-
-    /// 取出 `fn` 簽名的參數清單（頂層逗號切分後的各參數原文）。
-    fn fn_params(src: &str) -> Vec<String> {
-        let b = src.as_bytes();
-        let mut out = Vec::new();
-        let mut i = 0;
-        while let Some(off) = src[i..].find("fn ") {
-            let at = i + off;
-            // `fn` 必須是獨立詞（排除 `async_fn ` 之類）
-            let word_start = at == 0 || !(b[at - 1].is_ascii_alphanumeric() || b[at - 1] == b'_');
-            i = at + 3;
-            if !word_start {
-                continue;
-            }
-            let Some(open_rel) = src[i..].find('(') else {
-                break;
-            };
-            // 名稱與 `(` 之間只允許識別字、空白與泛型參數
-            if src[i..i + open_rel].contains(['{', ';', '=']) {
-                continue;
-            }
-            let open = i + open_rel;
-            let (mut depth, mut j, mut cur, mut angle) = (0i32, open, String::new(), 0i32);
-            while j < b.len() {
-                let c = b[j] as char;
-                match c {
-                    '(' => {
-                        depth += 1;
-                        if depth > 1 {
-                            cur.push(c);
-                        }
-                    }
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            if !cur.trim().is_empty() {
-                                out.push(cur.trim().to_string());
-                            }
-                            break;
-                        }
-                        cur.push(c);
-                    }
-                    '<' => {
-                        angle += 1;
-                        cur.push(c);
-                    }
-                    '>' => {
-                        // `->` 不算泛型關閉
-                        if j > 0 && b[j - 1] != b'-' {
-                            angle -= 1;
-                        }
-                        cur.push(c);
-                    }
-                    ',' if depth == 1 && angle == 0 => {
-                        out.push(cur.trim().to_string());
-                        cur.clear();
-                    }
-                    _ => {
-                        if depth >= 1 {
-                            cur.push(c);
-                        }
-                    }
-                }
-                j += 1;
-            }
-            i = j.max(i);
-        }
-        out
-    }
-
-    /// 參數的型別部分（pattern 與型別之間那個單獨的 `:`；跳過 `::`）。
-    fn param_type(param: &str) -> Option<&str> {
-        let b = param.as_bytes();
-        let mut k = 0;
-        while k < b.len() {
-            if b[k] == b':' {
-                let dbl = (k + 1 < b.len() && b[k + 1] == b':') || (k > 0 && b[k - 1] == b':');
-                if !dbl {
-                    return Some(param[k + 1..].trim());
-                }
-                k += 2;
-                continue;
-            }
-            k += 1;
-        }
-        None
-    }
-
-    /// 回報檔案內所有以裸 axum `Json`（含全限定與別名）或清單外裸 `ConnectInfo` 作為參數的位置。
-    /// 檔內所有指向 axum `Json` 的別名。
+    /// clippy.toml 必須列著所有原生 extractor——拿掉一筆，對應的裸用法就不再被擋。
     ///
-    /// 解析整句 `use …;`（攤平空白後切到 `;`），所以分組（`use axum::{Json as J, Router};`）、
-    /// 多行分組、`pub(crate) use` 都認得；另認 `type X<T> = axum::Json<T>;`。
-    /// 初版只認以 `use axum::Json as ` 起頭的單行，分組別名可以繞過——而本 codebase 自己
-    /// 就用分組 import（T909 第二輪複審 claims#3，3/3 確認）。
-    fn json_aliases(src: &str) -> Vec<String> {
-        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
-        let ident = |s: &str| -> String {
-            s.chars()
-                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                .collect()
-        };
-        let starts_stmt =
-            |i: usize| i == 0 || matches!(flat.as_bytes()[i - 1], b' ' | b'{' | b'}' | b')' | b';');
-        let mut names = Vec::new();
-        for (i, _) in flat.match_indices("use ") {
-            if !starts_stmt(i) {
-                continue;
-            }
-            let stmt = flat[i..].split(';').next().unwrap_or("");
-            if !stmt.contains("axum") {
-                continue;
-            }
-            for (j, _) in stmt.match_indices("Json as ") {
-                let before = stmt[..j].chars().last();
-                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
-                    continue; // ApiJson as … 之類
-                }
-                names.push(ident(&stmt[j + "Json as ".len()..]));
-            }
-        }
-        for (i, _) in flat.match_indices("type ") {
-            if !starts_stmt(i) {
-                continue;
-            }
-            let stmt = flat[i + "type ".len()..].split(';').next().unwrap_or("");
-            if let Some((lhs, rhs)) = stmt.split_once('=') {
-                let rhs: String = rhs.split_whitespace().collect();
-                if ["Json<", "axum::Json<", "axum::extract::Json<"]
-                    .iter()
-                    .any(|p| rhs.starts_with(p))
-                {
-                    names.push(ident(lhs.trim()));
-                }
-            }
-        }
-        names.retain(|n| !n.is_empty());
-        names
-    }
-
-    fn bare_extractors(src: &str) -> Vec<String> {
-        let mut json_names: Vec<String> = vec![
-            "Json".into(),
-            "axum::Json".into(),
-            "axum::extract::Json".into(),
-        ];
-        json_names.extend(json_aliases(src));
-        let mut hits = Vec::new();
-        for p in fn_params(src) {
-            let Some(ty) = param_type(&p) else { continue };
-            let ty: String = ty.split_whitespace().collect();
-            if json_names.iter().any(|n| ty.starts_with(&format!("{n}<"))) {
-                hits.push(p.clone());
-            }
-            if ty.starts_with("ConnectInfo<") || ty.starts_with("axum::extract::ConnectInfo<") {
-                hits.push(p.clone());
-            }
-        }
-        hits
-    }
-
-    /// 正向對照：比對器必須抓得到已知違規的各種寫法，且不得誤報合法寫法。
+    /// clippy 對寫法的涵蓋已逐一故障注入過（見 commit 訊息）；本測試釘的是「設定還在」。
     #[test]
-    fn matcher_detects_known_violations() {
-        let bad = [
-            // rustfmt 收成單行的簽名（行尾是 `{`）
-            "pub async fn a(State(s): State<S>, Json(b): Json<T>) -> Response {",
-            // 全限定路徑
-            "pub async fn b(\n    axum::Json(b): axum::Json<T>,\n) -> R {",
-            "pub async fn c(body: axum::extract::Json<T>) -> R {",
-            // 別名：單行、分組、多行分組、可見性前綴、type 別名
-            "use axum::Json as J;\npub async fn d(J(b): J<T>) -> R {",
-            "use axum::{Json as J2, Router};\npub async fn d2(J2(b): J2<T>) -> R {",
-            "use axum::extract::{\n    Json as J3,\n    State,\n};\npub async fn d3(J3(b): J3<T>) -> R {",
-            "pub(crate) use axum::Json as J6;\npub async fn d6(J6(b): J6<T>) -> R {",
-            "type J5<T> = axum::Json<T>;\npub async fn d5(J5(b): J5<T>) -> R {",
-            // 裸 ConnectInfo
-            "pub async fn e(ConnectInfo(p): ConnectInfo<SocketAddr>) -> R {",
-        ];
-        for s in bad {
-            assert!(!bare_extractors(s).is_empty(), "比對器漏抓已知違規：\n{s}");
-        }
-        let good = [
-            "pub async fn f(ApiJson(b): ApiJson<T>) -> Json<serde_json::Value> {",
-            "fn g() -> Json<T> { Json(t) }",
-            "pub async fn h(lang: Lang, ApiPath(id): ApiPath<String>) -> Result<Json<R>, ApiError> {",
-        ];
-        for s in good {
+    fn clippy_config_disallows_raw_extractors() {
+        let text =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../clippy.toml"))
+                .expect("讀 clippy.toml");
+        let listed: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .filter_map(|l| l.split("path = \"").nth(1)?.split('"').next())
+            .collect();
+        for want in [
+            "axum::extract::Path",
+            "axum::extract::Query",
+            "axum::extract::Multipart",
+            "axum::Json",
+            "axum::extract::ConnectInfo",
+        ] {
             assert!(
-                bare_extractors(s).is_empty(),
-                "比對器誤報合法寫法：\n{s}\n→ {:?}",
-                bare_extractors(s)
+                listed.contains(&want),
+                "clippy.toml 未禁用 {want}：{listed:?}"
             );
         }
-    }
-
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for e in std::fs::read_dir(dir).expect("讀 src") {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
-                out.push(p);
-            }
-        }
-    }
-
-    /// handler 參數不得出現裸 `Json`（`Path`/`Query`/`Multipart` 由 clippy 擋）。
-    #[test]
-    fn no_bare_axum_extractors_in_handlers() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        walk(&src, &mut files);
-        assert!(
-            files.len() >= 15,
-            "只找到 {} 個 .rs——掃描範圍可能失效",
-            files.len()
-        );
-
-        let mut bare = Vec::new();
-        let mut wrapped = 0usize;
-        for f in &files {
-            let rel = f
-                .strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/");
-            if rel == "extract.rs" {
-                continue; // 包裝型別本身
-            }
-            let text = std::fs::read_to_string(f).unwrap();
-            for p in fn_params(&text) {
-                if let Some(ty) = param_type(&p) {
-                    if ["ApiJson<", "ApiQuery<", "ApiPath<", "ApiMultipart"]
-                        .iter()
-                        .any(|w| ty.starts_with(w))
-                    {
-                        wrapped += 1;
-                    }
-                }
-            }
-            for hit in bare_extractors(&text) {
-                let allowed = ALLOWED_BARE
-                    .iter()
-                    .any(|(af, what)| *af == rel && hit.contains(what));
-                if !allowed {
-                    bare.push(format!("{rel}: {hit}"));
-                }
-            }
-        }
-        assert!(
-            bare.is_empty(),
-            "handler 參數出現裸 axum extractor——解析失敗會繞過 ApiError 回英文純文字：\n{}",
-            bare.join("\n")
-        );
-        // 補充性的反空轉（主要的偵測能力證明在 matcher_detects_known_violations）
-        assert!(
-            wrapped >= 10,
-            "只解析到 {wrapped} 處包裝型別參數（預期 ≥ 10）——簽名解析可能失效"
-        );
     }
 
     /// rejection 原生是 **5xx**（伺服器自己的 bug）→ `Internal`，不得被壓成 400 怪到用戶端。

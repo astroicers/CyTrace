@@ -1,6 +1,8 @@
 //! Job 生命週期整合測試——FakeEngine 注入（不需 syft/grype binary，air-gapped CI 可跑）。
 
 use axum::body::Body;
+// 測試以 ConnectInfo 注入對端位址（模擬 serve() 的 connect_info），非 handler 裸用
+#[allow(clippy::disallowed_types)]
 use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use axum::Router;
@@ -102,6 +104,17 @@ fn build_env_with(
     max_concurrent: usize,
     extra_env: &[(&str, &str)],
 ) -> TestEnv {
+    build_env_seeded(engine, db_present, max_concurrent, extra_env, &[])
+}
+
+/// 同 [`build_env_with`]，另在啟動**前**寫入既有 job 記錄（走真的重啟恢復路徑）。
+fn build_env_seeded(
+    engine: Arc<dyn ScanEngine>,
+    db_present: bool,
+    max_concurrent: usize,
+    extra_env: &[(&str, &str)],
+    seed: &[serde_json::Value],
+) -> TestEnv {
     let base = std::env::temp_dir().join(format!(
         "cytrace-jobs-test-{}-{}",
         std::process::id(),
@@ -142,6 +155,11 @@ fn build_env_with(
         env,
     )
     .unwrap();
+    for rec in seed {
+        let dir = base.join("data/jobs").join(rec["id"].as_str().unwrap());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("job.json"), rec.to_string()).unwrap();
+    }
     let state = AppState::with_engine(cfg, engine).unwrap();
     TestEnv {
         app: build_router_with_state(state),
@@ -233,7 +251,10 @@ async fn get_job(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
 
 /// 輪詢直到終態（FakeEngine 極快；上限 5s 防呆）。
 async fn wait_terminal(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
-    for _ in 0..50 {
+    // 上限 30 秒（原 5 秒）：單獨跑時數十毫秒就到終態，但 make test 平行跑多個 test binary、
+    // 機器另有負載時曾 6 支同時逾時（2026-10-02 實錄，單獨重跑 29/29 綠）。上限只是時間預算，
+    // 不影響鑑別力——到不了終態的 job 照樣在上限後失敗。
+    for _ in 0..300 {
         let v = get_job(app, cookie, id).await;
         let s = v["status"].as_str().unwrap_or("").to_string();
         if !matches!(s.as_str(), "queued" | "running") {
@@ -1094,6 +1115,8 @@ async fn t909_method_not_allowed_is_json_and_auth_first() {
         ("/api/v1/jobs", ["GET", "POST"].as_slice()),
         ("/api/v1/jobs/abc", ["GET", "DELETE"].as_slice()),
         ("/api/v1/session", ["GET", "DELETE", "POST"].as_slice()),
+        // public 的非 /api 路徑：fallback 把它與 /api/* 一起歸入 JSON 錯誤契約（第三輪複審 server#1）
+        ("/healthz", ["GET"].as_slice()),
     ] {
         for lang in LANGS {
             let req = with_csrf_and(Request::put(format!("{route}?lang={lang}")))
@@ -1129,7 +1152,8 @@ async fn t909_method_not_allowed_is_json_and_auth_first() {
             );
         }
     }
-    // 未登入：受保護路徑先回 401，不得以 405 透露方法表
+    // 未登入：受保護路徑先回 401 而非 405。注意 401 仍帶 `Allow`（axum 在 layer 之外補上），
+    // 方法表公開於 ADR-011，不視為機密——本斷言只釘狀態碼的優先序（第三輪複審 server#2）。
     let req = with_csrf_and(Request::put("/api/v1/jobs"))
         .body(Body::empty())
         .unwrap();
@@ -1193,6 +1217,76 @@ async fn t909_failed_job_message_follows_query_language() {
         on_disk["error"].get("message").is_none(),
         "job.json 不得寫入渲染後的訊息：{on_disk}"
     );
+}
+
+/// job 失敗訊息的**退回鏈**與 console 共用 `tests/fixtures/job-error-render.json`，兩邊各自驗證。
+///
+/// 前版只測了「鍵恰好是 `server.err.<kind>`」那一種：把 i18n_key 從鏈中拿掉，重啟中斷的 job
+/// 會改顯示「伺服器內部錯誤」而全綠（第三輪複審 server#3）；註解又宣稱與 console「規則相同」，
+/// 實際上查不到鍵時兩邊退回不同（server#5）。console 側由 frontend/scripts/cbom-message-check.mts
+/// 讀同一份 fixture。
+#[tokio::test]
+async fn job_error_message_follows_shared_fallback_fixture() {
+    let fx: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/job-error-render.json")).unwrap();
+    let cases = fx["cases"].as_array().unwrap();
+    assert!(
+        cases.len() >= 5,
+        "fixture 案例過少——退回鏈的每一段都要有案例"
+    );
+    let id_of = |i: usize| format!("1700000000-{i:08x}");
+    let seed: Vec<serde_json::Value> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            // 重啟中斷走真的恢復路徑：落盤成 running，由 registry 轉成 interrupted
+            if c["error"]["i18n_key"] == "server.job.interrupted" {
+                serde_json::json!({ "id": id_of(i), "status": "running",
+                    "target": "mounted:targets/app", "created_at": "2026-01-01T00:00:00Z" })
+            } else {
+                serde_json::json!({ "id": id_of(i), "status": "failed",
+                    "target": "mounted:targets/app", "created_at": "2026-01-01T00:00:00Z",
+                    "finished_at": "2026-01-01T00:00:01Z", "error": c["error"] })
+            }
+        })
+        .collect();
+    let env = build_env_seeded(Arc::new(FakeEngine), true, 2, &[], &seed);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        let cat = cytrace_i18n::Catalog::load(lang);
+        let req = Request::get(format!("/api/v1/jobs?lang={lang}&limit=200"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (_, listed) = send_json(&env.app, req).await;
+        for (i, c) in cases.iter().enumerate() {
+            let name = c["name"].as_str().unwrap();
+            let want = match c["expect"]["key"].as_str() {
+                Some(k) => cat.t(k, &[]),
+                None => c["error"]["detail"].as_str().unwrap().to_string(),
+            };
+            assert!(
+                !want.is_empty() && want != c["expect"]["key"].as_str().unwrap_or(""),
+                "{name}: 預期文字無效"
+            );
+            let req = Request::get(format!("/api/v1/jobs/{}?lang={lang}", id_of(i)))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap();
+            let (st, got) = send_json(&env.app, req).await;
+            assert_eq!(st, StatusCode::OK, "{name}");
+            // fixture 的 error 必須就是實際落盤／恢復出來的那一筆
+            assert_eq!(got["error"]["i18n_key"], c["error"]["i18n_key"], "{name}");
+            assert_eq!(got["error"]["message"], want, "{name}/{lang}（get）");
+            let in_list = listed["jobs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|j| j["id"] == id_of(i).as_str())
+                .unwrap_or_else(|| panic!("{name}: list 裡找不到"));
+            assert_eq!(in_list["error"]["message"], want, "{name}/{lang}（list）");
+        }
+    }
 }
 
 /// 剝掉 TS 的 `//` 與 `/* */` 註解，保留字串字面值與行結構（行號不漂）。
@@ -1292,13 +1386,19 @@ fn console_request_problems(rel: &str, text: &str) -> (Vec<String>, usize) {
     let text = strip_ts_comments(text);
     let mut problems = Vec::new();
     let mut literals = 0usize;
-    for (pos, _) in text.match_indices("/api/v1/") {
+    // 比對 `/api/` 而非完整的 `/api/v1/`：拆成 `'/api/v1' + `/jobs/…`` 相接時，完整字面值不存在
+    //（第三輪完整性批判）。實際送出值另由 console-lang-check.mts 枚舉 api / artifactUrl 驗。
+    // 只算「字串以 /api 起頭」者（前一字元是引號），import 路徑 `'../api/client'` 不算。
+    for (pos, _) in text.match_indices("/api/") {
+        if !matches!(text[..pos].chars().last(), Some('\'' | '"' | '`')) {
+            continue;
+        }
         literals += 1;
         let line = text[..pos].matches('\n').count() + 1;
         match enclosing_call(&text, pos) {
             Some(c) if CARRIERS.contains(&c) => {}
             other => problems.push(format!(
-                "{rel}:{line}: /api/v1/ 字面值未經會帶語系的呼叫（直接包住它的是 {other:?}）"
+                "{rel}:{line}: /api/ 字面值未經會帶語系的呼叫（直接包住它的是 {other:?}）"
             )),
         }
     }
@@ -1337,6 +1437,10 @@ fn console_request_matcher_detects_known_violations() {
             "a: () => request<X>('/api/v1/x'), b: `/api/v1/y`,\n",
         ),
         ("頂層字面值", "const href = '/api/v1/jobs'\n"),
+        (
+            "拆成兩段字串相接",
+            "  artifact: (id: string, k: string) => '/api/v1' + `/jobs/${id}/artifacts/${k}`,\n",
+        ),
     ];
     for (why, src) in bad {
         let (p, _) = console_request_problems("pages/Sample.tsx", src);
@@ -1414,22 +1518,59 @@ fn t909_console_requests_send_ui_language() {
         problems.join("\n")
     );
 
-    // 送出值的行為檢查必須接在 land 前的閘上，否則本測試的分工就落空
-    for (f, why) in [
-        ("Makefile", "make lint"),
-        (".github/workflows/ci.yml", "CI"),
-    ] {
-        let text = std::fs::read_to_string(repo.join(f)).unwrap();
-        // 註解行（`#`、Makefile 的 `@#`）提到檔名不算接線
-        let wired = text.lines().any(|l| {
-            let t = l.trim_start();
-            !(t.starts_with('#') || t.starts_with("@#")) && t.contains("console-lang-check.mts")
-        });
-        assert!(
-            wired,
-            "{why}（{f}）沒有執行 frontend/scripts/console-lang-check.mts"
-        );
+    // 送出值的行為檢查必須接在 land 前的閘上，否則本測試的分工就落空。
+    // CI 無法設為 required（free 方案），land 前真正會跑到的是 make lint——所以釘的是
+    // **`lint:` target 的 recipe**，不是 Makefile 任一行（第三輪複審 claims#1：`frontend-check`
+    // 本來就有這行，把 lint 裡的呼叫刪掉照樣綠）。
+    let makefile = std::fs::read_to_string(repo.join("Makefile")).unwrap();
+    assert!(
+        recipe_runs(&makefile, "lint", "console-lang-check.mts"),
+        "make lint 的 recipe 沒有執行 frontend/scripts/console-lang-check.mts"
+    );
+    let ci = std::fs::read_to_string(repo.join(".github/workflows/ci.yml")).unwrap();
+    assert!(
+        ci.lines()
+            .any(|l| !l.trim_start().starts_with('#') && l.contains("console-lang-check.mts")),
+        "CI 沒有執行 frontend/scripts/console-lang-check.mts"
+    );
+}
+
+/// Makefile 的 `target:` recipe（到下一個 target 為止）是否有一行**非註解**的指令含 `needle`。
+fn recipe_runs(makefile: &str, target: &str, needle: &str) -> bool {
+    let header = format!("{target}:");
+    let mut inside = false;
+    for line in makefile.lines() {
+        if !line.starts_with('\t') && !line.trim().is_empty() && !line.starts_with('#') {
+            // 新的 target（或變數定義）開始：只有在它就是目標 target 時才進入
+            inside = line.starts_with(&header);
+            continue;
+        }
+        let t = line.trim_start();
+        if inside && !(t.starts_with('#') || t.starts_with("@#")) && t.contains(needle) {
+            return true;
+        }
     }
+    false
+}
+
+#[test]
+fn recipe_matcher_scopes_to_the_target() {
+    let only_other = "lint:\n\tcargo fmt --check\n\t@# node x/console-lang-check.mts（註解）\n\nfrontend-check:\n\tnode x/console-lang-check.mts\n";
+    assert!(
+        !recipe_runs(only_other, "lint", "console-lang-check.mts"),
+        "只有別的 target 執行、或 lint 只在註解提到時，必須判定為未接線"
+    );
+    assert!(recipe_runs(
+        only_other,
+        "frontend-check",
+        "console-lang-check.mts"
+    ));
+    let wired = "fmt:\n\tcargo fmt\nlint: fmt\n\tcargo clippy\n\tnode x/console-lang-check.mts\ncoverage:\n\ttrue\n";
+    assert!(recipe_runs(wired, "lint", "console-lang-check.mts"));
+    assert!(
+        !recipe_runs(wired, "lint-ci", "console-lang-check.mts"),
+        "前綴相同的 target 不得誤認"
+    );
 }
 
 /// rejection 原生**不是 400** 的案例：狀態語意須保留（413 不得被壓成 400）。

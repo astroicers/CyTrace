@@ -61,40 +61,107 @@ fn cjk_literals(line: &str) -> Vec<String> {
     out
 }
 
-/// 一個檔案中「生產碼」的 CJK 字面值：跳過註解行，遇到 `#[cfg(test)] mod …` 才停。
+/// 一個檔案中「生產碼」的 CJK 字面值：跳過註解行，以及 `#[cfg(test)]` 修飾的**那一個項目**。
 ///
-/// 初版遇到**第一個** `#[cfg(test)]` 就停——檔案中段若有 test-only 輔助項
-/// （`#[cfg(test)] fn helper()`），其後所有生產碼都看不到，次數制形同虛設
-/// （T909 第二輪複審 tests#4，2/3 確認；副本實測：輔助項之後的「任務執行中，無法刪除」漏網）。
+/// 歷程：初版遇到第一個 `#[cfg(test)]` 就停——中段的 test-only 輔助項之後全看不到（第二輪複審
+/// tests#4）；第二版改成「下一行是 `mod` 才停」，但 `#[cfg(test)] mod x;`（本體在別的檔）與
+/// 中段的 inline 測試模組照樣讓其後的生產碼消失（第三輪複審 server#4）。本版不再停止掃描：
+/// `mod x;` 之類以 `;` 結尾的項目跳一行，帶大括號的項目以括號配對跳到結尾，之後繼續。
 fn production_cjk_literals(text: &str) -> Vec<String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim_start();
+    let mut i = 0;
+    while i < lines.len() {
+        let t = lines[i].trim_start();
         if t.starts_with("#[cfg(test)]") {
-            // 往下找第一個非屬性、非空行：是測試模組才停（測試斷言訊息非使用者可見）
-            let next = lines[i + 1..]
-                .iter()
-                .map(|l| l.trim_start())
-                .find(|l| !l.is_empty() && !l.starts_with("#["));
-            if next.is_some_and(|l| l.starts_with("mod ") || l.starts_with("pub mod ")) {
-                break;
+            let mut j = i + 1;
+            while j < lines.len() && {
+                let n = lines[j].trim();
+                n.is_empty() || n.starts_with("#[") || n.starts_with("//")
+            } {
+                j += 1;
             }
+            i = item_end(&lines, j) + 1;
             continue;
         }
-        if t.starts_with("//") {
-            continue;
+        if !t.starts_with("//") {
+            out.extend(cjk_literals(lines[i]));
         }
-        out.extend(cjk_literals(line));
+        i += 1;
     }
     out
+}
+
+/// 從 `start` 行開始的項目在哪一行結束：大括號配對歸零、或未開括號前遇到頂層 `;`。
+/// 字串與字元字面值裡的括號不算（`"}"`、`'{'`）。
+fn item_end(lines: &[&str], start: usize) -> usize {
+    let mut depth = 0i32;
+    let mut opened = false;
+    for (k, line) in lines.iter().enumerate().skip(start) {
+        let b: Vec<char> = line.chars().collect();
+        let mut x = 0;
+        let mut in_str = false;
+        while x < b.len() {
+            let c = b[x];
+            if in_str {
+                if c == '\\' {
+                    x += 1;
+                } else if c == '"' {
+                    in_str = false;
+                }
+            } else if c == '/' && b.get(x + 1) == Some(&'/') {
+                break;
+            } else if c == '"' {
+                in_str = true;
+            } else if c == '\'' && b.get(x + 2) == Some(&'\'') {
+                x += 2; // 'x'
+            } else if c == '\'' && b.get(x + 1) == Some(&'\\') && b.get(x + 3) == Some(&'\'') {
+                x += 3; // '\x'
+            } else if c == '{' {
+                depth += 1;
+                opened = true;
+            } else if c == '}' {
+                depth -= 1;
+            } else if c == ';' && !opened && depth == 0 {
+                return k;
+            }
+            x += 1;
+        }
+        if opened && depth <= 0 {
+            return k;
+        }
+    }
+    lines.len().saturating_sub(1)
 }
 
 /// 抽取器的正負對照：反空轉只驗「抽到東西」不夠，要驗「抓得到違規」。
 #[test]
 fn extractor_sees_past_test_only_items() {
-    let src = "const A: &str = \"甲\";\n#[cfg(test)]\nfn helper() -> u8 { 1 }\nfn f() -> &'static str { \"乙\" }\n// \"註解裡的丙\"\n#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    const T: &str = \"測試裡的丁\";\n}\n";
-    assert_eq!(production_cjk_literals(src), vec!["甲", "乙"]);
+    let cases: &[(&str, &[&str])] = &[
+        // test-only 輔助函式與檔尾測試模組：其內不計、其外照計
+        (
+            "const A: &str = \"甲\";\n#[cfg(test)]\nfn helper() -> u8 { 1 }\nfn f() -> &'static str { \"乙\" }\n// \"註解裡的丙\"\n#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    const T: &str = \"測試裡的丁\";\n}\n",
+            &["甲", "乙"],
+        ),
+        // 外部檔模組宣告：只跳那一行（第三輪複審 server#4）
+        (
+            "#[cfg(test)]\nmod helpers;\nfn f() -> &'static str { \"乙\" }\n",
+            &["乙"],
+        ),
+        // 中段的 inline 測試模組，之後還有生產碼；模組內字串含右括號
+        (
+            "#[cfg(test)]\nmod t {\n    const S: &str = \"}\";\n    const U: &str = \"辛\";\n    fn g() { let _ = '{'; }\n}\nfn k() -> &'static str { \"壬\" }\n",
+            &["壬"],
+        ),
+        // test-only 輔助函式內的中文不計，之後的照計
+        (
+            "#[cfg(test)]\nfn helper() -> &'static str {\n    \"己\"\n}\nfn h() -> &'static str { \"庚\" }\n",
+            &["庚"],
+        ),
+    ];
+    for (src, want) in cases {
+        assert_eq!(production_cjk_literals(src), *want, "樣本：\n{src}");
+    }
 }
 
 fn walk(dir: &Path, files: &mut Vec<std::path::PathBuf>) {

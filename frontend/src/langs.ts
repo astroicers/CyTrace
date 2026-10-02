@@ -1,8 +1,9 @@
 /**
  * 支援語系的單一事實源（與 Rust `cytrace_i18n::Lang` 對應）。
  *
- * 刻意**不** import locale JSON：node 的型別剝離檢查腳本要能直接載入本檔驗真實作
- * （`i18n.ts` 的 JSON import 在 node 下需 import attribute，載不起來）。
+ * 保持零依賴（不 import i18next 或 locale JSON）：讓任何地方都能 import 它而不連帶初始化 i18n。
+ * node 檢查腳本則直接載入真的 `i18n.ts`（JSON import 已帶 import attribute）——
+ * 見 frontend/scripts/console-lang-check.mts。
  */
 export const SUPPORTED_LANGS = [
   { code: 'zh-TW', label: '繁體中文' },

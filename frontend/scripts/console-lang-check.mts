@@ -2,33 +2,43 @@
  * console 送給 server 的語系 == 畫面實際顯示的語系（T909）。
  *
  * **驗的是實際送出的東西**：載入真的 `src/console/api/client.ts`、`upload.ts` 與 app 自己的
- * i18n 實例（`src/i18n.ts`），stub 掉 `fetch` / `XMLHttpRequest`，斷言實際送出的
+ * i18n 實例（`src/i18n.ts`），stub 掉 `fetch` / `XMLHttpRequest`，攔下實際送出的
  * `Accept-Language` header 與導覽 URL 的 `?lang=`。
  *
- * 初版只驗 `langs.ts` 的 helper：把 client.ts 的 `uiLanguage` 改回讀 `i18n.language`、把 main.tsx
- * 的白名單拿掉、或把語系 header 整行移進註解，本檢查與 Rust 契約測試全綠——原 bug 可以在所有
- * 閘全綠下整個回來（T909 第二輪複審 lang#0 / tests#0 / claims#2，3/3 確認）。
- *
- * 帶 DOM 的檔案（main.tsx、.tsx 元件）node 載不起來，只能文字釘住；為此把可測的邏輯都抽成
- * 純函式（`restoreSavedLang`、`appendLang`），文字閘只釘「呼叫了它」與「沒有繞過它」，
- * 而且先剝註解再比對。
+ * 歷程（每一版都被複審找到「改壞了仍綠」的寫法）：
+ * - 初版只驗 `langs.ts` 的 helper——client.ts 改回讀 `i18n.language` 仍綠（第二輪 lang#0）。
+ * - 第二版只呼叫 `api.version()`（GET、無 body）——request() 的變更型分支丟掉 header 仍綠；
+ *   導覽 URL 只列舉 report / result，新增的 artifactUrl 成員看不到（第三輪 lang#0、完整性批判）。
+ *   本版**自動枚舉** `api` 與 `artifactUrl` 的每一個成員，新增的方法自動納入。
+ * - FakeXHR 原本不管狀態一律收 header，且在 send 之後才讀——瀏覽器會丟例外、或根本沒送出的
+ *   header 照算「已送出」（第三輪 lang#1）。本版依 WHATWG XHR 狀態機、send 時存快照。
+ * - 禁讀規則原本是剝註解後的 regex，`i18n: { language }` 解構、`toLocaleString(undefined, …)`、
+ *   `Intl.DateTimeFormat()`、含 `\//` 的 regex 字面值都繞得過（第三輪 lang#2）。本版用 TypeScript AST。
  *
  * 跑法：node --experimental-strip-types frontend/scripts/console-lang-check.mts
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import ts from 'typescript'
 
 // ── stub：必須在載入 client.ts / upload.ts 前就緒 ──
-type Call = { url: string; headers: Record<string, string> }
+type Call = { url: string; method: string; headers: Record<string, string>; hasBody: boolean }
 const fetchCalls: Call[] = []
 globalThis.fetch = (async (url: string, init?: RequestInit) => {
-  fetchCalls.push({ url, headers: { ...(init?.headers as Record<string, string>) } })
+  fetchCalls.push({
+    url,
+    method: init?.method ?? 'GET',
+    headers: { ...(init?.headers as Record<string, string>) },
+    hasBody: init?.body != null,
+  })
   return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
 }) as typeof fetch
 
+/** 依 WHATWG XHR 的狀態機：OPENED 之外呼叫 setRequestHeader / send 一律丟 InvalidStateError。 */
 class FakeXHR {
-  static sent: FakeXHR[] = []
+  static sent: Array<{ url: string; method: string; headers: Record<string, string> }> = []
+  state: 'unsent' | 'opened' | 'sent' = 'unsent'
   method = ''
   url = ''
   headers: Record<string, string> = {}
@@ -39,12 +49,20 @@ class FakeXHR {
   open(method: string, url: string) {
     this.method = method
     this.url = url
+    this.headers = {}
+    this.state = 'opened'
   }
   setRequestHeader(k: string, v: string) {
-    this.headers[k] = v
+    if (this.state !== 'opened') {
+      throw new DOMException(`setRequestHeader() 只能在 OPENED 狀態、send() 之前呼叫（目前 ${this.state}）`, 'InvalidStateError')
+    }
+    this.headers[k] = k in this.headers ? `${this.headers[k]}, ${v}` : v
   }
   send() {
-    FakeXHR.sent.push(this)
+    if (this.state !== 'opened') throw new DOMException('send() 只能在 OPENED 狀態呼叫', 'InvalidStateError')
+    this.state = 'sent'
+    // 快照：送出那一刻的 header；之後再改不算送出
+    FakeXHR.sent.push({ url: this.url, method: this.method, headers: { ...this.headers } })
   }
   abort() {}
 }
@@ -69,6 +87,12 @@ if (new Set(CODES.map(probeOf)).size !== CODES.length || CODES.some((c) => !prob
   fail(`探針鍵 ${PROBE} 在各語系須存在且互不相同`)
 }
 
+// 自動枚舉：新增的 api 方法／導覽 URL 成員不必改本檔就會被驗（參數一律用假值）
+type AnyFn = (...a: unknown[]) => unknown
+const API = Object.entries(api) as Array<[string, AnyFn]>
+const NAV = Object.entries(artifactUrl) as Array<[string, AnyFn]>
+const fakeArgs = (fn: AnyFn) => Array.from({ length: fn.length }, () => 'x')
+
 // ── 1. 端到端：任何進入 i18n 的值，實際送出的語系都必須是畫面語系 ──
 // 刻意繞過 main.tsx 的白名單直接 changeLanguage：白名單是第一道，本段驗第二道單獨也守得住。
 // 涵蓋：精確值、只差地區或大小寫、只有語言碼、不支援語系、非 Latin-1、
@@ -80,6 +104,8 @@ const RAW = [
 const ISO = '2026-03-04T05:06:07Z'
 let diverged = 0
 let fallbackHit = 0
+const seenMethods = new Set<string>()
+let seenBody = false
 for (const raw of RAW) {
   await i18n.changeLanguage(raw)
   const tag = `raw=${JSON.stringify(raw)}`
@@ -94,36 +120,59 @@ for (const raw of RAW) {
   if (raw !== 'cimode' && i18n.t(PROBE) !== probeOf(sent)) {
     fail(`${tag}：畫面顯示「${i18n.t(PROBE)}」，uiLanguage() 卻是 ${sent}`)
   }
-  // fetch 路徑：實際送出的 header
+  // fetch 路徑：**每一個** api 方法實際送出的 header（含變更型與帶 body 的分支）
   fetchCalls.length = 0
-  await api.version()
-  const h = fetchCalls.at(-1)?.headers['Accept-Language']
-  if (h !== sent) fail(`${tag}：fetch 實際送出 Accept-Language=${JSON.stringify(h)}，應為 ${sent}`)
-  // 上傳 XHR 路徑（Promise executor 同步執行，open / setRequestHeader 已發生）
-  FakeXHR.sent.length = 0
-  void uploadScan(new File(['x'], 'a.tar'), undefined, () => {}).promise.catch(() => {})
-  const x = FakeXHR.sent.at(-1)
-  if (x?.url !== '/api/v1/jobs/upload' || x.headers['Accept-Language'] !== sent) {
-    fail(`${tag}：上傳 XHR 實際送出 ${JSON.stringify(x?.headers)}（${x?.url}），應帶 ${sent}`)
-  }
-  // 導覽路徑：`<a href>` 設不了 header，只能靠 ?lang=
-  for (const [label, u, download] of [
-    ['report', artifactUrl.report('j1'), null],
-    ['report+download', artifactUrl.report('j1', true), '1'],
-    ['result', artifactUrl.result('j1'), null],
-  ] as const) {
-    const q = new URL(u, 'http://h').searchParams
-    if (q.getAll('lang').length !== 1 || q.get('lang') !== sent || q.get('download') !== download) {
-      fail(`${tag}：${label} 導覽 URL ${u} 應恰帶 lang=${sent}${download ? `、download=${download}` : ''}`)
+  for (const [name, fn] of API) {
+    try {
+      await fn(...fakeArgs(fn))
+    } catch (e) {
+      fail(`${tag}：api.${name}() 丟出例外：${e}`)
     }
   }
+  if (fetchCalls.length !== API.length) {
+    fail(`${tag}：呼叫 ${API.length} 個 api 方法只攔到 ${fetchCalls.length} 次 fetch`)
+  }
+  for (const c of fetchCalls) {
+    seenMethods.add(c.method)
+    seenBody ||= c.hasBody
+    if (c.headers['Accept-Language'] !== sent) {
+      fail(`${tag}：${c.method} ${c.url} 實際送出 Accept-Language=${JSON.stringify(c.headers['Accept-Language'])}，應為 ${sent}`)
+    }
+  }
+  // 上傳 XHR 路徑
+  FakeXHR.sent.length = 0
+  let uploadErr: unknown = null
+  try {
+    void uploadScan(new File(['x'], 'a.tar'), undefined, () => {}).promise.catch(() => {})
+  } catch (e) {
+    uploadErr = e
+  }
+  const x = FakeXHR.sent.at(-1)
+  if (x?.url !== '/api/v1/jobs/upload' || x.headers['Accept-Language'] !== sent) {
+    fail(`${tag}：上傳 XHR 送出 ${JSON.stringify(x)}${uploadErr ? `（例外：${uploadErr}）` : ''}，應帶 ${sent}`)
+  }
+  // 導覽路徑：`<a href>` 設不了 header，只能靠 ?lang=；每個成員各以有／無第二參數呼叫
+  for (const [name, fn] of NAV) {
+    for (const args of [['j1'], ['j1', true]]) {
+      const u = String(fn(...args))
+      const q = new URL(u, 'http://h').searchParams
+      if (q.getAll('lang').length !== 1 || q.get('lang') !== sent) {
+        fail(`${tag}：artifactUrl.${name}(${args.join(', ')}) = ${u}，應恰帶一個 lang=${sent}`)
+      }
+    }
+  }
+  const dl = new URL(artifactUrl.report('j1', true), 'http://h').searchParams
+  if (dl.get('download') !== '1') fail(`${tag}：下載 URL 的 download 參數被破壞：${artifactUrl.report('j1', true)}`)
   // 時間格式跟 UI 語系，不跟 runtime 預設
   const want = new Date(ISO).toLocaleString(sent)
   if (fmtTime(ISO) !== want) fail(`${tag}：fmtTime 得「${fmtTime(ISO)}」，應為 ${sent} 格式「${want}」`)
 }
-// 反空轉：案例必須真的走到「要求≠送出」與 fallback 分支，時間格式必須因語系而異
+// 反空轉：案例必須真的走到「要求≠送出」、fallback 分支、變更型與帶 body 的請求
 if (diverged < 6) fail(`只有 ${diverged} 個案例的 i18n.language 與送出值不同——案例失去鑑別力`)
 if (fallbackHit < 2) fail(`只有 ${fallbackHit} 個案例走到 effectiveLang 的 fallback 分支（dev / cimode）`)
+if (API.length < 8 || NAV.length < 2) fail(`只枚舉到 ${API.length} 個 api 方法、${NAV.length} 個導覽成員——枚舉可能失效`)
+if (![...seenMethods].some((m) => m !== 'GET')) fail('沒有任何變更型請求被驗到（只有 GET）')
+if (!seenBody) fail('沒有任何帶 body 的請求被驗到')
 if (new Set(CODES.map((c) => new Date(ISO).toLocaleString(c))).size !== CODES.length) {
   fail('各語系的時間格式相同——fmtTime 的檢查不含資訊（runtime 缺 ICU？）')
 }
@@ -151,57 +200,61 @@ for (const [url, lang, wantPath, wantQs] of [
   }
 }
 
-// ── 3. 文字閘：node 載不起來的檔案（.tsx、main.tsx）只能釘接線，且先剝註解 ──
-/** 剝掉 // 與 /* *\/ 註解（保留字串字面值內的內容與行結構）。 */
-export function stripComments(src: string): string {
-  let out = ''
-  let i = 0
-  let q: string | null = null
-  while (i < src.length) {
-    const c = src[i]
-    const n = src[i + 1]
-    if (q) {
-      out += c
-      if (c === '\\') {
-        out += n ?? ''
-        i += 2
-        continue
-      }
-      if (c === q) q = null
-      i++
-    } else if (c === '/' && n === '/') {
-      while (i < src.length && src[i] !== '\n') i++
-    } else if (c === '/' && n === '*') {
-      i += 2
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
-        if (src[i] === '\n') out += '\n'
-        i++
-      }
-      i += 2
-    } else {
-      if (c === "'" || c === '"' || c === '`') q = c
-      out += c
-      i++
+// ── 3. AST 閘：node 載不起來的檔案（.tsx、main.tsx）只能靜態釘住 ──
+// 讀語系一律經 effectiveLang；日期／數字格式化只准在 console/format.ts（它有上面的行為檢查）。
+const LANG_PROPS = new Set(['language', 'languages'])
+const FORMAT_HOME = 'frontend/src/console/format.ts'
+function bannedUses(file: string, src: string): string[] {
+  const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true,
+    file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+  const out: string[] = []
+  const at = (n: ts.Node, why: string) =>
+    out.push(`${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}：${why}`)
+  const visit = (n: ts.Node) => {
+    if (ts.isPropertyAccessExpression(n) && LANG_PROPS.has(n.name.text)) {
+      at(n, `讀 .${n.name.text}——改用 effectiveLang(i18n)`)
     }
+    if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)
+      && LANG_PROPS.has(n.argumentExpression.text)) {
+      at(n, `讀 ["${n.argumentExpression.text}"]——改用 effectiveLang(i18n)`)
+    }
+    if (ts.isBindingElement(n)) {
+      const key = n.propertyName ?? n.name
+      if ((ts.isIdentifier(key) || ts.isStringLiteral(key)) && LANG_PROPS.has(key.text)) {
+        at(n, `解構取出 ${key.text}——改用 effectiveLang(i18n)`)
+      }
+    }
+    if (file !== FORMAT_HOME) {
+      if (ts.isPropertyAccessExpression(n) && /^toLocale\w*String$/.test(n.name.text)) {
+        at(n, `${n.name.text} 只准在 ${FORMAT_HOME}（依 UI 語系格式化）`)
+      }
+      if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'Intl') {
+        at(n, `Intl.${n.name.text} 只准在 ${FORMAT_HOME}`)
+      }
+    }
+    ts.forEachChild(n, visit)
   }
+  visit(sf)
   return out
 }
-// 禁止繞過 effectiveLang 讀語系：原 bug 與複審找到的 LangSwitch / JobDetailPage / fmtTime 都是這一型
-const BANNED: Array<[RegExp, string]> = [
-  [/\bi18n\.languages?\b/, '讀 i18n.language(s)——改用 effectiveLang(i18n)'],
-  [/\bnavigator\.languages?\b/, '讀瀏覽器語系——UI 語系才是事實源'],
-  [/\.toLocale\w*String\(\s*\)/, '不帶 locale 的 toLocale*String()——會用 runtime 預設語系'],
-]
-// 比對器的正負對照：壞樣本必中、只在註解或字串裡出現必不中
-const SELF = [
+// 比對器的正負對照：壞樣本必中、只在註解／字串／regex 裡出現必不中
+const SELF: Array<[string, number]> = [
   ['x = i18n.language', 1],
+  ['x = i18n["languages"]', 1],
+  ['const { t, i18n: { language } } = useTranslation()', 1],
+  ["const { 'language': l } = i18n", 1],
   ['d.toLocaleString()', 1],
+  ["d.toLocaleString(undefined, { dateStyle: 'medium' })", 1],
+  ['new Intl.DateTimeFormat().format(d)', 1],
+  ['const abs = /^https?:\\/\\//.test(u) ? u : i18n.language', 1],
+  ["s.replace(/'/g, '’'); const h = 'file://' + navigator.language", 1],
   ['// i18n.language 在註解裡', 0],
-  ["s = 'http://x' // i18n.language", 0],
-  ['/* navigator.language */ y', 0],
-] as const
+  ["const s = 'i18n.language 在字串裡'", 0],
+  ['const r = /i18n\\.language/', 0],
+  ['x = i18n.resolvedLanguage; document.documentElement.lang = x', 0],
+]
 for (const [src, want] of SELF) {
-  const got = BANNED.filter(([re]) => re.test(stripComments(src))).length
+  const got = bannedUses('frontend/src/Sample.tsx', src).length
   if (got !== want) fail(`比對器自檢：${JSON.stringify(src)} 命中 ${got} 次，應為 ${want}`)
 }
 function walk(dir: string, out: string[] = []): string[] {
@@ -215,22 +268,30 @@ function walk(dir: string, out: string[] = []): string[] {
 const files = walk(path.join(ROOT, 'frontend/src'))
 if (files.length < 25) fail(`只掃到 ${files.length} 個前端檔——掃描可能失效`)
 for (const f of files) {
-  const rel = path.relative(ROOT, f)
-  stripComments(fs.readFileSync(f, 'utf8'))
-    .split('\n')
-    .forEach((line, n) => {
-      for (const [re, why] of BANNED) if (re.test(line)) fail(`${rel}:${n + 1}：${why}`)
-    })
+  for (const hit of bannedUses(path.relative(ROOT, f).replace(/\\/g, '/'), fs.readFileSync(f, 'utf8'))) fail(hit)
 }
-const main = stripComments(fs.readFileSync(path.join(ROOT, 'frontend/src/console/main.tsx'), 'utf8'))
-if (!main.includes('restoreSavedLang(localStorage)')) fail('main.tsx 未經 restoreSavedLang 讀回存的語系')
-if (/localStorage\.getItem\(/.test(main)) fail('main.tsx 直接讀 localStorage——白名單被繞過')
+// main.tsx（帶 DOM，載不起來）：白名單接線
+const mainFile = path.join(ROOT, 'frontend/src/console/main.tsx')
+const mainSf = ts.createSourceFile(mainFile, fs.readFileSync(mainFile, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+let restores = 0
+let rawReads = 0
+const scanMain = (n: ts.Node) => {
+  if (ts.isCallExpression(n)) {
+    const callee = n.expression.getText(mainSf)
+    if (callee === 'restoreSavedLang' && n.arguments[0]?.getText(mainSf) === 'localStorage') restores++
+    if (/(^|\.)localStorage\.getItem$/.test(callee)) rawReads++
+  }
+  ts.forEachChild(n, scanMain)
+}
+scanMain(mainSf)
+if (restores !== 1) fail(`main.tsx 應恰呼叫一次 restoreSavedLang(localStorage)，實際 ${restores} 次`)
+if (rawReads) fail('main.tsx 直接讀 localStorage——白名單被繞過')
 
 if (failures.length) {
   console.error(`✗ console 語系檢查失敗（${failures.length}）：\n  ${failures.join('\n  ')}`)
   process.exit(1)
 }
 console.log(
-  `✓ console 語系檢查通過（${RAW.length} 種輸入 × fetch / XHR / 導覽 URL / 時間格式，實際送出值皆為畫面語系；` +
-    `${diverged} 種要求≠送出、${fallbackHit} 種走 fallback；${files.length} 檔無繞過 effectiveLang 的讀法）`,
+  `✓ console 語系檢查通過（${RAW.length} 種輸入 × ${API.length} 個 api 方法 / 上傳 XHR / ${NAV.length} 個導覽成員 / 時間格式，` +
+    `實際送出值皆為畫面語系；${diverged} 種要求≠送出、${fallbackHit} 種走 fallback；${files.length} 檔 AST 無繞過 effectiveLang 的讀法）`,
 )

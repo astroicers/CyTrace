@@ -3,11 +3,11 @@
 //! 回應形：`{"error":{"kind","i18n_key","message","detail"}}`——`message` 依請求協商
 //! 語言由 [`Catalog`] 產生（禁硬編碼，NFR-06）；catalog 為程序級常量（內嵌 locales）。
 
+use crate::extract::JsonOut;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use cytrace_core::error::CytraceError;
 use cytrace_i18n::Catalog;
 use serde_json::json;
@@ -271,7 +271,7 @@ impl IntoResponse for ApiError {
                 "detail": self.detail,
             }
         });
-        let mut resp = (self.kind.status(), Json(body)).into_response();
+        let mut resp = (self.kind.status(), JsonOut(body)).into_response();
         if let Some(secs) = self.retry_after {
             if let Ok(v) = axum::http::HeaderValue::from_str(&secs.to_string()) {
                 resp.headers_mut()
