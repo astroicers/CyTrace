@@ -135,7 +135,8 @@ fn lookup(root: &Value, key: &str) -> Option<String> {
 /// 前一個變數的值若含 `{{後一個變數}}`，會在下一輪被展開。T909 起 `with_message`
 /// 第一次把**使用者輸入**接進插值（`fail_on` 的值），送 `{"fail_on":"{{allowed}}"}`
 /// 就讓訊息變成「不合法的值是整串合法值」——使用者真正送的值從 message 消失
-/// （T909 對抗式複審 v8：反證票 1/3、未達確認門檻；但下方單元測試對舊實作可重現，故仍修）。
+/// （T909 對抗式複審 v2，2/3 確認）。對舊實作會紅的是 `interpolation_does_not_re_expand_substituted_values`；
+/// `interpolation_keeps_unknown_and_unclosed_placeholders` 釘的是新實作的邊界，舊實作本來就過。
 /// i18next 前端預設 `skipOnVariables: true`，行為本就是單次。
 ///
 /// 查不到的 `{{name}}` 原樣保留（`render_cbom` 等呼叫端靠殘留的 `{{` 偵測未插值）。

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { loadScanResult } from './data'
 import { SEVERITY_ORDER, type CryptoInventory, type Severity } from './types'
 import { renderCbomFailure } from './cbom'
+import { effectiveLang } from './langs'
 import { QuantumBadge, SeverityBadge, Toolbar } from './components/ui'
 
 const result = loadScanResult()
@@ -263,7 +264,7 @@ function Crypto() {
                 t,
                 status.failure.reasonKey,
                 status.failure.reasonDetail,
-                i18n.language,
+                effectiveLang(i18n),
               )}
             </p>
           )}

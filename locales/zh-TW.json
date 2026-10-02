@@ -64,7 +64,8 @@
       "invalid_status": "status 篩選值不合法：{{value}}",
       "missing_file_field": "上傳請求缺少 file 欄位",
       "upload_too_large": "上傳超過大小上限（{{limit}} bytes）",
-      "bad_request": "請求格式不合法"
+      "bad_request": "請求格式不合法",
+      "method_not_allowed": "此路徑不支援這個 HTTP 方法"
     },
     "job": {
       "interrupted": "伺服器重啟時中斷；請重新建立掃描"

@@ -2,14 +2,13 @@
 //! 上傳型 job（multipart）於 T805 增補。
 
 use crate::error::{ApiError, ErrorKind, Lang};
-use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
-use crate::jobs::{runner, JobRecord, JobStatus};
+use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery, JsonOut};
+use crate::jobs::{runner, JobError, JobRecord, JobStatus};
 use crate::state::AppState;
 use crate::{targets, upload};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use std::io::Write;
@@ -92,7 +91,7 @@ pub async fn create(
         body.fail_on.clone(),
         body.cbom,
     )?;
-    Ok((StatusCode::ACCEPTED, Json(record)).into_response())
+    Ok((StatusCode::ACCEPTED, JsonOut(record)).into_response())
 }
 
 /// `POST /api/v1/jobs/upload`：multipart 一步式（file + fail_on?）。串流落盤→安全解壓→建 job。
@@ -250,7 +249,7 @@ pub async fn upload(
         !app.cfg.keep_input,
         cbom,
     );
-    Ok((StatusCode::ACCEPTED, Json(record)).into_response())
+    Ok((StatusCode::ACCEPTED, JsonOut(record)).into_response())
 }
 
 #[derive(Deserialize)]
@@ -265,7 +264,7 @@ pub async fn list(
     State(app): State<AppState>,
     lang: Lang,
     ApiQuery(q): ApiQuery<ListQuery>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<JsonOut<serde_json::Value>, ApiError> {
     let status = match q.status.as_deref() {
         None => None,
         Some(raw) => Some(
@@ -281,7 +280,11 @@ pub async fn list(
         q.limit.unwrap_or(50).min(200),
         q.offset.unwrap_or(0),
     );
-    Ok(Json(json!({ "jobs": jobs, "total": total })))
+    let jobs = jobs
+        .iter()
+        .map(|j| job_view(j, lang))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(JsonOut(json!({ "jobs": jobs, "total": total })))
 }
 
 /// `GET /api/v1/jobs/{id}`。
@@ -289,11 +292,55 @@ pub async fn get(
     State(app): State<AppState>,
     lang: Lang,
     ApiPath(id): ApiPath<String>,
-) -> Result<Json<JobRecord>, ApiError> {
-    app.jobs
+) -> Result<JsonOut<serde_json::Value>, ApiError> {
+    let rec = app
+        .jobs
         .get(&id)
-        .map(Json)
-        .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))
+        .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
+    job_view(&rec, lang).map(JsonOut)
+}
+
+/// job 記錄的查詢回應形：`error` 另附依**本次請求語系**渲染的 `message`。
+///
+/// 只在回應時算、不寫回 job.json——落盤記錄不凍結任何語系，也不改寫既有稽核記錄。
+/// 原本 get / list 完全不看請求語系：job 失敗（最常見的錯誤）對非 console 的 API 用戶端
+/// （CI 腳本等）沒有任何語言的訊息，而 runner 的註解卻寫「由查詢時的請求語系渲染」
+/// （T909 第二輪複審 claims#5；前一輪的完整性批判就指出過，被以「不落盤」這個沒人提的方案回絕）。
+/// console 仍用自己的 `describeJobError` 渲染（切語系不必重抓）。兩邊的退回規則由同一份
+/// `tests/fixtures/job-error-render.json` 各自驗證——前版只在註解宣稱「規則相同」，實際上查不到
+/// 鍵時 server 退回 kind 泛用句、console 退回 detail（第三輪複審 server#5）。
+fn job_view(rec: &JobRecord, lang: Lang) -> Result<serde_json::Value, ApiError> {
+    let mut v = serde_json::to_value(rec).map_err(|e| {
+        ApiError::new(lang, ErrorKind::Internal).with_detail(format!("job-record serialize: {e}"))
+    })?;
+    if let Some(e) = &rec.error {
+        v["error"]["message"] = json!(render_job_error(lang, e));
+    }
+    Ok(v)
+}
+
+fn render_job_error(lang: Lang, e: &JobError) -> String {
+    let c = lang.catalog();
+    if e.i18n_key.starts_with("cbom.err.") {
+        let detail = (!e.detail.is_empty()).then_some(e.detail.as_str());
+        return c.render_cbom(&e.i18n_key, detail);
+    }
+    // 退回鏈（與 console 同一份 fixture）：鍵 → kind 泛用句 → detail 原文 → internal。
+    // 查不到時 t() 回傳鍵本身，以此判定。
+    let kind_key = format!("server.err.{}", e.kind);
+    for k in [e.i18n_key.as_str(), kind_key.as_str()] {
+        if k.is_empty() || k.ends_with('.') {
+            continue;
+        }
+        let m = c.t(k, &[]);
+        if m != k {
+            return m;
+        }
+    }
+    if !e.detail.is_empty() {
+        return e.detail.clone();
+    }
+    c.t("server.err.internal", &[])
 }
 
 /// `DELETE /api/v1/jobs/{id}`：queued → 取消；終態 → 刪除；running → 409。
@@ -322,12 +369,12 @@ pub async fn delete(
 }
 
 /// `GET /api/v1/targets`：白名單根清單（只給名稱，不洩路徑）。
-pub async fn targets_list(State(app): State<AppState>) -> Json<serde_json::Value> {
+pub async fn targets_list(State(app): State<AppState>) -> JsonOut<serde_json::Value> {
     let roots: Vec<serde_json::Value> = app
         .cfg
         .scan_roots
         .iter()
         .map(|(name, _)| json!({ "name": name }))
         .collect();
-    Json(json!({ "roots": roots }))
+    JsonOut(json!({ "roots": roots }))
 }

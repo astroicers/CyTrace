@@ -2,17 +2,15 @@
 
 use crate::auth;
 use crate::error::{ApiError, ErrorKind, Lang};
-use crate::extract::ApiJson;
+use crate::extract::{ApiJson, JsonOut, PeerAddr};
 use crate::session::{login_cookie, logout_cookie, token_from_cookie_header};
 use crate::state::AppState;
-use axum::extract::{ConnectInfo, State};
+use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use cytrace_core::timefmt::epoch_to_iso;
 use serde::Deserialize;
 use serde_json::json;
-use std::net::SocketAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Deserialize)]
@@ -31,7 +29,7 @@ fn iso_of(t: SystemTime) -> String {
 /// `POST /api/v1/session`：登入。成功 204 + Set-Cookie；失敗統一 401（單帳號無枚舉問題）。
 pub async fn login(
     State(app): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    PeerAddr(peer): PeerAddr,
     lang: Lang,
     ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Response, ApiError> {
@@ -58,14 +56,14 @@ pub async fn whoami(
     State(app): State<AppState>,
     lang: Lang,
     headers: HeaderMap,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<JsonOut<serde_json::Value>, ApiError> {
     let session = headers
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(token_from_cookie_header)
         .and_then(|t| app.sessions.validate(t))
         .ok_or_else(|| ApiError::new(lang, ErrorKind::Auth))?;
-    Ok(Json(json!({
+    Ok(JsonOut(json!({
         "user": app.cfg.admin_user,
         "created_at": iso_of(session.created_at),
         "expires_at": iso_of(session.expires_at),

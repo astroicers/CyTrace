@@ -16,7 +16,7 @@ import { renderCbomFailure } from '../cbom.ts'
  * 而同一個 commit 在 CLI 側正好斷言「細節不得重複出現」。
  */
 export function describeJobError(
-  error: { i18n_key: string; detail?: string | null },
+  error: { kind?: string; i18n_key: string; detail?: string | null },
   t: TFunction,
   lang: string,
 ): { text: string; detailConsumed: boolean } {
@@ -25,12 +25,18 @@ export function describeJobError(
     // 成因已含細節（renderCbomFailure 會插值或附在括號內），不再重複印
     return { text: renderCbomFailure(t, key, error.detail, lang), detailConsumed: true }
   }
-  const msg = key ? t(key) : ''
-  // t() 查不到時回傳鍵本身；裸鍵與空白對操作員都等於沒有訊息
-  if (!msg || msg === key) {
-    if (error.detail) return { text: error.detail, detailConsumed: true }
-    return { text: t('console.common.error'), detailConsumed: false }
+  // 退回鏈：鍵 → kind 泛用句 → detail 原文 → internal。與 server 的 render_job_error
+  // 同一份規則，由 crates/cytrace-server/tests/fixtures/job-error-render.json 兩邊各自驗
+  // （前版查不到鍵就退回 detail，server 則退回 kind 泛用句——第三輪複審 server#5）。
+  // t() 查不到時回傳鍵本身；裸鍵與空白對操作員都等於沒有訊息。
+  for (const k of [key, error.kind ? `server.err.${error.kind}` : '']) {
+    if (!k) continue
+    // 只認**葉節點**的字串：鍵指向物件（例如 server.err 這種非葉節點）時 i18next 回傳一段
+    // 「returned an object instead of string」警告字串，Rust 端則視為查不到（第四輪複審 server#4）
+    const msg = t(k, { returnObjects: true }) as unknown
+    if (typeof msg === 'string' && msg && msg !== k) return { text: msg, detailConsumed: false }
   }
-  return { text: msg, detailConsumed: false }
+  if (error.detail) return { text: error.detail, detailConsumed: true }
+  return { text: t('server.err.internal'), detailConsumed: false }
 }
 

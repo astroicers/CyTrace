@@ -8,6 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 引擎版本與校驗和的單一事實源（ADR-012 決策 7 / ADR-013 決策 1）
 # shellcheck source=versions.env
 [ -f "$ROOT/scripts/versions.env" ] && . "$ROOT/scripts/versions.env"
+# THEIA_VERSION 同時被 build.rs（編進報表）與本檔（寫進 NOTICE）讀，兩邊必須取到同一個值：
+# 規則與 build.rs 共用（check-theia-version.sh，由 cytrace-core 的 theia_version 測試對帳）。
+# 前版只數 `^THEIA_VERSION=` 行數、驗 source 後的值，多一行 `export THEIA_VERSION=…` 就讓
+# NOTICE 與報表分歧（T909 第三輪複審 build#1）。
+THEIA_VERSION="$("$ROOT/scripts/check-theia-version.sh" "$ROOT/scripts/versions.env")" || exit 1
 OUT_DIR="${1:-$ROOT/delivery}"
 TARGET="x86_64-unknown-linux-musl"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -25,6 +30,9 @@ mkdir -p "$BUNDLE/bin" "$BUNDLE/db"
 
 # 1) musl 靜態 binary
 say "build musl 靜態 cytrace"
+# touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
+# 報表沿用舊的 theia 版號（第三輪複審 build#0）。強制重跑，讀到當前檔案的值。
+touch "$ROOT/scripts/versions.env"
 ( cd "$ROOT" && RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target "$TARGET" -p cytrace-cli >/dev/null 2>&1 )
 cp "$ROOT/target/$TARGET/release/cytrace" "$BUNDLE/bin/cytrace"
 
@@ -94,7 +102,7 @@ syft scan "dir:$ROOT" --exclude './frontend/node_modules/**' --exclude './target
 if [ -f "$BUNDLE/bin/cbomkit-theia" ]; then
   THEIA_NOTICE="$(cat <<THEIA
   - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) — 密碼學資產盤點（CBOM；ADR-013）
-    自源碼建置（tag v${THEIA_VERSION:-1.1.2}），非上游 release binary。
+    自源碼建置（tag v${THEIA_VERSION}），非上游 release binary。
     其相依含下列非 Apache-2.0 成分：
       · gitleaks v8（MIT）、gitleaks/go-gitdiff（MIT）— 內嵌之機密偵測規則
       · MPL-2.0（檔案級弱 copyleft）：hashicorp/golang-lru、hashicorp/go-version、

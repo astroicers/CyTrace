@@ -31,3 +31,6 @@ mime_guess = { workspace = true }
 [dev-dependencies]
 tower = { workspace = true }
 http-body-util = { workspace = true }
+syn = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }

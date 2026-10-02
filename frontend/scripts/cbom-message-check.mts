@@ -163,6 +163,34 @@ for (const lng of ['zh-TW', 'en-US']) {
   }
 }
 
+// ── job 錯誤的退回鏈：與 server 的 render_job_error 共用同一份 fixture，兩邊各自驗 ──
+// 前版只在註解宣稱兩邊「規則相同」，實際上查不到鍵時 console 退回 detail、server 退回
+// kind 泛用句（第三輪複審 server#5）。server 側：tests/jobs.rs 的
+// job_error_message_follows_shared_fallback_fixture。
+const FX = JSON.parse(
+  fs.readFileSync(path.join(ROOT, 'crates/cytrace-server/tests/fixtures/job-error-render.json'), 'utf8'),
+) as { cases: Array<{ name: string; error: { kind: string; i18n_key: string; detail: string }; expect: { key?: string; detail?: boolean } }> }
+let fxChecked = 0
+for (const lng of ['zh-TW', 'en-US']) {
+  await i18n.changeLanguage(lng)
+  const t = i18n.t.bind(i18n) as TFunction
+  for (const c of FX.cases) {
+    const { text, detailConsumed } = describeJobError(c.error, t, lng)
+    const want = c.expect.key ? t(c.expect.key) : c.error.detail
+    const wantConsumed = !c.expect.key
+    if (!want || want === c.expect.key) problems.push(`fixture「${c.name}」: 預期文字無效（鍵查不到？）`)
+    if (text !== want || detailConsumed !== wantConsumed) {
+      problems.push(
+        `${lng} fixture「${c.name}」: 得「${text}」(detail 用掉=${detailConsumed})，應為「${want}」(${wantConsumed})`,
+      )
+    }
+    fxChecked++
+  }
+}
+if (FX.cases.length < 5 || fxChecked !== FX.cases.length * 2) {
+  problems.push(`job 錯誤 fixture 只驗了 ${fxChecked} 個案例——fixture 或迴圈可能失效`)
+}
+
 // 反空轉：import 成功但清單為空、或某個迴圈沒跑到，`problems` 也會是空的而看似通過。
 //
 // **下限由組成推導且分段**：初版寫死 `MIN_CASES = 30`，而報表側恰好就是 30
@@ -197,5 +225,5 @@ if (problems.length > 0) {
 
 console.log(
   `✓ CBOM 成因渲染檢查通過（${CBOM_ERROR_KEYS.length} 鍵 × 2 語系 + 5 類邊界，共 ${checked} 個案例；` +
-    `驗的是 src/cbom.ts 的 renderCbomFailure 本身，非副本）`,
+    `驗的是 src/cbom.ts 的 renderCbomFailure 本身，非副本；job 錯誤退回鏈 ${fxChecked} 例與 server 共用 fixture）`,
 )

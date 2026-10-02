@@ -47,7 +47,13 @@ Say "build cytrace.exe ($Target)"
 $env:RUSTFLAGS = "-C target-feature=+crt-static"
 rustup target add $Target | Out-Null
 Push-Location $Root
+# touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
+# 報表沿用舊的 theia 版號（T909 第三、四輪複審 build#0／build#4；Linux 側 package.sh 同理）
+(Get-Item "$PSScriptRoot\versions.env").LastWriteTime = Get-Date
 cargo build --release --locked --target $Target -p cytrace-cli
+# 原生指令失敗不會自動 throw——不檢查的話，build.rs 拒收 versions.env（或任何編譯錯誤）時
+# 照樣往下打包上一次的舊 binary（第四輪複審 build#3）
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build failed (exit $LASTEXITCODE)" }
 Pop-Location
 Copy-Item "$Root\target\$Target\release\cytrace.exe" "$Bundle\bin\cytrace.exe"
 
@@ -71,9 +77,19 @@ Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
 
 # 引擎釘選版本的單一事實源（與 package.sh 一致）
-$TheiaVersion = (Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=' |
-  ForEach-Object { $_.Line -replace '^THEIA_VERSION=', '' } | Select-Object -First 1)
-if (-not $TheiaVersion) { $TheiaVersion = "unknown" }
+# 與 build.rs（crates/cytrace-core/theia_version_rule.rs）、package.sh（check-theia-version.sh）
+# 同一演算法：嚴格 UTF-8、不含 NUL、以 LF 切行並去一個行尾 CR、註解行（行首 ASCII 空白後接 #）
+# 不算、其餘只准一行以 ASCII 詞邊界提到 THEIA_VERSION 且逐字是 THEIA_VERSION=<數字(.數字)+>。
+# 不用 Get-Content：它把裸 CR 也當換行、預設編碼隨 PowerShell 版本與系統語系而異。
+# 本實作是對照實作：只在 windows-package CI job 以真實 versions.env 執行過，沒有對樣本表對帳。
+$VersionsBytes = [System.IO.File]::ReadAllBytes("$PSScriptRoot\versions.env")
+if ($VersionsBytes -contains 0) { throw "versions.env contains a NUL byte" }
+$VersionsText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($VersionsBytes)  # 非 UTF-8 即 throw
+$TheiaLines = @($VersionsText -split "`n" | ForEach-Object { $_ -replace "`r$", '' } |
+  Where-Object { $_ -cnotmatch '^[ \t\x0B\x0C\r]*#' -and $_ -cmatch '(?<![A-Za-z0-9_])THEIA_VERSION(?![A-Za-z0-9_])' })
+if ($TheiaLines.Count -ne 1) { throw "versions.env: exactly one non-comment line may mention THEIA_VERSION (found $($TheiaLines.Count))" }
+if ($TheiaLines[0] -cnotmatch '^THEIA_VERSION=([0-9]+(\.[0-9]+)+)$') { throw "versions.env: THEIA_VERSION line must be exactly THEIA_VERSION=<digits(.digits)+>: '$($TheiaLines[0])'" }
+$TheiaVersion = $Matches[1]
 
 # 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
 #

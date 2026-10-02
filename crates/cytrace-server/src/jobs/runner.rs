@@ -101,7 +101,9 @@ pub fn spawn_with_cleanup(
 /// `from_core`，卻沒修在真正在跑的這裡（第八輪複審 finding B）。
 ///
 /// 兩個欄位的分工：
-/// - `i18n_key`：**可翻譯**的鍵，由查詢時的請求語系渲染（job 是非同步的，此處沒有語系）。
+/// - `i18n_key`：**可翻譯**的鍵，由查詢時的請求語系渲染（job 是非同步的，此處沒有語系）——
+///   server 端由 `api::jobs::job_view` 在 get / list 回應時附上 `error.message`，console 另以
+///   `describeJobError` 渲染。
 ///   `Cbom` 變體直接用它自己的 `cbom.err.*` 鍵——那才是成因；
 ///   套 `server.err.cbom` 會把「逾時」與「目標被拒」壓成同一句話，
 ///   而 catalog 裡也根本沒有 `server.err.cbom` 這個鍵（前端會顯示裸鍵）。
@@ -177,6 +179,9 @@ fn run_pipeline(
 
     // `{e}` 會帶出 CytraceError 的 Display——每個變體都有中文前綴（「設定錯誤：…」），
     // 只換外層前綴等於沒修（T909 完整性批判抓到的漏網）。取不翻譯的內文。
+    // 這是**防禦性**修改：樣板以 include_str! 內嵌且 CI 驗過含 sentinel、ScanResult 序列化不會
+    // 失敗，此分支目前從任何輸入都進不來，也沒有測試能讓它轉紅（第二輪完整性批判更正
+    // e5e1f21 把它列為「實測可重現」的說法）。
     let html = cytrace_report::render(&result).map_err(|e| {
         CytraceError::Parse(format!(
             "report render: {}",

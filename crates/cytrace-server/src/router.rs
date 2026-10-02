@@ -7,6 +7,7 @@ use crate::api;
 use crate::auth;
 use crate::config::ServerConfig;
 use crate::error::{ApiError, ErrorKind, Lang};
+use crate::extract::JsonOut;
 use crate::state::AppState;
 use crate::static_files;
 use axum::extract::State;
@@ -14,7 +15,7 @@ use axum::http::{header, HeaderValue, Request};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::Router;
 use serde_json::{json, Value};
 
 /// 組出完整 Router（供 `serve` 與 oneshot 整合測試共用）。
@@ -52,6 +53,15 @@ pub fn build_router_with_state(state: AppState) -> Router {
             "/api/v1/jobs/{id}/artifacts/{kind}",
             get(api::reports::artifact),
         )
+        // 路徑命中、方法不符 → JSON 405（原本是 axum 預設的空 body，繞過錯誤契約與語系；
+        // T909 第二輪複審 claims#4）。必須在 auth layer **之前**設：之後設會換掉已被 auth
+        // 包住的 fallback，未登入者就會拿到 405 而非 401。
+        //
+        // 注意：未登入的 401 **仍帶 `Allow`**（axum 在所有 layer 之外、對 method-not-allowed
+        // 分支的任何狀態碼補上，router 層剝不掉）。API 方法表見公開原始碼（本檔；repo 為公開）——ADR-011 並未列方法，前版說法
+        // 不實（第四輪複審 claims#5）——不視為機密；
+        // 本排序保證的只是「未登入回 401 而非 405」（第三輪複審 server#2 更正前版「不透露方法表」）。
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(axum::extract::DefaultBodyLimit::disable()) // 上傳大小由 handler 串流計數把關
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -60,6 +70,9 @@ pub fn build_router_with_state(state: AppState) -> Router {
 
     public
         .merge(protected)
+        // 合併後再設一次，蓋到 public 的 /healthz（第三輪複審 server#1）。`default_fallback`
+        // 只替換仍是預設的 fallback，上面已被 auth 包住的那些保留，401 優先不變。
+        .method_not_allowed_fallback(method_not_allowed)
         .fallback(fallback) // 未命中：/api/* → JSON 404；其餘 → console SPA
         .layer(middleware::from_fn(auth::csrf_guard))
         .layer(middleware::from_fn(security_headers))
@@ -100,14 +113,19 @@ async fn healthz() -> &'static str {
 }
 
 /// 版本與 DB 快照狀態（ADR-012 C3：DB 缺失 degraded 回報，CI 冒煙依賴此行為）。
-async fn version(State(app): State<AppState>) -> Json<Value> {
+async fn version(State(app): State<AppState>) -> JsonOut<Value> {
     let roots: Vec<&str> = app.cfg.scan_roots.iter().map(|(n, _)| n.as_str()).collect();
-    Json(json!({
+    JsonOut(json!({
         "cytrace": env!("CARGO_PKG_VERSION"),
         "db": { "present": app.cfg.db_present() },
         "upload_limit_mb": app.cfg.max_upload_bytes / (1024 * 1024),
         "scan_roots": roots,
     }))
+}
+
+/// 路徑命中、方法不符：JSON 405（axum 仍會附上 `Allow` header）。
+async fn method_not_allowed(lang: Lang) -> Response {
+    ApiError::new(lang, ErrorKind::MethodNotAllowed).into_response()
 }
 
 /// 未命中路由：`/api/*`、`/healthz` → JSON 404；其餘（`/`、`/assets/*`）→ console SPA。

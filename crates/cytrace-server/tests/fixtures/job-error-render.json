@@ -1,0 +1,71 @@
+{
+  "_doc": "job 失敗訊息的退回規則，console（frontend/src/console/jobError.ts 的 describeJobError）與 server（crates/cytrace-server/src/api/jobs.rs 的 render_job_error）共用本表、各自驗證：鍵查得到 → 該鍵；否則 server.err.<kind> → 該句；否則 detail 原文；否則 server.err.internal。cbom.err.* 另走 render_cbom（兩側已由 cbom 渲染檢查對帳），不在本表。expect.key = 應顯示該鍵的譯文、detail 另行顯示；expect.detail = 應顯示 detail 原文（已用掉）。",
+  "cases": [
+    {
+      "name": "已知鍵",
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err.engine",
+        "detail": "syft exit Some(1): "
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
+    },
+    {
+      "name": "重啟中斷（非 server.err.* 的鍵）",
+      "error": {
+        "kind": "interrupted",
+        "i18n_key": "server.job.interrupted",
+        "detail": ""
+      },
+      "expect": {
+        "key": "server.job.interrupted"
+      }
+    },
+    {
+      "name": "未知鍵 → kind 泛用句（較新版本寫入後回滾）",
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err.engine_v2",
+        "detail": "syft exit Some(2): image pull denied"
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
+    },
+    {
+      "name": "未知鍵與未知 kind → detail 原文",
+      "error": {
+        "kind": "quantum",
+        "i18n_key": "server.err.quantum_v9",
+        "detail": "raw: theia exit 3"
+      },
+      "expect": {
+        "detail": true
+      }
+    },
+    {
+      "name": "鍵指向非葉節點 → 視為查不到、退回 kind",
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err",
+        "detail": "x"
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
+    },
+    {
+      "name": "全空 → internal",
+      "error": {
+        "kind": "",
+        "i18n_key": "",
+        "detail": ""
+      },
+      "expect": {
+        "key": "server.err.internal"
+      }
+    }
+  ]
+}
