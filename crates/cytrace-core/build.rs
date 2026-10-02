@@ -27,13 +27,13 @@ fn main() {
         .expect("cargo 執行 build script 必設 CARGO_MANIFEST_DIR");
     let root = Path::new(&dir).join("../../scripts/versions.env");
     println!("cargo:rerun-if-changed={}", root.display());
-    let text = std::fs::read_to_string(&root).unwrap_or_else(|e| {
+    let bytes = std::fs::read(&root).unwrap_or_else(|e| {
         panic!(
             "讀不到 {}：{e}——無從標示 theia 版本（NFR-03）",
             root.display()
         )
     });
     let version =
-        theia_version_from(&text).unwrap_or_else(|why| panic!("{}：{why}", root.display()));
+        theia_version_from_bytes(&bytes).unwrap_or_else(|why| panic!("{}：{why}", root.display()));
     println!("cargo:rustc-env=CYTRACE_THEIA_VERSION={version}");
 }
