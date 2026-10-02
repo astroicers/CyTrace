@@ -1,14 +1,17 @@
 //! 操作者終端訊息的語言與退出碼（T912）——以真實 binary 端到端驗證。
 //!
-//! 以修正前的 binary（476c150）執行本檔，13 支情境測試全數轉紅（`--lang en-US` 下印出
+//! 以修正前的 binary（476c150）執行本檔，16 支情境測試中 13 支轉紅（`--lang en-US` 下印出
 //! 「錯誤 / error: 引擎子程序錯誤：…」、serve 啟動錯誤整句中文、clap 用法錯誤回 2）。
 //! 每支在第一個不符的斷言就停下，故這不代表同一支裡的每個樣本都逐一驗過紅燈。
+//! 其餘 3 支（成功的 run、health、較新 schema 的 report）的訊息在修正前就已在地化，是防回歸用。
 //!
 //! 斷言只針對**我方文字**：細節裡的系統訊息（`No such file or directory`）語言由 OS 決定，
 //! 這裡的 CI 與開發機都是英文 locale，但不斷言其內容。
 //!
-//! stdout 與 stderr 都驗：listening、明文警告、shutdown 等在 stdout（T912 複審 gates#8）。
-//! 每個輸出都不得殘留 `{{`（插值變數漏給時 `Catalog::t` 會原樣保留；複審 gates#7）。
+//! stdout 與 stderr 都驗：listening、明文警告、shutdown、完成、報表已輸出、服務存活等在 stdout
+//! （T912 複審 gates#8）。每一次執行的輸出都斷言無裸鍵、無殘留 `{{`（插值變數漏給時
+//! `Catalog::t` 會原樣保留；複審 gates#7）；我方文字另斷言語言相符——clap 的用法錯誤固定是英文
+//! （T914），那幾例不驗語言。
 //!
 //! `hash-password` 沒有 tty 的情境以 `setsid -w` 在新 session 執行（沒有控制終端機，/dev/tty
 //! 開不了，與容器未加 `-t` 相同），只在 Linux 跑。
@@ -31,21 +34,64 @@ fn has_cjk(s: &str) -> bool {
         .any(|c| matches!(c as u32, 0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF))
 }
 
-/// 輸出中出現 `cli.xxx`／`server.xxx`／`cbom.xxx`＝有鍵沒被翻譯就印出去了。
-fn bare_key(s: &str) -> Option<&str> {
-    ["cli.", "server.", "cbom.", "severity."]
-        .into_iter()
-        .find(|ns| {
-            s.match_indices(ns).any(|(i, _)| {
-                // 前一字元是字母數字或 `-` 時不是鍵開頭（`cytrace-server.` 之類）
-                let before_ok = s[..i]
-                    .chars()
-                    .last()
-                    .is_none_or(|c| !(c.is_alphanumeric() || c == '-' || c == '_'));
-                let after = s[i + ns.len()..].chars().next();
-                before_ok && after.is_some_and(|c| c.is_ascii_lowercase())
-            })
-        })
+/// catalog 的全部葉鍵（`cli.err.prefix`…）。
+static KEYS: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    fn leaves(v: &serde_json::Value, prefix: &str, out: &mut Vec<String>) {
+        if let serde_json::Value::Object(m) = v {
+            for (k, c) in m {
+                let p = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                leaves(c, &p, out);
+            }
+        } else {
+            out.push(prefix.to_string());
+        }
+    }
+    let raw = include_str!("../../../locales/zh-TW.json");
+    let mut out = Vec::new();
+    leaves(
+        &serde_json::from_str(raw).expect("locale JSON"),
+        "",
+        &mut out,
+    );
+    assert!(out.len() >= 150, "只讀到 {} 個鍵", out.len());
+    out
+});
+
+/// 輸出中出現鍵本身＝有鍵沒被翻譯就印出去了。兩種判定：
+/// - catalog 的真實鍵名；
+/// - 我方命名空間開頭的點分詞（`cli.err.prefx`）——鍵打錯時 `Catalog::t` 原樣回傳，它不在
+///   catalog 裡；結尾是副檔名的（help 裡的 `cbom.cdx.json`）是檔名，不算。
+///
+/// 前版只用命名空間前綴猜，把 `cbom.cdx.json` 誤判成鍵。
+fn bare_key(s: &str) -> Option<String> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '-';
+    let tokens = s.split(|c: char| !ident(c)).filter(|t| !t.is_empty());
+    for t in tokens {
+        let t = t.trim_matches('.');
+        if KEYS.iter().any(|k| k == t) {
+            return Some(t.to_string());
+        }
+        let mut segs = t.split('.');
+        let ns = segs.next().unwrap_or_default();
+        let rest: Vec<&str> = segs.collect();
+        let file_ext = [
+            "json", "html", "txt", "crt", "key", "pem", "md", "js", "css",
+        ];
+        if ["cli", "server", "cbom", "severity", "report", "console"].contains(&ns)
+            && !rest.is_empty()
+            && rest
+                .iter()
+                .all(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+            && !rest.last().is_some_and(|e| file_ext.contains(e))
+        {
+            return Some(t.to_string());
+        }
+    }
+    None
 }
 
 struct Sandbox {
@@ -65,6 +111,31 @@ impl Out {
     }
 }
 
+/// 寫可執行檔（shim）與產生子程序互斥（T912 複審 newgates#6）。
+///
+/// fork 出的子程序在 exec 之前帶著父行程當下所有開著的 fd——包括另一條測試執行緒正在寫的
+/// shim。這時去 exec 那個 shim，核心回 ETXTBSY（"Text file busy"）；複審實測 400 次約 2 次。
+/// 寫 shim 取寫鎖、產生子程序取讀鎖：寫入期間沒有人 fork。
+static SPAWN: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn writing() -> std::sync::RwLockWriteGuard<'static, ()> {
+    SPAWN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn spawning() -> std::sync::RwLockReadGuard<'static, ()> {
+    SPAWN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// 在讀鎖下執行子程序並收集輸出。
+fn exec(cmd: &mut Command) -> Out {
+    let _g = spawning();
+    out_of(cmd.output().expect("執行子程序"))
+}
+
 fn out_of(o: std::process::Output) -> Out {
     Out {
         code: o.status.code().expect("退出碼"),
@@ -73,12 +144,19 @@ fn out_of(o: std::process::Output) -> Out {
     }
 }
 
-/// 我方輸出的共同不變量：無裸鍵、無殘留佔位符、語言相符。
-fn assert_operator_text(lang: &str, o: &Out, ctx: &str) {
+/// 每個情境都要成立的：無裸鍵、無殘留佔位符、沒有 panic。
+/// clap 的用法錯誤固定是英文（T914），那幾個情境只驗這一層。
+fn assert_no_raw(o: &Out, ctx: &str) {
     let all = o.all();
     assert_eq!(bare_key(&all), None, "裸鍵：{ctx}");
     assert!(!all.contains("{{"), "殘留佔位符：{ctx}");
     assert!(!all.contains("panicked"), "panic：{ctx}");
+}
+
+/// 我方輸出的共同不變量：[`assert_no_raw`] 加上語言相符。
+fn assert_operator_text(lang: &str, o: &Out, ctx: &str) {
+    assert_no_raw(o, ctx);
+    let all = o.all();
     if lang == "en-US" {
         assert!(!has_cjk(&all), "en-US 不得出現中文：{ctx}");
     } else {
@@ -102,6 +180,7 @@ impl Sandbox {
 
     fn shim(&self, name: &str, fixture: &str) {
         let p = self.dir.join("bin").join(name);
+        let _w = writing();
         fs::write(&p, format!("#!/bin/sh\ncat {FIXTURES}/{fixture}\n")).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -117,7 +196,7 @@ impl Sandbox {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        out_of(cmd.output().expect("執行 cytrace"))
+        exec(&mut cmd)
     }
 }
 
@@ -159,10 +238,20 @@ fn both_langs(
 #[test]
 fn self_check_detectors() {
     assert!(has_cjk("錯誤：x") && has_cjk("a（b") && !has_cjk("error: x — “y”"));
-    assert_eq!(bare_key("error: cli.err.prefix"), Some("cli."));
-    assert_eq!(bare_key("x server.startup.tls_unpaired"), Some("server."));
+    let k = |s: &str| Some(s.to_string());
+    assert_eq!(bare_key("error: cli.err.prefix"), k("cli.err.prefix"));
+    assert_eq!(
+        bare_key("x server.startup.tls_unpaired"),
+        k("server.startup.tls_unpaired")
+    );
+    assert_eq!(bare_key("(cbom.err.timeout)"), k("cbom.err.timeout"));
+    // 打錯的鍵不在 catalog 裡，也要抓到
+    assert_eq!(bare_key("錯誤：cli.err.prefx"), k("cli.err.prefx"));
     assert_eq!(bare_key("cytrace-server: Corrupt job.json"), None);
     assert_eq!(bare_key("see job.json (cli.)"), None);
+    // help 裡的檔名不是鍵
+    assert_eq!(bare_key("另產 cbom.cdx.json"), None);
+    assert_eq!(bare_key("/tmp/x/sbom.cdx.json"), None);
 }
 
 #[test]
@@ -218,8 +307,11 @@ fn scan_cbom_non_cbom_error_is_localized() {
     sb.shim("syft", "cyclonedx.json");
     sb.shim("grype", "grype.json");
     let theia = sb.dir.join("bin/cbomkit-theia");
-    fs::write(&theia, "#!/bin/sh\n").unwrap();
-    fs::set_permissions(&theia, fs::Permissions::from_mode(0o644)).unwrap();
+    {
+        let _w = writing();
+        fs::write(&theia, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&theia, fs::Permissions::from_mode(0o644)).unwrap();
+    }
     both_langs(
         &sb,
         &[
@@ -248,10 +340,12 @@ fn usage_errors_exit_one_not_the_fail_on_code() {
     ] {
         let o = sb.run(args, &[]);
         assert_eq!(o.code, 1, "{args:?} 應以 1 結束：{}", o.stderr);
+        assert_no_raw(&o, &format!("{args:?}"));
     }
     for args in [&["--help"][..], &["--version"], &["run", "--help"]] {
         let o = sb.run(args, &[]);
         assert_eq!(o.code, 0, "{args:?} 應以 0 結束：{}", o.stderr);
+        assert_no_raw(&o, &format!("{args:?}"));
     }
 }
 
@@ -273,6 +367,7 @@ fn fail_on_typo_is_a_usage_error_not_a_threshold() {
     for v in ["high", "HIGH"] {
         let o = sb.run(&["run", &target, "--fail-on", v, "-o", &report], &[]);
         assert_eq!(o.code, 2, "{v}：{}", o.stderr);
+        assert_operator_text("zh-TW", &o, v);
     }
     for args in [
         vec!["run", &target, "--fail-on", "hgih", "-o", &report],
@@ -280,6 +375,7 @@ fn fail_on_typo_is_a_usage_error_not_a_threshold() {
     ] {
         let o = sb.run(&args, &[("CYTRACE_LANG", "en-US")]);
         assert_eq!(o.code, 1, "{args:?}：{}", o.stderr);
+        assert_no_raw(&o, &format!("{args:?}"));
         assert!(
             !o.all().contains("Reached --fail-on threshold"),
             "{args:?} 不得被當成門檻：{}",
@@ -288,36 +384,103 @@ fn fail_on_typo_is_a_usage_error_not_a_threshold() {
     }
 }
 
+/// 成功路徑的 stdout：盤點完成、完成（含風險等級）、報表已輸出（T912 複審 gates#8：
+/// 這幾則在 stdout，前版沒有任何情境走到成功的 run）。
+#[test]
+fn successful_run_reports_in_operator_language() {
+    let sb = Sandbox::new("ok-run");
+    sb.shim("syft", "cyclonedx.json");
+    sb.shim("grype", "grype.json");
+    sb.shim("cbomkit-theia", "cbom.json");
+    let report = sb.path("r.html");
+    let (en, zh) = both_langs(
+        &sb,
+        &["run", &sb.path("target"), "--cbom", "-o", &report],
+        &[],
+        0,
+        "Cryptographic asset inventory complete: 12 items",
+        "密碼學資產盤點完成：12 項",
+    );
+    for (o, done, written) in [
+        (
+            &en,
+            "Done: 2 vulnerabilities, overall risk Critical",
+            "Report written: ",
+        ),
+        (&zh, "完成：2 個弱點，風險總評 極高", "報表已輸出："),
+    ] {
+        assert!(o.stdout.contains(done), "{}", o.stdout);
+        assert!(
+            o.stdout.contains(&format!("{written}{report}")),
+            "{}",
+            o.stdout
+        );
+    }
+}
+
+/// `report` 讀到較新 schema 的檔案：警告要列出兩個版本號（鍵不是字面值，插值對帳比不到——
+/// 由本情境涵蓋，見 tests/i18n_call_vars.rs 的 NONLITERAL；T912 複審 newgates#3）。
+#[test]
+fn report_on_a_newer_schema_names_both_versions() {
+    let sb = Sandbox::new("schema");
+    let golden = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../cytrace-core/tests/golden/scanresult.json"
+    );
+    let mut v: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(golden).unwrap()).unwrap();
+    v["schema_version"] = serde_json::json!(99);
+    let input = sb.path("future.json");
+    fs::write(&input, v.to_string()).unwrap();
+    let (en, zh) = both_langs(
+        &sb,
+        &["report", &input, "-o", &sb.path("future.html")],
+        &[],
+        0,
+        "schema v99; this build supports v",
+        "schema v99，本版支援 v",
+    );
+    for o in [&en, &zh] {
+        assert!(o.stdout.contains(&sb.path("future.html")), "{}", o.stdout);
+    }
+}
+
 #[test]
 fn language_source_precedence() {
     let sb = Sandbox::new("prec");
     let missing = sb.path("nope.json");
 
+    let check = |o: &Out, lang: &str, prefix: &str, ctx: &str| {
+        assert!(o.stderr.starts_with(prefix), "{ctx}：{}", o.stderr);
+        assert!(
+            o.stderr.contains(&missing),
+            "{ctx} 應指名路徑：{}",
+            o.stderr
+        );
+        assert_operator_text(lang, o, ctx);
+    };
+
     // 只有環境變數 → 英文
     let o = sb.run(&["report", &missing], &[("CYTRACE_LANG", "en-US")]);
-    assert!(
-        o.stderr.starts_with("error: ") && !has_cjk(&o.stderr),
-        "{}",
-        o.stderr
-    );
+    check(&o, "en-US", "error: ", "env en-US");
 
     // 旗標優先於環境變數；--lang 是全域旗標，放在子命令後也算
     let o = sb.run(
         &["report", &missing, "--lang", "zh-TW"],
         &[("CYTRACE_LANG", "en-US")],
     );
-    assert!(o.stderr.starts_with("錯誤："), "{}", o.stderr);
+    check(&o, "zh-TW", "錯誤：", "flag zh-TW over env en-US");
 
     // 都沒有 → zh-TW；空白的環境變數視同未設
     for env in [&[][..], &[("CYTRACE_LANG", "  ")]] {
         let o = sb.run(&["report", &missing], env);
-        assert!(o.stderr.starts_with("錯誤："), "{env:?}：{}", o.stderr);
+        check(&o, "zh-TW", "錯誤：", &format!("{env:?}"));
     }
 
     // 寬鬆寫法沿用既有正規化（en、EN、en_US.UTF-8 都是英文）
     for v in ["en", "EN", "en_US.UTF-8"] {
         let o = sb.run(&["report", &missing], &[("CYTRACE_LANG", v)]);
-        assert!(!has_cjk(&o.stderr), "{v}：{}", o.stderr);
+        check(&o, "en-US", "error: ", v);
     }
 }
 
@@ -325,16 +488,22 @@ fn language_source_precedence() {
 fn unsupported_language_warns_in_both_languages_then_uses_zh_tw() {
     let sb = Sandbox::new("unsup");
     let missing = sb.path("nope.json");
-    for (args, env) in [
-        (vec!["--lang", "fr", "report", &missing], vec![]),
-        (vec!["report", &missing], vec![("CYTRACE_LANG", "de-DE")]),
+    for (args, env, raw) in [
+        (vec!["--lang", "fr", "report", &missing], vec![], "fr"),
+        (
+            vec!["report", &missing],
+            vec![("CYTRACE_LANG", "de-DE")],
+            "de-DE",
+        ),
     ] {
         let o = sb.run(&args, &env);
         assert_eq!(o.code, 1);
         assert!(o.stderr.contains("不支援的語言"), "{}", o.stderr);
         assert!(o.stderr.contains("Unsupported language"), "{}", o.stderr);
         assert!(o.stderr.contains("錯誤：無法讀取"), "{}", o.stderr);
-        assert_eq!(bare_key(&o.stderr), None, "{}", o.stderr);
+        // 兩種語言的警告都要帶出使用者給的原值
+        assert_eq!(o.stderr.matches(raw).count(), 2, "{}", o.stderr);
+        assert_no_raw(&o, raw);
     }
     // 旗標不支援時不往下找環境變數：明確給了 --lang 卻悄悄改用環境變數更難察覺
     let o = sb.run(
@@ -342,6 +511,7 @@ fn unsupported_language_warns_in_both_languages_then_uses_zh_tw() {
         &[("CYTRACE_LANG", "en-US")],
     );
     assert!(o.stderr.contains("錯誤：無法讀取"), "{}", o.stderr);
+    assert_no_raw(&o, "fr over env en-US");
 }
 
 #[cfg(feature = "server")]
@@ -367,7 +537,7 @@ mod serve {
             "--bind 不是合法的監聽位址",
         );
         assert!(en.stderr.contains("not-an-addr"), "{}", en.stderr);
-        both_langs(
+        let (en, zh) = both_langs(
             &sb,
             &["serve"],
             &[("CYTRACE_BIND", "x:y")],
@@ -375,6 +545,9 @@ mod serve {
             "CYTRACE_BIND is not a valid listen address",
             "CYTRACE_BIND 不是合法的監聽位址",
         );
+        for o in [&en, &zh] {
+            assert!(o.stderr.contains("x:y"), "{}", o.stderr);
+        }
 
         both_langs(
             &sb,
@@ -481,7 +654,10 @@ mod serve {
             if let Some(l) = env_lang {
                 cmd.env("CYTRACE_LANG", l);
             }
-            let mut child = cmd.spawn().expect("啟動 serve");
+            let mut child = {
+                let _g = spawning();
+                cmd.spawn().expect("啟動 serve")
+            };
             let (tx, rx) = mpsc::channel();
             let stdout = child.stdout.take().unwrap();
             let reader = std::thread::spawn(move || {
@@ -511,11 +687,11 @@ mod serve {
                 }
             }
             let pid = child.id().to_string();
-            assert!(Command::new("kill")
-                .args(["-INT", &pid])
-                .status()
-                .unwrap()
-                .success());
+            let killed = {
+                let _g = spawning();
+                Command::new("kill").args(["-INT", &pid]).status().unwrap()
+            };
+            assert!(killed.success());
             let deadline = Instant::now() + Duration::from_secs(30);
             let status = loop {
                 if let Some(st) = child.try_wait().unwrap() {
@@ -530,7 +706,14 @@ mod serve {
             reader.join().unwrap();
             lines.extend(rx.try_iter());
             let o = Out {
-                code: status.code().expect("退出碼"),
+                // 被訊號殺掉（handler 沒接住）時沒有退出碼——說清楚是哪一種失敗
+                code: status.code().unwrap_or_else(|| {
+                    use std::os::unix::process::ExitStatusExt;
+                    panic!(
+                        "{lang}：serve 被訊號 {:?} 終止，未優雅關閉",
+                        status.signal()
+                    )
+                }),
                 stdout: lines.join("\n"),
                 stderr: err_reader.join().unwrap(),
             };
@@ -552,16 +735,15 @@ mod serve {
             ("en-US", "error: Cannot read the password"),
             ("zh-TW", "錯誤：無法讀取密碼輸入"),
         ] {
-            let o = out_of(
+            // setsid 來自 util-linux；不存在時 exec 會 panic（紅），不會靜默略過
+            let o = exec(
                 Command::new("setsid")
                     .arg("-w")
                     .arg(env!("CARGO_BIN_EXE_cytrace"))
                     .args(["--lang", lang, "hash-password"])
                     .env_clear()
                     .env("PATH", "/usr/bin:/bin")
-                    .stdin(std::process::Stdio::null())
-                    .output()
-                    .expect("執行 setsid（util-linux）"),
+                    .stdin(std::process::Stdio::null()),
             );
             let ctx = format!("{lang}\nstdout:\n{}\nstderr:\n{}", o.stdout, o.stderr);
             assert_eq!(o.code, 1, "{ctx}");
@@ -570,42 +752,51 @@ mod serve {
         }
     }
 
-    /// 任一環境變數不是合法 UTF-8 時不得 panic（T912 前 serve 用 `std::env::vars()`，
-    /// 退出碼 101、訊息不經在地化；複審 cli#4）。
+    /// 環境變數不是合法 UTF-8：與我方無關的照常略過；我方的（`CYTRACE_*`、`GRYPE_DB_CACHE_DIR`）
+    /// 指名報錯。T912 前 serve 用 `std::env::vars()`，任一變數壞掉就 panic（複審 cli#4）；
+    /// 61719e7 改用替代字元，路徑類變數卻因此悄悄改用另一個目錄（複審 newcode#0）。
     #[test]
-    fn non_utf8_environment_is_tolerated() {
+    fn non_utf8_environment_is_tolerated_or_named() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
-        let bad = OsStr::from_bytes(b"\xff");
-        let run = |args: &[&str], var: &str| {
-            out_of(
+        let bad = OsStr::from_bytes(b"/tmp/d\xff");
+        let run = |lang: &str, sub: &str, var: &str| {
+            exec(
                 Command::new(env!("CARGO_BIN_EXE_cytrace"))
-                    .args(args)
+                    .args(["--lang", lang, sub])
                     .env_clear()
                     .env("PATH", "/usr/bin:/bin")
+                    .env("CYTRACE_ADMIN_PASSWORD_HASH", PHC.as_str())
+                    .env("CYTRACE_BIND", "127.0.0.1:1")
                     .env(var, bad)
-                    .stdin(std::process::Stdio::null())
-                    .output()
-                    .unwrap(),
+                    .stdin(std::process::Stdio::null()),
             )
         };
-        // 無關的變數：照常走到「缺管理密碼」
-        let o = run(&["--lang", "en-US", "serve"], "FOO");
+        // 無關的變數：照常走下去（health 連不上 127.0.0.1:1 → 1，訊息是「無法連線」）
+        let o = run("en-US", "health", "FOO");
         assert_eq!(o.code, 1, "{}", o.stderr);
-        assert!(
-            o.stderr.contains("CYTRACE_ADMIN_PASSWORD_HASH is not set"),
-            "{}",
-            o.stderr
-        );
-        // 我方變數本身壞掉：以替代字元呈現，照常報「位址不合法」
-        for args in [
-            &["--lang", "en-US", "serve"][..],
-            &["--lang", "en-US", "health"],
+        assert!(o.stderr.contains("Cannot connect"), "{}", o.stderr);
+        assert_operator_text("en-US", &o, "FOO");
+
+        for (sub, var) in [
+            ("serve", "CYTRACE_DATA_DIR"),
+            ("serve", "GRYPE_DB_CACHE_DIR"),
+            ("serve", "CYTRACE_BIND"),
+            ("health", "CYTRACE_BIND"),
         ] {
-            let o = run(args, "CYTRACE_BIND");
-            assert_eq!(o.code, 1, "{args:?}：{}", o.stderr);
-            assert!(o.stderr.contains('\u{FFFD}'), "{args:?}：{}", o.stderr);
-            assert!(!o.stderr.contains("panicked"), "{args:?}：{}", o.stderr);
+            for (lang, has) in [
+                ("en-US", "is not valid UTF-8"),
+                ("zh-TW", "不是合法的 UTF-8"),
+            ] {
+                let o = run(lang, sub, var);
+                let ctx = format!(
+                    "{lang} {sub} {var}\nstdout:\n{}\nstderr:\n{}",
+                    o.stdout, o.stderr
+                );
+                assert_eq!(o.code, 1, "{ctx}");
+                assert!(o.stderr.contains(has) && o.stderr.contains(var), "{ctx}");
+                assert_operator_text(lang, &o, &ctx);
+            }
         }
     }
 
@@ -652,6 +843,24 @@ mod serve {
             }
             assert_operator_text(lang, &o, &ctx);
             assert!(sb.dir.join("data/jobs/1-bad.corrupt").is_dir());
+        }
+    }
+
+    #[test]
+    fn health_ok_is_localized() {
+        let sb = Sandbox::new("health-ok");
+        let live = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = live.local_addr().unwrap().to_string();
+        let (en, zh) = both_langs(
+            &sb,
+            &["health", "--bind", &addr],
+            &[],
+            0,
+            "Service alive: ",
+            "服務存活：",
+        );
+        for o in [&en, &zh] {
+            assert!(o.stdout.contains(&addr), "{}", o.stdout);
         }
     }
 

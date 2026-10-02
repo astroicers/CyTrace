@@ -11,7 +11,11 @@
 //! - 包一層的輔助函式：函式本體以**參數**當鍵建 `Localized`（如 CLI 的 `path_err`），
 //!   其呼叫點 `path_err("k", …)` 以該函式本體的變數集合比對。
 //!
-//! 比不了而略過的：鍵不是字面值、變數清單不是字面值陣列（`&vars`）——數量列在失敗訊息。
+//! 比不了的兩種，都不准悄悄略過（T912 複審 newgates#3／#4、claims#12）：
+//! - 鍵是字面值、變數清單不是字面值陣列（`&vars`）——**必須為 0**；
+//! - 鍵不是字面值（`t(risk.i18n_key(), &[])`）——逐筆列在 [`NONLITERAL`]，次數必須完全相符，
+//!   每筆寫明由哪支測試涵蓋。新增這種呼叫就會轉紅，逼人補上涵蓋。
+//!
 //! 不在 catalog 的鍵交給 `scripts/i18n-check.py`。測試碼也一起比：以真鍵配錯變數同樣是錯。
 
 mod common;
@@ -28,13 +32,67 @@ const INTENTIONAL: &[(&str, &str, &str)] = &[(
     "測試取未插值的原文前兩字，用來構造「細節恰為譯文子字串」的邊界輸入",
 )];
 
+/// 鍵不是字面值的 `.t`／`.with_message` 呼叫：（檔案, 鍵運算式, 出現次數, 由誰涵蓋）。
+const NONLITERAL: &[(&str, &str, usize, &str)] = &[
+    (
+        "crates/cytrace-cli/src/main.rs",
+        "other.i18n_key()",
+        1,
+        "CytraceError 的分類鍵、空變數：main.rs core_errors_render_in_the_operator_language 逐變體驗無 {{",
+    ),
+    (
+        "crates/cytrace-cli/src/main.rs",
+        "key",
+        1,
+        "schema_warning 回傳的 cli.schema_ahead：operator_lang.rs report_on_a_newer_schema_names_both_versions",
+    ),
+    (
+        "crates/cytrace-cli/src/main.rs",
+        "risk.i18n_key()",
+        1,
+        "Severity 鍵、空變數：main.rs every_severity_label_renders_without_variables",
+    ),
+    (
+        "crates/cytrace-i18n/src/lib.rs",
+        "self.key",
+        1,
+        "Localized::render 的管線；各 Localized 建構點由本檔比對",
+    ),
+    (
+        "crates/cytrace-server/src/api/jobs.rs",
+        "ae.i18n_key()",
+        1,
+        "ArchiveError 鍵、空變數：archive.rs every_archive_error_message_renders_without_variables",
+    ),
+    (
+        "crates/cytrace-server/src/api/jobs.rs",
+        "k",
+        1,
+        "job 錯誤的退回鏈（server.err.{kind}／server.job.*）：tests/jobs.rs 的 message 斷言無 {{",
+    ),
+    (
+        "crates/cytrace-server/src/error.rs",
+        "k",
+        1,
+        "with_message 存下的鍵與變數的管線；各 with_message 呼叫點由本檔比對",
+    ),
+    (
+        "crates/cytrace-server/src/error.rs",
+        "&k",
+        1,
+        "ErrorKind 鍵、空變數：error.rs every_kind_message_renders_without_variables",
+    ),
+];
+
 fn placeholders(s: &str) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     let mut rest = s;
     while let Some(i) = rest.find("{{") {
         let after = &rest[i + 2..];
         let Some(j) = after.find("}}") else { break };
-        out.insert(after[..j].trim().to_string());
+        // 不 trim：與執行期的 `interpolate` 同一規則（名稱全文比對）。trim 的話，
+        // locale 寫成 `{{ addr }}` 會在這裡比對成功、執行時卻原樣印出（複審 newgates#2）
+        out.insert(after[..j].to_string());
         rest = &after[j + 2..];
     }
     out
@@ -97,6 +155,11 @@ struct Finder {
     calls: Vec<(String, String, String)>,
     /// 鍵是字面值、但變數清單比不了的呼叫數。
     skipped_dynamic: usize,
+    /// 鍵不是字面值的 `.t`／`.with_message` 呼叫：（檔案, 鍵運算式）。只記生產碼——
+    /// 測試碼以非字面值鍵呼叫，本身就是在驗那些鍵。
+    nonliteral: Vec<(String, String)>,
+    /// 目前在幾層 `#[cfg(test)]` 模組裡。
+    test_depth: usize,
 }
 
 fn lit_str(e: &Expr) -> Option<String> {
@@ -197,6 +260,12 @@ impl Finder {
 }
 
 impl<'ast> Visit<'ast> for Finder {
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        let test = common::is_cfg_test(&m.attrs);
+        self.test_depth += usize::from(test);
+        visit::visit_item_mod(self, m);
+        self.test_depth -= usize::from(test);
+    }
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
         self.fn_stack.push(f.sig.ident.to_string());
         visit::visit_item_fn(self, f);
@@ -224,10 +293,18 @@ impl<'ast> Visit<'ast> for Finder {
             Expr::MethodCall(m)
                 if (m.method == "t" || m.method == "with_message") && m.args.len() == 2 =>
             {
-                if let Some(key) = lit_str(&m.args[0]) {
-                    let vars = var_array(&m.args[1]).map_or(Vars::Dynamic, Vars::Known);
-                    let shape = if m.method == "t" { "t" } else { "with_message" };
-                    self.site(shape, key, vars);
+                match lit_str(&m.args[0]) {
+                    Some(key) => {
+                        let vars = var_array(&m.args[1]).map_or(Vars::Dynamic, Vars::Known);
+                        let shape = if m.method == "t" { "t" } else { "with_message" };
+                        self.site(shape, key, vars);
+                    }
+                    None if self.test_depth == 0 => {
+                        use quote::ToTokens;
+                        let k = m.args[0].to_token_stream().to_string().replace(' ', "");
+                        self.nonliteral.push((self.file.clone(), k));
+                    }
+                    None => {}
                 }
             }
             Expr::Call(c) => {
@@ -284,6 +361,11 @@ fn a(cat: &Catalog, x: &str) {
     let vs = [("d", x)];
     let _ = cat.t("k.dynamic", &vs);
     let _ = Localized::new("k.nested").var("inner", cat.t("k.inner", &[]));
+    let _ = cat.t(risk.i18n_key(), &[]);
+}
+#[cfg(test)]
+mod tests {
+    fn t(cat: &Catalog, k: &str) { let _ = cat.t(k, &[]); }
 }
 "#;
     let mut f = find("x.rs", src);
@@ -309,6 +391,11 @@ fn a(cat: &Catalog, x: &str) {
     .map(|(a, b)| (a.to_string(), b))
     .collect();
     assert_eq!(got, want);
+    // 鍵非字面值：生產碼記下，cfg(test) 模組內不記
+    assert_eq!(
+        f.nonliteral,
+        vec![("x.rs".to_string(), "risk.i18n_key()".to_string())]
+    );
 }
 
 #[test]
@@ -325,7 +412,9 @@ fn code_vars_match_catalog_placeholders() {
         all.helpers.extend(f.helpers);
         all.calls.extend(f.calls);
         all.skipped_dynamic += f.skipped_dynamic;
+        all.nonliteral.extend(f.nonliteral);
     }
+
     let helpers = all.helpers.clone();
     let helper_sites = resolve_helpers(&mut all, &helpers);
 
@@ -372,16 +461,49 @@ fn code_vars_match_catalog_placeholders() {
         stale.join("\n")
     );
 
+    assert_eq!(
+        all.skipped_dynamic, 0,
+        "有鍵是字面值、但變數清單不是字面值陣列的呼叫（如 `let v = [..]; t(\"k\", &v)`）——\
+         比不了就等於沒驗；請改寫成 `t(\"k\", &[(\"a\", …)])`"
+    );
+
+    // 鍵不是字面值的呼叫：與 NONLITERAL 逐筆、逐次數相符
+    let mut drift = Vec::new();
+    let mut counted = BTreeMap::<(&str, &str), usize>::new();
+    for (f, k) in &all.nonliteral {
+        *counted.entry((f.as_str(), k.as_str())).or_default() += 1;
+    }
+    for ((f, k), n) in &counted {
+        let want = NONLITERAL
+            .iter()
+            .find(|(nf, nk, _, _)| nf == f && nk == k)
+            .map_or(0, |e| e.2);
+        if *n != want {
+            drift.push(format!("  {f}「{k}」：實際 {n} 處，清單記 {want} 處"));
+        }
+    }
+    for (nf, nk, want, _) in NONLITERAL {
+        if !counted.contains_key(&(*nf, *nk)) {
+            drift.push(format!(
+                "  {nf}「{nk}」：實際 0 處，清單記 {want} 處（已移除——請更新清單）"
+            ));
+        }
+    }
+    assert!(
+        drift.is_empty(),
+        "鍵不是字面值的呼叫與 NONLITERAL 不符（新增的請寫明由哪支測試驗它不殘留 {{{{…}}}}）：\n{}",
+        drift.join("\n")
+    );
+
     // 反空轉：三種形狀都要實際比到東西（數字是本檔撰寫時的實測下限，只該往上長）
     println!(
-        "比對：{checked:?}，輔助函式呼叫 {helper_sites}，比不了而略過 {}",
-        all.skipped_dynamic
+        "比對：{checked:?}，輔助函式呼叫 {helper_sites}，變數比不了 {}，鍵非字面值 {}",
+        all.skipped_dynamic,
+        all.nonliteral.len()
     );
     let n = |k: &str| checked.get(k).copied().unwrap_or(0);
     assert!(
         n("Localized") >= 20 && n("t") >= 30 && n("with_message") >= 3 && helper_sites >= 3,
-        "比對數量過少——解析可能已失效：{checked:?}，輔助函式呼叫 {helper_sites}，\
-         比不了而略過 {} 處",
-        all.skipped_dynamic
+        "比對數量過少——解析可能已失效：{checked:?}，輔助函式呼叫 {helper_sites}"
     );
 }

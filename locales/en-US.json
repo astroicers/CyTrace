@@ -92,7 +92,8 @@
       "data_dir_failed": "Cannot create data directory {{path}}: {{detail}}",
       "data_dir_unreadable": "Cannot read data directory {{path}}: {{detail}}",
       "listen_failed": "Cannot serve on {{addr}}: {{detail}}",
-      "runtime_failed": "Cannot create the async runtime: {{detail}}"
+      "runtime_failed": "Cannot create the async runtime: {{detail}}",
+      "env_not_utf8": "Environment variable {{name}} is not valid UTF-8; fix it (paths can be given with the matching command-line flag instead)"
     },
     "runtime": {
       "job_quarantined_missing": "Job directory has no job.json; quarantined to {{to}}",

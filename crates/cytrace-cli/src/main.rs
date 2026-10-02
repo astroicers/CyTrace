@@ -315,13 +315,7 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                     tls_cert: tls_cert.clone(),
                     tls_key: tls_key.clone(),
                 },
-                // 不用 `std::env::vars()`：任一變數不是合法 UTF-8 時它會 panic（與我方無關的
-                // 變數也一樣）。名稱非 UTF-8 的略過；值以替代字元保留，壞掉的 CYTRACE_* 照常報錯
-                std::env::vars_os()
-                    .filter_map(|(k, v)| {
-                        Some((k.into_string().ok()?, v.to_string_lossy().into_owned()))
-                    })
-                    .collect(),
+                server_env()?,
             )?;
             cytrace_server::serve(cfg, lang)?;
             Ok(EXIT_OK)
@@ -331,12 +325,11 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
         #[cfg(feature = "server")]
         Command::Health { bind } => {
             // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
-            let bind_raw = bind
-                .clone()
-                .or_else(|| {
-                    std::env::var_os("CYTRACE_BIND").map(|v| v.to_string_lossy().into_owned())
-                })
-                .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string());
+            let bind_raw = match bind.clone() {
+                Some(b) => b,
+                None => env_utf8("CYTRACE_BIND")?
+                    .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string()),
+            };
             let target: std::net::SocketAddr = bind_raw.parse().map_err(|_| {
                 Localized::new("cli.err.invalid_address").var("value", bind_raw.as_str())
             })?;
@@ -352,6 +345,46 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                 }
             }
         }
+    }
+}
+
+/// 我方環境變數（`CYTRACE_*`、`GRYPE_DB_CACHE_DIR`）的值必須是 UTF-8。
+///
+/// 不用 `std::env::vars()`：任一變數（含與我方無關的）不是 UTF-8 時它會 panic。也不能以替代字元
+/// 帶過：路徑類變數會悄悄改用另一個目錄——`CYTRACE_DATA_DIR=d\xff` 實測寫進 `d\u{FFFD}/jobs`
+/// 且不留任何訊息，同樣的位元組經 `--data-dir` 卻是正確的目錄（T912 複審 newcode#0）。
+#[cfg(feature = "server")]
+fn is_ours(name: &str) -> bool {
+    name.starts_with("CYTRACE_") || name == "GRYPE_DB_CACHE_DIR"
+}
+
+#[cfg(feature = "server")]
+fn env_not_utf8(name: &str) -> Localized {
+    Localized::new("server.startup.env_not_utf8").var("name", name)
+}
+
+/// serve 的環境：名稱不是 UTF-8 的、或與我方無關且值不是 UTF-8 的略過；我方變數壞掉即錯誤。
+#[cfg(feature = "server")]
+fn server_env() -> Result<std::collections::HashMap<String, String>, Localized> {
+    let mut env = std::collections::HashMap::new();
+    for (k, v) in std::env::vars_os() {
+        let Ok(k) = k.into_string() else { continue };
+        match v.into_string() {
+            Ok(v) => {
+                env.insert(k, v);
+            }
+            Err(_) if is_ours(&k) => return Err(env_not_utf8(&k)),
+            Err(_) => {}
+        }
+    }
+    Ok(env)
+}
+
+#[cfg(feature = "server")]
+fn env_utf8(name: &str) -> Result<Option<String>, Localized> {
+    match std::env::var_os(name) {
+        None => Ok(None),
+        Some(v) => v.into_string().map(Some).map_err(|_| env_not_utf8(name)),
     }
 }
 
@@ -739,6 +772,9 @@ mod tests {
                 let detail = e.untranslatable_detail().unwrap_or_default();
                 assert!(out.contains(&detail), "{lang} {e:?}：{out}");
                 assert!(!out.contains(e.i18n_key()), "{lang} 裸鍵：{out}");
+                // `render_core_error` 以 `t(other.i18n_key(), &[])` 渲染——鍵不是字面值，
+                // 插值對帳比不到（T912 複審 newgates#3）
+                assert!(!out.contains("{{"), "{lang} 殘留佔位符：{out}");
                 assert!(
                     !out.ends_with(": ") && !out.ends_with('：'),
                     "{lang} 空細節：{out}"
@@ -800,6 +836,19 @@ mod tests {
                 Severity::from_grype_str(level).i18n_key(),
                 format!("severity.{level}")
             );
+        }
+    }
+
+    /// `cli.done` 以 `t(risk.i18n_key(), &[])` 渲染風險等級——鍵不是字面值，插值對帳比不到，
+    /// 在此逐等級驗（T912 複審 newgates#3）。
+    #[test]
+    fn every_severity_label_renders_without_variables() {
+        for level in failon::FAIL_ON_LEVELS {
+            let key = Severity::from_grype_str(level).i18n_key();
+            for lang in ["zh-TW", "en-US"] {
+                let m = Catalog::load(lang).t(key, &[]);
+                assert!(m != key && !m.contains("{{"), "{lang} {key}：{m}");
+            }
         }
     }
 

@@ -61,6 +61,37 @@ fn every_key_has_the_same_placeholders_in_both_languages() {
     assert!(diffs.is_empty(), "佔位符不一致：\n{}", diffs.join("\n"));
 }
 
+/// 佔位符名稱必須是單純的識別字，不得含空白。
+///
+/// Rust 的 `interpolate` 以名稱**全文**比對變數、不去頭尾空白；react-i18next 則會 trim。
+/// 同一份 locale 若寫成 `{{ addr }}`，console 與報表正常顯示，CLI／server 卻原樣印出
+/// `{{ addr }}`——而兩語佔位符集合一致、程式碼變數也對得上（若比對時 trim），沒有任何閘會紅
+/// （T912 複審 newgates#2 實測）。故在 locale 端直接禁止這種寫法。
+#[test]
+fn placeholder_names_are_plain_identifiers() {
+    let ok = |n: &str| {
+        let mut cs = n.chars();
+        cs.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && cs.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let mut bad = Vec::new();
+    for lang in ["zh-TW", "en-US"] {
+        for (k, v) in load(lang) {
+            for n in placeholders(&v) {
+                if !ok(&n) {
+                    bad.push(format!("{lang} {k}: {{{{{n}}}}}"));
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "佔位符名稱不是單純識別字：\n{}",
+        bad.join("\n")
+    );
+    assert!(!ok(" addr ") && !ok("addr ") && !ok("") && ok("addr") && ok("max_mb"));
+}
+
 #[test]
 fn placeholder_extractor_sees_what_it_should() {
     assert_eq!(

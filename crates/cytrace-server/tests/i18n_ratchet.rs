@@ -9,9 +9,13 @@
 //! **看得到的**：字串、字元、C 字串字面值（`"…"`、`'：'`、`c"…"`；含巨集與非 doc 屬性內）。
 //! **看不到的**（已知限制）：
 //! - doc 註解——一般而言不是使用者可見字串，但 **clap derive 的 doc 註解就是 `--help` 文字**，
-//!   目前整頁中文；在地化與相應的閘屬 T914；
+//!   目前整頁中文；`--help` 第一行取自 Cargo.toml 的 description，也不在掃描範圍。在地化與
+//!   相應的閘屬 T914；
 //! - `include_str!` 引入的檔案內容（現有用途是 locale、報表樣板，本來就是資料）；
 //! - 以程式組出的字元（`char::from_u32`、`\u{…}` 以外的計算）。
+//!
+//! 範圍外引入的原始碼（`#[path]`、`include!`）會讓掃描整段漏掉，由
+//! `production_code_has_no_out_of_tree_modules` 直接禁止。
 //!
 //! 本測試是雙向的：
 //! - 出現清單外的中文字面值 → 紅（使用者可見字串必須走 i18n 鍵）
@@ -141,7 +145,8 @@ impl<'ast> Visit<'ast> for Collector {
         self.tokens(m.tokens.clone());
     }
     fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        // doc 註解不是使用者可見字串；其他屬性（如 #[error("…")]）照算
+        // doc 註解略過（一般而言不是使用者可見字串；clap derive 的 doc 註解是例外——
+        // 那是 `--help` 文字，屬 T914 的已知限制，見檔頭）；其他屬性（如 #[error("…")]）照算
         if !a.path().is_ident("doc") {
             if let syn::Meta::List(l) = &a.meta {
                 self.tokens(l.tokens.clone());
@@ -234,8 +239,9 @@ impl<'ast> Visit<'ast> for Collector {
 
 /// 抽取器的正負對照：反空轉只驗「抽到東西」不夠，要驗「抓得到違規」。
 /// 前 8 組是歷輪複審實際找到、前一版掃描器會吃掉其後生產碼的形狀（第二輪 1 組、第三輪 2 組、
-/// 第四輪 5 組）；最後 2 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
-/// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）。
+/// 第四輪 5 組）；第 9、10 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
+/// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）；
+/// 第 11 組（字元與 C 字串字面值）來自 T912 複審 gates#9。
 #[test]
 fn extractor_sees_past_test_only_items() {
     let cases: &[(&str, &str, &[&str])] = &[
@@ -347,5 +353,52 @@ fn cjk_literals_only_in_exempt_places() {
         drift.is_empty(),
         "EXEMPT 與程式碼次數不符（多了＝複製了例外字串；少了＝修掉後請更新清單）：\n{}",
         drift.join("\n")
+    );
+}
+
+/// 掃描範圍是各 target 目錄底下的檔案（common/mod.rs）。`#[path = "../外面.rs"] mod x;` 或
+/// `include!("x.rs")` 會把目錄外的程式碼編進生產碼，兩支 i18n 閘卻都看不到（T912 複審
+/// newgates#7 實測：types 以 `#[path]` 引入目錄外的中文常數，全套測試仍綠）。
+/// 目前生產碼沒有任何這種用法，故直接禁止，而不是去追模組樹。
+#[test]
+fn production_code_has_no_out_of_tree_modules() {
+    #[derive(Default)]
+    struct Find(Vec<String>);
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+            if m.attrs.iter().any(|a| a.path().is_ident("path")) {
+                self.0.push(format!("#[path] mod {}", m.ident));
+            }
+            visit::visit_item_mod(self, m);
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            if m.path.segments.last().is_some_and(|s| s.ident == "include") {
+                self.0.push("include!(…)".into());
+            }
+        }
+    }
+    let scan = |src: &str| {
+        let mut f = Find::default();
+        f.visit_file(&syn::parse_file(src).expect("解析"));
+        f.0
+    };
+    // 自檢：兩種形狀都抓得到；include_str! 是資料（locale、樣板），不算
+    assert_eq!(
+        scan("#[path = \"../x.rs\"] mod x;\nfn f() { include!(\"y.rs\"); }\nconst S: &str = include_str!(\"z.json\");\n"),
+        vec!["#[path] mod x".to_string(), "include!(…)".to_string()]
+    );
+
+    let sources = common::production_sources();
+    common::assert_scope_not_vacuous(&sources, 30);
+    let mut found = Vec::new();
+    for f in &sources.files {
+        for hit in scan(&std::fs::read_to_string(&f.path).unwrap()) {
+            found.push(format!("  {}: {hit}", f.rel));
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "生產碼引入了掃描範圍外的原始碼（i18n 閘看不到）：\n{}",
+        found.join("\n")
     );
 }

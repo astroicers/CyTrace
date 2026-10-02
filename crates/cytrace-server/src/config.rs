@@ -188,6 +188,18 @@ mod tests {
     use super::*;
     use std::sync::LazyLock;
 
+    /// 以兩種語言渲染：不得殘留佔位符，且必須帶出實際的值。
+    fn assert_renders(err: &Localized, must_contain: &str) {
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            let out = err.render(lang.catalog());
+            assert!(!out.contains("{{"), "{lang:?} 殘留佔位符：{out}");
+            assert!(
+                out.contains(must_contain),
+                "{lang:?} 應含 {must_contain}：{out}"
+            );
+        }
+    }
+
     /// 測試用 PHC（argon2 hash 一次 ~100ms，全部測試共用）。
     pub(crate) static TEST_PHC: LazyLock<String> =
         LazyLock::new(|| auth::hash_password("test-password-123").unwrap());
@@ -329,12 +341,15 @@ mod tests {
                 err.vars,
                 vec![("name", name.to_string()), ("value", "12x".to_string())]
             );
+            assert_renders(&err, name);
+            assert_renders(&err, "12x");
         }
 
         let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_SCAN_ROOTS", "bad")]))
             .unwrap_err();
         assert_eq!(err.key, "server.startup.scan_roots_format");
         assert_eq!(err.vars, vec![("item", "bad".to_string())]);
+        assert_renders(&err, "bad");
         let err = ServerConfig::resolve(
             CliFlags::default(),
             env(&[("CYTRACE_SCAN_ROOTS", "t=relative/p")]),
@@ -342,5 +357,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.key, "server.startup.scan_roots_not_absolute");
         assert_eq!(err.vars, vec![("item", "t=relative/p".to_string())]);
+        assert_renders(&err, "t=relative/p");
     }
 }

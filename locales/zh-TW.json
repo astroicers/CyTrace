@@ -92,7 +92,8 @@
       "data_dir_failed": "無法建立資料目錄 {{path}}：{{detail}}",
       "data_dir_unreadable": "無法讀取資料目錄 {{path}}：{{detail}}",
       "listen_failed": "無法在 {{addr}} 提供服務：{{detail}}",
-      "runtime_failed": "無法建立非同步執行環境：{{detail}}"
+      "runtime_failed": "無法建立非同步執行環境：{{detail}}",
+      "env_not_utf8": "環境變數 {{name}} 的值不是合法的 UTF-8；請改正該變數（路徑可改用對應的命令列旗標）"
     },
     "runtime": {
       "job_quarantined_missing": "job 目錄缺少 job.json，已隔離至 {{to}}",

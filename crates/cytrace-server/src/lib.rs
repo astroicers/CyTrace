@@ -32,23 +32,30 @@ use std::time::Duration;
 pub fn serve(mut cfg: ServerConfig, lang: &str) -> Result<(), Localized> {
     cfg.lang = error::Lang::from_code(lang);
     let cat = cfg.lang.catalog();
+    let runtime_failed = |e: std::io::Error| {
+        Localized::new("server.startup.runtime_failed").var("detail", e.to_string())
+    };
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|e| {
-            Localized::new("server.startup.runtime_failed").var("detail", e.to_string())
-        })?;
+        .map_err(runtime_failed)?;
     rt.block_on(async {
+        // 中止訊號在綁定位址**之前**就掛好：listening 行印出後按下的 Ctrl-C 一定接得到。
+        // 原本 `ctrl_c()` 在 spawn 出的 task 第一次被 poll 時才註冊，與 listening 行沒有先後
+        // 保證——剛印出就按的 Ctrl-C 可能直接殺掉行程（未優雅關閉）或被吞掉（T912 複審 newgates#5
+        // 以負載實測重現）
+        let mut interrupt = interrupt_signal().map_err(runtime_failed)?;
+
         let app =
             router::build_router(cfg.clone())?.into_make_service_with_connect_info::<SocketAddr>();
         let handle = axum_server::Handle::new();
 
-        // ctrl_c → graceful shutdown（10s 寬限）
+        // 中止訊號 → graceful shutdown（10s 寬限）
         tokio::spawn({
             let handle = handle.clone();
             let msg = cat.t("server.shutdown", &[]);
             async move {
-                if tokio::signal::ctrl_c().await.is_ok() {
+                if interrupt.recv().await.is_some() {
                     println!("{msg}");
                     handle.graceful_shutdown(Some(Duration::from_secs(10)));
                 }
@@ -94,4 +101,16 @@ pub fn serve(mut cfg: ServerConfig, lang: &str) -> Result<(), Localized> {
         }
         Ok(())
     })
+}
+
+/// 中止訊號（Ctrl-C）。**同步**註冊：回傳時 handler 已經掛上。
+#[cfg(unix)]
+fn interrupt_signal() -> std::io::Result<tokio::signal::unix::Signal> {
+    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+}
+
+/// 中止訊號（Ctrl-C）。**同步**註冊：回傳時 handler 已經掛上。
+#[cfg(windows)]
+fn interrupt_signal() -> std::io::Result<tokio::signal::windows::CtrlC> {
+    tokio::signal::windows::ctrl_c()
 }

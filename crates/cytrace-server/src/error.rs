@@ -295,6 +295,72 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::*;
 
+    /// 全部變體。`exhaustive` 的 match 讓新增變體時編譯失敗，提醒把它加進陣列。
+    fn all_kinds() -> [ErrorKind; 17] {
+        fn exhaustive(k: ErrorKind) {
+            match k {
+                ErrorKind::Engine
+                | ErrorKind::Parse
+                | ErrorKind::Io
+                | ErrorKind::Config
+                | ErrorKind::DbMissing
+                | ErrorKind::NotFound
+                | ErrorKind::Internal
+                | ErrorKind::Auth
+                | ErrorKind::Csrf
+                | ErrorKind::RateLimited
+                | ErrorKind::Validation
+                | ErrorKind::ForbiddenPath
+                | ErrorKind::Conflict
+                | ErrorKind::QueueFull
+                | ErrorKind::PayloadTooLarge
+                | ErrorKind::UnsupportedArchive
+                | ErrorKind::MethodNotAllowed => {}
+            }
+        }
+        let all = [
+            ErrorKind::Engine,
+            ErrorKind::Parse,
+            ErrorKind::Io,
+            ErrorKind::Config,
+            ErrorKind::DbMissing,
+            ErrorKind::NotFound,
+            ErrorKind::Internal,
+            ErrorKind::Auth,
+            ErrorKind::Csrf,
+            ErrorKind::RateLimited,
+            ErrorKind::Validation,
+            ErrorKind::ForbiddenPath,
+            ErrorKind::Conflict,
+            ErrorKind::QueueFull,
+            ErrorKind::PayloadTooLarge,
+            ErrorKind::UnsupportedArchive,
+            ErrorKind::MethodNotAllowed,
+        ];
+        all.iter().for_each(|k| exhaustive(*k));
+        all
+    }
+
+    /// `into_response` 沒有 `with_message` 時以 `t(&kind.i18n_key(), &[])` 渲染——鍵不是字面值，
+    /// 插值對帳（tests/i18n_call_vars.rs）比不到，在此逐變體驗（T912 複審 newgates#3）。
+    #[test]
+    fn every_kind_message_renders_without_variables() {
+        let kinds = all_kinds();
+        let distinct: std::collections::BTreeSet<_> = kinds.iter().map(|k| k.as_str()).collect();
+        assert_eq!(distinct.len(), kinds.len(), "all_kinds 有重複");
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            for k in kinds {
+                let key = k.i18n_key();
+                let m = lang.catalog().t(&key, &[]);
+                assert_ne!(m, key, "{lang:?} 查不到 {key}");
+                assert!(
+                    !m.contains("{{"),
+                    "{lang:?} {key} 需要變數，不能以空變數渲染：{m}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn negotiate_prefers_query_over_header() {
         assert_eq!(

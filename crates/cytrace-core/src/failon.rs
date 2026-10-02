@@ -2,7 +2,8 @@
 
 use cytrace_types::{CbomStatus, CryptoInventory, QuantumStatus, Severity, Vulnerability};
 
-/// `--fail-on`／API `fail_on` 的合法值。CLI（clap，大小寫不拘）與 server API 共用這一份。
+/// `--fail-on`／API `fail_on` 的合法值，CLI 與 server API 共用這一份；比對方式各自不同：
+/// CLI（clap）不分大小寫，API 全文比對（只收小寫；行為不變，ADR-011）。
 ///
 /// `Severity::from_grype_str` 把任何不認得的字串對到最低的 `unknown`——若不先驗值，
 /// 打錯字（`hgih`）等於「有任何弱點就觸發」（T912 複審 cli#2）。
