@@ -4,6 +4,7 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type { QuantumStatus, Severity } from '../types'
 import { QUANTUM_KEY, SEVERITY_KEY } from '../types'
 import { SUPPORTED_LANGS } from '../i18n'
+import { effectiveLang } from '../langs'
 
 const SEV_BG: Record<Severity, string> = {
   Critical: 'bg-sev-critical',
@@ -51,7 +52,7 @@ export function QuantumBadge({ status }: { status: QuantumStatus }) {
 function LangSwitch() {
   const { i18n } = useTranslation()
   const current =
-    SUPPORTED_LANGS.find((l) => l.code === i18n.language) ?? SUPPORTED_LANGS[0]
+    SUPPORTED_LANGS.find((l) => l.code === effectiveLang(i18n)) ?? SUPPORTED_LANGS[0]
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger

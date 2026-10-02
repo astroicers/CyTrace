@@ -114,9 +114,10 @@ mod tests {
     //! 初版逐行比對、只看行尾為 `,`/`)` 的行、只掃 `src/api/` 一層——rustfmt 收成單行的
     //! 簽名、`axum::Json<T>` 全限定寫法、`as` 別名、router.rs 裡的 handler 全都漏過；
     //! 反空轉 `wrapped >= 10` 只證明「讀到了檔」，沒證明「抓得到違規」
-    //! （T909 對抗式複審 major，3/3 確認）。本版：
+    //! （T909 對抗式複審 v3／v6／v9，3/3、3/3、2/3 確認）。本版：
     //! 1. 以 `fn` 簽名為單位解析參數（括號配對、頂層逗號切分），與排版無關；
-    //! 2. 型別比對涵蓋 `Json<` / `axum::Json<` / `axum::extract::Json<` 與 `use … Json as X` 別名；
+    //! 2. 型別比對涵蓋 `Json<` / `axum::Json<` / `axum::extract::Json<` 與別名（整句解析 `use`，
+    //!    含分組與多行；另認 `type X<T> = axum::Json<T>`——第二輪複審 claims#3）；
     //! 3. 掃整個 `src/`（遞迴）；
     //! 4. **正向對照**：先對內嵌的已知違規樣本跑比對器，斷言全數抓到——
     //!    反空轉驗的是偵測能力，不是讀檔。
@@ -214,21 +215,64 @@ mod tests {
     }
 
     /// 回報檔案內所有以裸 axum `Json`（含全限定與別名）或清單外裸 `ConnectInfo` 作為參數的位置。
+    /// 檔內所有指向 axum `Json` 的別名。
+    ///
+    /// 解析整句 `use …;`（攤平空白後切到 `;`），所以分組（`use axum::{Json as J, Router};`）、
+    /// 多行分組、`pub(crate) use` 都認得；另認 `type X<T> = axum::Json<T>;`。
+    /// 初版只認以 `use axum::Json as ` 起頭的單行，分組別名可以繞過——而本 codebase 自己
+    /// 就用分組 import（T909 第二輪複審 claims#3，3/3 確認）。
+    fn json_aliases(src: &str) -> Vec<String> {
+        let flat = src.split_whitespace().collect::<Vec<_>>().join(" ");
+        let ident = |s: &str| -> String {
+            s.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect()
+        };
+        let starts_stmt =
+            |i: usize| i == 0 || matches!(flat.as_bytes()[i - 1], b' ' | b'{' | b'}' | b')' | b';');
+        let mut names = Vec::new();
+        for (i, _) in flat.match_indices("use ") {
+            if !starts_stmt(i) {
+                continue;
+            }
+            let stmt = flat[i..].split(';').next().unwrap_or("");
+            if !stmt.contains("axum") {
+                continue;
+            }
+            for (j, _) in stmt.match_indices("Json as ") {
+                let before = stmt[..j].chars().last();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue; // ApiJson as … 之類
+                }
+                names.push(ident(&stmt[j + "Json as ".len()..]));
+            }
+        }
+        for (i, _) in flat.match_indices("type ") {
+            if !starts_stmt(i) {
+                continue;
+            }
+            let stmt = flat[i + "type ".len()..].split(';').next().unwrap_or("");
+            if let Some((lhs, rhs)) = stmt.split_once('=') {
+                let rhs: String = rhs.split_whitespace().collect();
+                if ["Json<", "axum::Json<", "axum::extract::Json<"]
+                    .iter()
+                    .any(|p| rhs.starts_with(p))
+                {
+                    names.push(ident(lhs.trim()));
+                }
+            }
+        }
+        names.retain(|n| !n.is_empty());
+        names
+    }
+
     fn bare_extractors(src: &str) -> Vec<String> {
-        // `use axum::Json as X;` / `use axum::extract::Json as X;` 的別名
         let mut json_names: Vec<String> = vec![
             "Json".into(),
             "axum::Json".into(),
             "axum::extract::Json".into(),
         ];
-        for line in src.lines() {
-            let t = line.trim();
-            for pre in ["use axum::Json as ", "use axum::extract::Json as "] {
-                if let Some(rest) = t.strip_prefix(pre) {
-                    json_names.push(rest.trim_end_matches(';').trim().to_string());
-                }
-            }
-        }
+        json_names.extend(json_aliases(src));
         let mut hits = Vec::new();
         for p in fn_params(src) {
             let Some(ty) = param_type(&p) else { continue };
@@ -252,8 +296,12 @@ mod tests {
             // 全限定路徑
             "pub async fn b(\n    axum::Json(b): axum::Json<T>,\n) -> R {",
             "pub async fn c(body: axum::extract::Json<T>) -> R {",
-            // 別名
+            // 別名：單行、分組、多行分組、可見性前綴、type 別名
             "use axum::Json as J;\npub async fn d(J(b): J<T>) -> R {",
+            "use axum::{Json as J2, Router};\npub async fn d2(J2(b): J2<T>) -> R {",
+            "use axum::extract::{\n    Json as J3,\n    State,\n};\npub async fn d3(J3(b): J3<T>) -> R {",
+            "pub(crate) use axum::Json as J6;\npub async fn d6(J6(b): J6<T>) -> R {",
+            "type J5<T> = axum::Json<T>;\npub async fn d5(J5(b): J5<T>) -> R {",
             // 裸 ConnectInfo
             "pub async fn e(ConnectInfo(p): ConnectInfo<SocketAddr>) -> R {",
         ];
@@ -338,5 +386,43 @@ mod tests {
             wrapped >= 10,
             "只解析到 {wrapped} 處包裝型別參數（預期 ≥ 10）——簽名解析可能失效"
         );
+    }
+
+    /// rejection 原生是 **5xx**（伺服器自己的 bug）→ `Internal`，不得被壓成 400 怪到用戶端。
+    ///
+    /// `bad_request` 的這個分支原本沒有任何測試：刪掉它整個 server 測試仍全綠
+    /// （T909 第二輪複審 tests#3，3/3 確認）。沒經 router 的 parts 抽 `Path` 會得到
+    /// `MissingPathParams`——axum 原生回 500（「This is a bug in the application」）。
+    #[tokio::test]
+    async fn server_error_rejection_maps_to_internal_not_400() {
+        use axum::extract::FromRequestParts;
+        use axum::response::IntoResponse;
+        for (lang, want_cjk) in [("zh-TW", true), ("en-US", false)] {
+            let (mut parts, ()) = axum::http::Request::builder()
+                .uri("/x")
+                .header(axum::http::header::ACCEPT_LANGUAGE, lang)
+                .body(())
+                .unwrap()
+                .into_parts();
+            let Err(err) = super::ApiPath::<String>::from_request_parts(&mut parts, &()).await
+            else {
+                panic!("沒經 router 的 parts 應抽不出 Path");
+            };
+            let resp = err.into_response();
+            assert_eq!(
+                resp.status(),
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "{lang}"
+            );
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(v["error"]["kind"], "internal", "{lang}");
+            assert_eq!(v["error"]["i18n_key"], "server.err.internal", "{lang}");
+            let msg = v["error"]["message"].as_str().unwrap();
+            let cjk = msg.chars().any(|c| matches!(c as u32, 0x4E00..=0x9FFF));
+            assert_eq!(cjk, want_cjk, "{lang}: message 未依語系渲染：{msg}");
+        }
     }
 }

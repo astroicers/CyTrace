@@ -71,6 +71,19 @@ impl ScanEngine for SlowEngine {
     }
 }
 
+/// syft 失敗：job 以 `server.err.engine` 失敗（查詢時渲染 message 的測試用）。
+struct FailingSbomEngine;
+impl ScanEngine for FailingSbomEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        Err(cytrace_core::CytraceError::Engine(
+            "syft exit Some(1): ".into(),
+        ))
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+}
+
 struct TestEnv {
     app: Router,
     #[allow(dead_code)]
@@ -877,7 +890,7 @@ async fn t909_invalid_status_filter_is_localized() {
         );
         assert!(msg.contains("bogus"), "{lang}: {msg}");
         // detail 精確等於原始值：has_cjk 只擋中文，英文說明句流回 detail 也是同一個 bug
-        // 的鏡像（T909 對抗式複審 v17，3/3 確認）
+        // 的鏡像（T909 對抗式複審 v14：反證票 1/3、未達確認門檻；reviewer 的突變實測可重現，故仍修）
         assert_eq!(v["error"]["detail"], "bogus", "{lang}: detail 應為原始值");
     }
 }
@@ -1068,6 +1081,284 @@ async fn t909_login_malformed_json_returns_json_contract() {
     }
 }
 
+/// 路徑命中、方法不符 → JSON 405（依語系渲染、附 `Allow`），且**認證仍先於方法判定**。
+///
+/// 原本是 axum 預設的 405 空 body：繞過 `{"error":{…}}` 契約與請求語系。e5e1f21 以「未確認
+/// （1/3）」不修，但同一個 commit 修了好幾項 1/3 的發現，該理由不成立（T909 第二輪複審 claims#4）。
+#[tokio::test]
+async fn t909_method_not_allowed_is_json_and_auth_first() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    // /api/v1/session 同時掛在 public（POST）與 protected（GET/DELETE），合併後也要走 JSON 405
+    for (route, allow) in [
+        ("/api/v1/jobs", ["GET", "POST"].as_slice()),
+        ("/api/v1/jobs/abc", ["GET", "DELETE"].as_slice()),
+        ("/api/v1/session", ["GET", "DELETE", "POST"].as_slice()),
+    ] {
+        for lang in LANGS {
+            let req = with_csrf_and(Request::put(format!("{route}?lang={lang}")))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap();
+            let resp = env.app.clone().oneshot(req).await.unwrap();
+            let got_allow = resp
+                .headers()
+                .get(header::ALLOW)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            for m in allow {
+                assert!(
+                    got_allow.contains(m),
+                    "{route}: Allow 缺 {m}：{got_allow:?}"
+                );
+            }
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let v: serde_json::Value = serde_json::from_slice(&body)
+                .unwrap_or_else(|_| panic!("{route}: 405 不是 JSON：{body:?}"));
+            assert_api_error(
+                route,
+                lang,
+                st,
+                &v,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "server.err.method_not_allowed",
+            );
+        }
+    }
+    // 未登入：受保護路徑先回 401，不得以 405 透露方法表
+    let req = with_csrf_and(Request::put("/api/v1/jobs"))
+        .body(Body::empty())
+        .unwrap();
+    let (st, v) = send_json(&env.app, req).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "未登入應先 401：{v}");
+}
+
+/// job 失敗訊息依**查詢時**的請求語系渲染（get 與 list 都是），且不寫回 job.json。
+///
+/// 原本 get / list 完全不看語系：兩種語系拿到逐位元組相同的 `{kind, i18n_key, detail}`，
+/// 非 console 用戶端沒有任何語言的訊息（T909 第二輪複審 claims#5）。
+#[tokio::test]
+async fn t909_failed_job_message_follows_query_language() {
+    let env = build_env(Arc::new(FailingSbomEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (st, v) = create_job(&env.app, &cookie, "app", None).await;
+    assert_eq!(st, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "failed", "{done}");
+
+    let mut seen = Vec::new();
+    for lang in LANGS {
+        for (label, url) in [
+            ("get", format!("/api/v1/jobs/{id}?lang={lang}")),
+            ("list", format!("/api/v1/jobs?lang={lang}")),
+        ] {
+            let req = Request::get(&url)
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap();
+            let (st, v) = send_json(&env.app, req).await;
+            assert_eq!(st, StatusCode::OK);
+            let job = if label == "get" { &v } else { &v["jobs"][0] };
+            let e = &job["error"];
+            assert_eq!(e["i18n_key"], "server.err.engine", "{label}/{lang}: {e}");
+            assert_eq!(
+                e["detail"], "syft exit Some(1): ",
+                "{label}/{lang}: detail 應為原始值"
+            );
+            let msg = e["message"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{label}/{lang}: 缺 message：{e}"));
+            assert!(!msg.is_empty() && !msg.contains("{{") && msg != "server.err.engine");
+            assert_eq!(
+                has_cjk(msg),
+                lang == "zh-TW",
+                "{label}/{lang}: message 未依語系渲染：{msg}"
+            );
+            seen.push(msg.to_string());
+        }
+    }
+    assert_ne!(seen[0], seen[2], "兩種語系的 message 相同——渲染沒有看語系");
+
+    // 落盤記錄不帶任何語系的訊息
+    let on_disk: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.base.join("data/jobs").join(&id).join("job.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        on_disk["error"].get("message").is_none(),
+        "job.json 不得寫入渲染後的訊息：{on_disk}"
+    );
+}
+
+/// 剝掉 TS 的 `//` 與 `/* */` 註解，保留字串字面值與行結構（行號不漂）。
+fn strip_ts_comments(src: &str) -> String {
+    let b: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let mut quote: Option<char> = None;
+    while i < b.len() {
+        let c = b[i];
+        let n = b.get(i + 1).copied();
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' {
+                if let Some(n) = n {
+                    out.push(n);
+                }
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+        } else if c == '/' && n == Some('/') {
+            while i < b.len() && b[i] != '\n' {
+                i += 1;
+            }
+        } else if c == '/' && n == Some('*') {
+            i += 2;
+            while i < b.len() && !(b[i] == '*' && b.get(i + 1) == Some(&'/')) {
+                if b[i] == '\n' {
+                    out.push('\n');
+                }
+                i += 1;
+            }
+            i += 2;
+        } else {
+            if matches!(c, '\'' | '"' | '`') {
+                quote = Some(c);
+            }
+            out.push(c);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// `pos` 所在位置**直接**被哪個呼叫包住：往回找第一個未閉合的 `(`，取它前面的識別字
+/// （略過泛型 `<…>`）。`request<JobRecord>(`…`)` → `request`。
+fn enclosing_call(text: &str, pos: usize) -> Option<&str> {
+    let b = text.as_bytes();
+    let mut depth = 0i32;
+    let mut i = pos;
+    while i > 0 {
+        i -= 1;
+        match b[i] {
+            b')' => depth += 1,
+            b'(' if depth > 0 => depth -= 1,
+            b'(' => {
+                let mut end = i;
+                if end > 0 && b[end - 1] == b'>' {
+                    let mut d = 0;
+                    while end > 0 {
+                        end -= 1;
+                        match b[end] {
+                            b'>' => d += 1,
+                            b'<' => {
+                                d -= 1;
+                                if d == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let mut k = end;
+                while k > 0 && (b[k - 1].is_ascii_alphanumeric() || matches!(b[k - 1], b'_' | b'.'))
+                {
+                    k -= 1;
+                }
+                return Some(&text[k..end]);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 一個 console 檔的違規清單（`/api/v1/` 字面值未經帶語系的呼叫、或出現第四種請求構造）。
+fn console_request_problems(rel: &str, text: &str) -> (Vec<String>, usize) {
+    // 已知會帶語系的呼叫：request（fetch，Accept-Language）、xhr.open（XHR，Accept-Language）、
+    // withLang（導覽，?lang=）。實際送出的值由 frontend/scripts/console-lang-check.mts 以 stub
+    // 攔截驗證；本函式只管「字面值有沒有走進這三個呼叫」。
+    const CARRIERS: [&str; 3] = ["request", "xhr.open", "withLang"];
+    let text = strip_ts_comments(text);
+    let mut problems = Vec::new();
+    let mut literals = 0usize;
+    for (pos, _) in text.match_indices("/api/v1/") {
+        literals += 1;
+        let line = text[..pos].matches('\n').count() + 1;
+        match enclosing_call(&text, pos) {
+            Some(c) if CARRIERS.contains(&c) => {}
+            other => problems.push(format!(
+                "{rel}:{line}: /api/v1/ 字面值未經會帶語系的呼叫（直接包住它的是 {other:?}）"
+            )),
+        }
+    }
+    for (n, l) in text.lines().enumerate() {
+        if (l.contains("fetch(") && rel != "api/client.ts")
+            || (l.contains("XMLHttpRequest") && rel != "api/upload.ts")
+        {
+            problems.push(format!(
+                "{rel}:{}: 新的請求構造（只准在 client.ts/upload.ts）：{}",
+                n + 1,
+                l.trim()
+            ));
+        }
+    }
+    (problems, literals)
+}
+
+/// 比對器的正負對照：壞樣本必中、好樣本必不中。
+///
+/// 前版的豁免是「前一行含 `request<`」——api 物件裡每一行都是單行閉合的 `request<…>(…)`，
+/// 在任一行後面插入不帶語系的導覽 URL 都會被放行（T909 第二輪複審 tests#2，3/3 確認）。
+#[test]
+fn console_request_matcher_detects_known_violations() {
+    let bad: &[(&str, &str)] = &[
+        (
+            "前一行是單行閉合的 request",
+            "  getJob: (id: string) => request<JobRecord>(`/api/v1/jobs/${id}`),\n  reportHref: (id: string) => `/api/v1/jobs/${id}/report`,\n",
+        ),
+        (
+            "呼叫只出現在註解裡",
+            "// request<JobList>(\nconst u = '/api/v1/jobs'\n",
+        ),
+        ("包住它的是別的呼叫", "window.open(`/api/v1/jobs/${id}/report`)\n"),
+        (
+            "同一行另有 request 但字面值不在其參數內",
+            "a: () => request<X>('/api/v1/x'), b: `/api/v1/y`,\n",
+        ),
+        ("頂層字面值", "const href = '/api/v1/jobs'\n"),
+    ];
+    for (why, src) in bad {
+        let (p, _) = console_request_problems("pages/Sample.tsx", src);
+        assert!(!p.is_empty(), "壞樣本沒被抓到（{why}）：{src}");
+    }
+    let (p, _) = console_request_problems("pages/Sample.tsx", "const r = fetch('/x')\n");
+    assert!(!p.is_empty(), "client.ts 以外的 fetch 沒被抓到");
+    let good: &[&str] = &[
+        "request<JobList>('/api/v1/jobs')\n",
+        "request<JobList>(\n    '/api/v1/jobs',\n    { method: 'POST' },\n  )\n",
+        "withLang(`/api/v1/jobs/${id}/report${download ? '?download=1' : ''}`)\n",
+        "xhr.open('POST', '/api/v1/jobs/upload')\n",
+        "request<void>(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })\n",
+        "// 舊寫法：const u = '/api/v1/jobs'\nrequest<X>('/api/v1/jobs')\n",
+    ];
+    for src in good {
+        let (p, n) = console_request_problems("api/client.ts", src);
+        assert!(p.is_empty(), "好樣本被誤判：{src}\n{p:?}");
+        assert!(n >= 1, "好樣本沒有抽到字面值：{src}");
+    }
+}
+
 /// console 的**每一條** API 請求路徑都必須帶 **UI 語系**（非瀏覽器預設）。
 ///
 /// server 依請求語系渲染錯誤 message。三種請求形態、三種帶法：
@@ -1075,15 +1366,14 @@ async fn t909_login_malformed_json_returns_json_contract() {
 /// - 上傳 XHR（upload.ts）→ `Accept-Language` header
 /// - `<a href>` 導覽（`artifactUrl`）→ 無法設 header，走 `?lang=`（`withLang`）
 ///
-/// 初版只比對兩個寫死的檔案，第三條路徑完全看不到（T909 對抗式複審 major）。本版掃整個
-/// `frontend/src/console/`：任何 `/api/v1/` 字面值必須落在已知會帶語系的位置，且不得出現
-/// 第四種請求構造（`fetch(`／`XMLHttpRequest` 只准在 client.ts／upload.ts）。
+/// 分工：本測試管**結構**——每個 `/api/v1/` 字面值都必須是上述三個呼叫的直接參數，且不得
+/// 出現第四種請求構造。**實際送出的值**由 `frontend/scripts/console-lang-check.mts` 載入真的
+/// client.ts / upload.ts、stub fetch 與 XHR 攔下來驗——前版在這裡對整檔做 `contains`，
+/// 把 header 那行移進註解照樣綠（T909 第二輪複審 claims#2）。
 #[test]
 fn t909_console_requests_send_ui_language() {
-    let root = std::path::PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../frontend/src/console"
-    ));
+    let repo = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+    let root = repo.join("frontend/src/console");
     fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         for e in std::fs::read_dir(d).unwrap() {
             let p = e.unwrap().path();
@@ -1102,29 +1392,6 @@ fn t909_console_requests_send_ui_language() {
         files.len()
     );
 
-    let client = std::fs::read_to_string(root.join("api/client.ts")).unwrap();
-    let upload = std::fs::read_to_string(root.join("api/upload.ts")).unwrap();
-
-    // 三種帶法各自成立
-    assert!(
-        client.contains("export function uiLanguage()") && client.contains("effectiveLang(i18n)"),
-        "client.ts 須以 effectiveLang(i18n) 提供 uiLanguage()（單一事實源；行為由 \
-         frontend/scripts/console-lang-check.mts 驗）"
-    );
-    assert!(
-        client.contains("'Accept-Language': uiLanguage()"),
-        "fetch 路徑未送 UI 語系"
-    );
-    assert!(
-        upload.contains("setRequestHeader('Accept-Language', uiLanguage())"),
-        "上傳 XHR 路徑未送 UI 語系"
-    );
-    assert!(
-        client.contains("export function withLang(")
-            && client.contains("lang=${encodeURIComponent(uiLanguage())}"),
-        "導覽式請求須經 withLang 以 ?lang= 帶 UI 語系"
-    );
-
     let mut problems = Vec::new();
     let mut api_literals = 0usize;
     for f in &files {
@@ -1133,38 +1400,9 @@ fn t909_console_requests_send_ui_language() {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let text = std::fs::read_to_string(f).unwrap();
-        for (n, line) in text.lines().enumerate() {
-            let t = line.trim_start();
-            if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
-                continue;
-            }
-            // 不得出現第四種請求構造
-            if (t.contains("fetch(") && rel != "api/client.ts")
-                || (t.contains("XMLHttpRequest") && rel != "api/upload.ts")
-            {
-                problems.push(format!(
-                    "{rel}:{}: 新的請求構造（只准在 client.ts/upload.ts）：{t}",
-                    n + 1
-                ));
-            }
-            if !t.contains("/api/v1/") {
-                continue;
-            }
-            api_literals += 1;
-            // 已知會帶語系的位置：request<…>(…)（經 fetch）、xhr.open（XHR）、withLang(…)（導覽）
-            let ok = t.contains("request<")
-                || t.contains("xhr.open(")
-                || t.contains("withLang(")
-                // request 呼叫跨行時，路徑字面值單獨成行（前一行是 `request<…>(`）
-                || text.lines().nth(n.wrapping_sub(1)).is_some_and(|prev| prev.contains("request<"));
-            if !ok {
-                problems.push(format!(
-                    "{rel}:{}: /api/v1/ 字面值未經會帶語系的路徑：{t}",
-                    n + 1
-                ));
-            }
-        }
+        let (p, n) = console_request_problems(&rel, &std::fs::read_to_string(f).unwrap());
+        problems.extend(p);
+        api_literals += n;
     }
     assert!(
         api_literals >= 10,
@@ -1175,12 +1413,29 @@ fn t909_console_requests_send_ui_language() {
         "console 有請求路徑沒帶 UI 語系：\n{}",
         problems.join("\n")
     );
+
+    // 送出值的行為檢查必須接在 land 前的閘上，否則本測試的分工就落空
+    for (f, why) in [
+        ("Makefile", "make lint"),
+        (".github/workflows/ci.yml", "CI"),
+    ] {
+        let text = std::fs::read_to_string(repo.join(f)).unwrap();
+        // 註解行（`#`、Makefile 的 `@#`）提到檔名不算接線
+        let wired = text.lines().any(|l| {
+            let t = l.trim_start();
+            !(t.starts_with('#') || t.starts_with("@#")) && t.contains("console-lang-check.mts")
+        });
+        assert!(
+            wired,
+            "{why}（{f}）沒有執行 frontend/scripts/console-lang-check.mts"
+        );
+    }
 }
 
 /// rejection 原生**不是 400** 的案例：狀態語意須保留（413 不得被壓成 400）。
 ///
 /// 初版 `bad_request` 一律回 400/validation，而 t909 測試挑的 rejection 原生都是 400，
-/// 所以驗不出這件事（T909 對抗式複審）。public router 未停用 body limit，axum 預設 2 MiB。
+/// 所以驗不出這件事（T909 對抗式複審 v0，2/3 確認）。public router 未停用 body limit，axum 預設 2 MiB。
 #[tokio::test]
 async fn t909_oversized_login_body_keeps_413() {
     let env = build_env(Arc::new(FakeEngine), true, 2);
@@ -1242,7 +1497,7 @@ async fn t909_path_rejection_on_every_path_route() {
 async fn t909_rejections_on_report_query_and_delete_path() {
     // e2e 原本只打到 list 的 Query 與 GET 的 Path；report 的 ApiQuery、DELETE 的 ApiPath
     // 若被改回裸 extractor，只剩靜態閘把關，而當時的靜態閘比不到全限定寫法
-    // （T909 對抗式複審 v18，2/3 確認）。
+    // （T909 對抗式複審 v15，3/3 確認）。
     let env = build_env(Arc::new(FakeEngine), true, 2);
     let cookie = login(&env.app).await;
     for lang in LANGS {

@@ -101,7 +101,8 @@ jobs:
       - name: CBOM 成因渲染（雙語 × 邊界，ADR-013）
         run: node --experimental-strip-types frontend/scripts/cbom-message-check.mts
       # 送給 server 的語系必須是畫面實際語系（i18n.resolvedLanguage），否則中文介面會跳
-      # 英文錯誤、非 Latin-1 的存檔值會讓每次請求都被包成 network 錯誤（T909 複審 v1）。
+      # 英文錯誤、非 Latin-1 的存檔值會讓每次請求都被包成 network 錯誤（T909 對抗式複審 v19 反證票 0/3，仍防禦性修正；
+      # 本檢查載入真的 client.ts / upload.ts 驗實際送出值——第二輪複審 lang#0 / tests#0）。
       - name: console 送出語系 == 畫面語系（T909）
         run: node --experimental-strip-types frontend/scripts/console-lang-check.mts
       - name: build 報表（單檔內聯）

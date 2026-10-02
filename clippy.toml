@@ -2,7 +2,7 @@
 # 與請求語系（T909）。handler 一律改用 crates/cytrace-server/src/extract.rs 的包裝型別。
 #
 # 用 clippy 而非文字比對：文字比對擋不住 rustfmt 收成單行的簽名、全限定路徑、
-# `as` 別名與 api/ 以外的檔案（T909 對抗式複審 major，3/3 確認）；disallowed-types
+# `as` 別名與 api/ 以外的檔案（T909 對抗式複審 v3／v6／v9，3/3、3/3、2/3 確認）；disallowed-types
 # 看的是解析後的型別，排版與寫法都繞不過。
 # `Json` 同時是回應型別，不能在此禁用——由 extract.rs 的簽名級文字閘另外把關。
 # `Form`/`RawForm` 未列：axum 未開 `form` feature，型別不存在（clippy 會報 unreachable）；

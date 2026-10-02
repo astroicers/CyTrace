@@ -64,7 +64,8 @@
       "invalid_status": "Invalid status filter: {{value}}",
       "missing_file_field": "Upload request is missing the file field",
       "upload_too_large": "Upload exceeds the size limit ({{limit}} bytes)",
-      "bad_request": "Malformed request"
+      "bad_request": "Malformed request",
+      "method_not_allowed": "This path does not support the HTTP method"
     },
     "job": {
       "interrupted": "Interrupted by server restart; please re-submit the scan"

@@ -1,8 +1,8 @@
 // Thin fetch wrapper：同源相對路徑、cookie 認證、統一錯誤 normalize、401 集中攔截。
-import i18n from '../../i18n'
-import { effectiveLang } from '../../langs'
-import { ApiError } from './types'
-import type { JobList, JobRecord, SessionInfo, VersionInfo } from './types'
+import i18n from '../../i18n.ts'
+import { appendLang, effectiveLang } from '../../langs.ts'
+import { ApiError } from './types.ts'
+import type { JobList, JobRecord, SessionInfo, VersionInfo } from './types.ts'
 
 /**
  * 送給 server 的語系：**console 的 UI 語系**，不是瀏覽器的。
@@ -109,11 +109,11 @@ export const api = {
  * `<a href>` 導覽請求無法設 header，所以 `Accept-Language` 那條路走不到——
  * 錯誤回應（404、壞路徑）會依**瀏覽器**語系渲染。server 的協商順序是
  * `?lang=` > `Accept-Language`，故導覽式請求以查詢參數帶語系
- * （T909 對抗式複審：原本只修了 fetch 與 XHR，第三條路徑漏了）。
+ * （T909 對抗式複審 v12/v17：原本只修了 fetch 與 XHR，第三條路徑漏了）。
+ * 分隔符邏輯在 `appendLang`（純函式，行為由 console-lang-check.mts 驗）。
  */
 export function withLang(url: string): string {
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}lang=${encodeURIComponent(uiLanguage())}`
+  return appendLang(url, uiLanguage())
 }
 
 /** 報表/產物同源 URL（另開分頁或下載，不經 JSON client）。一律經 `withLang`。 */

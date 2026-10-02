@@ -88,7 +88,7 @@ lint: fmt-check clippy
 	@node -e 'const [maj]=process.versions.node.split(".").map(Number); if (maj < 22) { console.error("✗ Node " + process.versions.node + " 過舊：--experimental-strip-types 需 22+"); process.exit(1) }'
 	@test -d frontend/node_modules/i18next || { echo "✗ 缺 frontend/node_modules/i18next（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
-	@# console 送出的語系必須等於畫面語系（T909 複審 v1）；與上一支同一套前置
+	@# console 實際送出的語系必須等於畫面語系（T909；第二輪複審 lang#0 / tests#0）；與上一支同一套前置
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
 	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系，零 warning）"
 

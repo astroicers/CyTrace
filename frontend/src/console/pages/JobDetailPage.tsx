@@ -8,6 +8,7 @@ import { SeverityBadge } from '../../components/ui'
 import { SEVERITY_ORDER, SEVERITY_KEY } from '../../types'
 import { navigate } from '../router'
 import { fmtTime } from '../format'
+import { effectiveLang } from '../../langs'
 
 // 非終態 → 2s 輪詢；終態停止。
 function interval(job: JobRecord | null): number {
@@ -116,7 +117,7 @@ export function JobDetailPage({ id }: { id: string }) {
               `<pre>` 的守衛沒跟著改，同一段印兩次（第十輪複審），而同一個 commit
               在 CLI 側正好斷言「細節不得重複出現」。 */}
           {(() => {
-            const { text, detailConsumed } = describeJobError(job.error, t, i18n.language)
+            const { text, detailConsumed } = describeJobError(job.error, t, effectiveLang(i18n))
             return (
               <>
                 <p className="mt-1 text-sm">{text}</p>

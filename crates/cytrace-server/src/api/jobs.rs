@@ -3,7 +3,7 @@
 
 use crate::error::{ApiError, ErrorKind, Lang};
 use crate::extract::{ApiJson, ApiMultipart, ApiPath, ApiQuery};
-use crate::jobs::{runner, JobRecord, JobStatus};
+use crate::jobs::{runner, JobError, JobRecord, JobStatus};
 use crate::state::AppState;
 use crate::{targets, upload};
 use axum::extract::State;
@@ -281,6 +281,10 @@ pub async fn list(
         q.limit.unwrap_or(50).min(200),
         q.offset.unwrap_or(0),
     );
+    let jobs = jobs
+        .iter()
+        .map(|j| job_view(j, lang))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(json!({ "jobs": jobs, "total": total })))
 }
 
@@ -289,11 +293,50 @@ pub async fn get(
     State(app): State<AppState>,
     lang: Lang,
     ApiPath(id): ApiPath<String>,
-) -> Result<Json<JobRecord>, ApiError> {
-    app.jobs
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let rec = app
+        .jobs
         .get(&id)
-        .map(Json)
-        .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))
+        .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
+    job_view(&rec, lang).map(Json)
+}
+
+/// job 記錄的查詢回應形：`error` 另附依**本次請求語系**渲染的 `message`。
+///
+/// 只在回應時算、不寫回 job.json——落盤記錄不凍結任何語系，也不改寫既有稽核記錄。
+/// 原本 get / list 完全不看請求語系：job 失敗（最常見的錯誤）對非 console 的 API 用戶端
+/// （CI 腳本等）沒有任何語言的訊息，而 runner 的註解卻寫「由查詢時的請求語系渲染」
+/// （T909 第二輪複審 claims#5；前一輪的完整性批判就指出過，被以「不落盤」這個沒人提的方案回絕）。
+/// console 仍用自己的 `describeJobError` 渲染（切語系不必重抓）；兩邊規則相同。
+fn job_view(rec: &JobRecord, lang: Lang) -> Result<serde_json::Value, ApiError> {
+    let mut v = serde_json::to_value(rec).map_err(|e| {
+        ApiError::new(lang, ErrorKind::Internal).with_detail(format!("job-record serialize: {e}"))
+    })?;
+    if let Some(e) = &rec.error {
+        v["error"]["message"] = json!(render_job_error(lang, e));
+    }
+    Ok(v)
+}
+
+fn render_job_error(lang: Lang, e: &JobError) -> String {
+    let c = lang.catalog();
+    if e.i18n_key.starts_with("cbom.err.") {
+        let detail = (!e.detail.is_empty()).then_some(e.detail.as_str());
+        return c.render_cbom(&e.i18n_key, detail);
+    }
+    // 查不到時 t() 回傳鍵本身：舊記錄或未來的鍵 → 退回 kind 的泛用訊息，再退回 internal
+    let kind_key = format!("server.err.{}", e.kind);
+    for k in [
+        e.i18n_key.as_str(),
+        kind_key.as_str(),
+        "server.err.internal",
+    ] {
+        let m = c.t(k, &[]);
+        if m != k {
+            return m;
+        }
+    }
+    String::new()
 }
 
 /// `DELETE /api/v1/jobs/{id}`：queued → 取消；終態 → 刪除；running → 409。

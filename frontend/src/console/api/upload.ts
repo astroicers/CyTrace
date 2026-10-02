@@ -1,7 +1,7 @@
 // 上傳用 XMLHttpRequest（fetch 無可靠 upload progress）。回傳可取消的 promise。
-import { uiLanguage } from './client'
-import { ApiError } from './types'
-import type { JobRecord } from './types'
+import { uiLanguage } from './client.ts'
+import { ApiError } from './types.ts'
+import type { JobRecord } from './types.ts'
 
 export interface UploadHandle {
   promise: Promise<JobRecord>

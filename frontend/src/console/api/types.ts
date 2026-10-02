@@ -52,13 +52,15 @@ export interface SessionInfo {
 }
 
 /** API 錯誤（client 統一 normalize）。 */
+// 欄位明寫、不用參數屬性（`constructor(public status…)`）：node 的型別剝離不支援需要
+// 轉換的語法，而 console-lang-check.mts 要能載入 client.ts（它 import 本檔）。
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    public code: string,
-    message: string,
-  ) {
+  status: number
+  code: string
+  constructor(status: number, code: string, message: string) {
     super(message)
+    this.status = status
+    this.code = code
     this.name = 'ApiError'
   }
 }

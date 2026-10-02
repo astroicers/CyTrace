@@ -16,7 +16,7 @@ use std::path::Path;
 ///
 /// 計次數而非只看片段是否存在：只看存在的話，一筆清單能豁免任意多個同片段字面值——
 /// 複製既有錯誤訊息（例如再貼一處「job.json 落盤失敗」送進 API）正是新散文最常見的來源
-/// （T909 對抗式複審 v14：反證票 1/3、未達確認門檻；但複製一行即可繞過是實測可重現的，故仍修）。
+/// （T909 對抗式複審 v11，3/3 確認）。
 const T912_BACKLOG: &[(&str, &str, usize)] = &[
     ("config.rs", "CYTRACE_BIND 不是合法位址", 1),
     ("config.rs", "缺少 CYTRACE_ADMIN_PASSWORD_HASH", 1),
@@ -61,6 +61,42 @@ fn cjk_literals(line: &str) -> Vec<String> {
     out
 }
 
+/// 一個檔案中「生產碼」的 CJK 字面值：跳過註解行，遇到 `#[cfg(test)] mod …` 才停。
+///
+/// 初版遇到**第一個** `#[cfg(test)]` 就停——檔案中段若有 test-only 輔助項
+/// （`#[cfg(test)] fn helper()`），其後所有生產碼都看不到，次數制形同虛設
+/// （T909 第二輪複審 tests#4，2/3 確認；副本實測：輔助項之後的「任務執行中，無法刪除」漏網）。
+fn production_cjk_literals(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("#[cfg(test)]") {
+            // 往下找第一個非屬性、非空行：是測試模組才停（測試斷言訊息非使用者可見）
+            let next = lines[i + 1..]
+                .iter()
+                .map(|l| l.trim_start())
+                .find(|l| !l.is_empty() && !l.starts_with("#["));
+            if next.is_some_and(|l| l.starts_with("mod ") || l.starts_with("pub mod ")) {
+                break;
+            }
+            continue;
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        out.extend(cjk_literals(line));
+    }
+    out
+}
+
+/// 抽取器的正負對照：反空轉只驗「抽到東西」不夠，要驗「抓得到違規」。
+#[test]
+fn extractor_sees_past_test_only_items() {
+    let src = "const A: &str = \"甲\";\n#[cfg(test)]\nfn helper() -> u8 { 1 }\nfn f() -> &'static str { \"乙\" }\n// \"註解裡的丙\"\n#[cfg(test)]\n#[allow(dead_code)]\nmod tests {\n    const T: &str = \"測試裡的丁\";\n}\n";
+    assert_eq!(production_cjk_literals(src), vec!["甲", "乙"]);
+}
+
 fn walk(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
     for e in std::fs::read_dir(dir).expect("讀 src") {
         let p = e.unwrap().path();
@@ -91,17 +127,8 @@ fn server_cjk_literals_only_shrink() {
             .to_string_lossy()
             .replace('\\', "/");
         let text = std::fs::read_to_string(f).unwrap();
-        for line in text.lines() {
-            // 測試模組以後不計（測試斷言訊息非使用者可見）
-            if line.trim_start().starts_with("#[cfg(test)]") {
-                break;
-            }
-            if line.trim_start().starts_with("//") {
-                continue;
-            }
-            for lit in cjk_literals(line) {
-                found.push((rel.clone(), lit));
-            }
+        for lit in production_cjk_literals(&text) {
+            found.push((rel.clone(), lit));
         }
     }
 

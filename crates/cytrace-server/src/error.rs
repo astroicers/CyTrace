@@ -88,6 +88,7 @@ pub enum ErrorKind {
     QueueFull,
     PayloadTooLarge,
     UnsupportedArchive,
+    MethodNotAllowed,
 }
 
 impl ErrorKind {
@@ -109,6 +110,7 @@ impl ErrorKind {
             ErrorKind::QueueFull => "queue_full",
             ErrorKind::PayloadTooLarge => "payload_too_large",
             ErrorKind::UnsupportedArchive => "unsupported_archive",
+            ErrorKind::MethodNotAllowed => "method_not_allowed",
         }
     }
 
@@ -125,6 +127,7 @@ impl ErrorKind {
             ErrorKind::QueueFull => StatusCode::TOO_MANY_REQUESTS,
             ErrorKind::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorKind::UnsupportedArchive => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ErrorKind::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
@@ -168,7 +171,7 @@ impl ApiError {
     /// 回應的 `i18n_key` 欄位同步改為此鍵——**作為成因識別碼**（供程式判斷、統計），
     /// 不是給用戶端重新渲染用：回應不含插值參數，拿 `i18n_key` 自行 `t()` 會印出佔位符。
     /// 要顯示的文字以 `message` 為準；用戶端請以 `Accept-Language` / `?lang=` 指定語系
-    /// （初版文件曾承諾可重新渲染，與回應形狀不符——T909 對抗式複審，2/3 確認）。
+    /// （初版文件曾承諾可重新渲染，與回應形狀不符——T909 對抗式複審 v1，2/3 確認）。
     pub fn with_message(mut self, key: &'static str, vars: &[(&'static str, &str)]) -> Self {
         self.message_key = Some((key, vars.iter().map(|(k, v)| (*k, v.to_string())).collect()));
         self
@@ -230,7 +233,7 @@ impl ApiError {
 ///
 /// **保留 rejection 原本的狀態語意**：初版一律壓成 400/validation——登入送 >2 MiB 的 body
 /// （axum 預設上限）原本 413 變 400、訊息說「格式不合法」而成因其實是太大；route 與 handler
-/// 對不上的 500（伺服器 bug）變 400 怪到用戶端頭上（T909 對抗式複審 v6，3/3 確認）。
+/// 對不上的 500（伺服器 bug）變 400 怪到用戶端頭上（T909 對抗式複審 v0，2/3 確認）。
 /// 對映：413 → PayloadTooLarge；5xx → Internal；其餘（400/415/422）→ Validation（400）——
 /// 後者刻意收斂成 400：415/422 在本 API 沒有獨立的處置差異，用戶端都該修正請求。
 pub fn bad_request<R: IntoResponse + std::fmt::Display>(lang: Lang, rejection: R) -> ApiError {

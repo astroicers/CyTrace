@@ -52,6 +52,11 @@ pub fn build_router_with_state(state: AppState) -> Router {
             "/api/v1/jobs/{id}/artifacts/{kind}",
             get(api::reports::artifact),
         )
+        // 路徑命中、方法不符 → JSON 405（原本是 axum 預設的空 body，繞過錯誤契約與語系；
+        // T909 第二輪複審 claims#4）。必須在 auth layer **之前**設：之後設會換掉已被 auth
+        // 包住的 fallback，未登入者就會拿到 405 而非 401。public 那條 /api/v1/session 與本處
+        // 的同路徑 method router 合併時沿用這裡的 fallback。
+        .method_not_allowed_fallback(method_not_allowed)
         .layer(axum::extract::DefaultBodyLimit::disable()) // 上傳大小由 handler 串流計數把關
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -108,6 +113,11 @@ async fn version(State(app): State<AppState>) -> Json<Value> {
         "upload_limit_mb": app.cfg.max_upload_bytes / (1024 * 1024),
         "scan_roots": roots,
     }))
+}
+
+/// 路徑命中、方法不符：JSON 405（axum 仍會附上 `Allow` header）。
+async fn method_not_allowed(lang: Lang) -> Response {
+    ApiError::new(lang, ErrorKind::MethodNotAllowed).into_response()
 }
 
 /// 未命中路由：`/api/*`、`/healthz` → JSON 404；其餘（`/`、`/assets/*`）→ console SPA。
