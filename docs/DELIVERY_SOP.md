@@ -35,8 +35,11 @@ make package            # 或 scripts/package.sh <輸出目錄>
 ```
 **Windows 版**（在 Windows build 機，先 `grype db update`）：
 ```powershell
-pwsh scripts/package.ps1            # 產 delivery\cytrace-<版本>-windows\
+pwsh scripts/package.ps1 -WithoutCbom   # 產 delivery\cytrace-<版本>-windows\
 ```
+Windows 版 CBOM 引擎資產尚未就緒（T911），不加 `-WithoutCbom` 腳本會 fail-hard——
+這是刻意的：包裡少了引擎必須由人顯式說出來。此包的 `--cbom` 降級為「未盤點」，
+不影響 SBOM 與弱點比對。
 腳本會：build musl 靜態 binary → 收集釘選引擎與 grype DB 快照 → 產自產 SBOM →
 寫 NOTICE → 算 SHA256SUMS →（若有金鑰）minisign 簽章。
 

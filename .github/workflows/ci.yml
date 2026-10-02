@@ -41,6 +41,10 @@ jobs:
         run: |
           python3 scripts/notice-parity-check.py
           python3 scripts/notice-parity-check.py --verify-sentinels
+      # v0.3.0 的公開 Release 頁被 docker.yml 的 body 整份覆蓋（softprops 更新既有 release 時
+      # 給了 body 就取代），而 release.yml 又把「已知限制」寫死成上一版的內容。
+      - name: Release 說明單一來源（CHANGELOG → release.yml；別的 workflow 不得寫 body）
+        run: python3 scripts/release-notes.py check
 
   real-engine:
     name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）
