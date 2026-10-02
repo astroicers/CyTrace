@@ -71,9 +71,12 @@ Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
 
 # 引擎釘選版本的單一事實源（與 package.sh 一致）
-$TheiaVersion = (Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=' |
-  ForEach-Object { $_.Line -replace '^THEIA_VERSION=', '' } | Select-Object -First 1)
-if (-not $TheiaVersion) { $TheiaVersion = "unknown" }
+# 與 build.rs / package.sh 同一規則：恰一行且為 數字(.數字)+——取第一行或退回 "unknown"
+# 會讓 NOTICE 與報表上的引擎版本靜默分歧（T909 第二輪複審 build#1）。
+$TheiaLines = @(Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=')
+if ($TheiaLines.Count -ne 1) { throw "versions.env must contain exactly one THEIA_VERSION= line (found $($TheiaLines.Count))" }
+$TheiaVersion = ($TheiaLines[0].Line -replace '^THEIA_VERSION=', '').Trim()
+if ($TheiaVersion -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "THEIA_VERSION '$TheiaVersion' is not digits(.digits)+" }
 
 # 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
 #

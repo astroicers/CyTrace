@@ -8,6 +8,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 引擎版本與校驗和的單一事實源（ADR-012 決策 7 / ADR-013 決策 1）
 # shellcheck source=versions.env
 [ -f "$ROOT/scripts/versions.env" ] && . "$ROOT/scripts/versions.env"
+# THEIA_VERSION 同時被 build.rs（編進報表）與本檔（寫進 NOTICE）讀：重複行時 shell 取最後一行，
+# 兩邊會靜默分歧——與 build.rs 同一規則，恰一行且為 數字(.數字)+ 才繼續。
+[ "$(grep -c '^THEIA_VERSION=' "$ROOT/scripts/versions.env")" = 1 ] \
+  || { echo "✗ scripts/versions.env 應恰有一行 THEIA_VERSION="; exit 1; }
+[[ "${THEIA_VERSION:-}" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
+  || { echo "✗ THEIA_VERSION='${THEIA_VERSION:-}' 不是 數字(.數字)+"; exit 1; }
 OUT_DIR="${1:-$ROOT/delivery}"
 TARGET="x86_64-unknown-linux-musl"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -94,7 +100,7 @@ syft scan "dir:$ROOT" --exclude './frontend/node_modules/**' --exclude './target
 if [ -f "$BUNDLE/bin/cbomkit-theia" ]; then
   THEIA_NOTICE="$(cat <<THEIA
   - CBOMkit-theia (PQCA / Linux Foundation, Apache-2.0) — 密碼學資產盤點（CBOM；ADR-013）
-    自源碼建置（tag v${THEIA_VERSION:-1.1.2}），非上游 release binary。
+    自源碼建置（tag v${THEIA_VERSION}），非上游 release binary。
     其相依含下列非 Apache-2.0 成分：
       · gitleaks v8（MIT）、gitleaks/go-gitdiff（MIT）— 內嵌之機密偵測規則
       · MPL-2.0（檔案級弱 copyleft）：hashicorp/golang-lru、hashicorp/go-version、
