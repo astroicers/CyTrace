@@ -49,6 +49,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # 測試用（oneshot router 測試，不開真實 socket）
 tower = { version = "0.5", default-features = false, features = ["util"] }
 http-body-util = "0.1"
+# 測試專用：以 AST 實作的機械閘（i18n 棘輪、禁止 closure handler）。原本的手寫字元掃描器
+# 每輪複審都被 raw string、跨行字串、match arm 上的 cfg(test) 等形狀繞過（T909 第四輪複審）。
+# 三者皆已在 Cargo.lock（syn 2.0.118 / proc-macro2 1.0.106 / quote 1.0.46，經由 derive 巨集），不引入新來源。
+syn = { version = "2", default-features = false, features = ["full", "visit", "parsing", "printing"] }
+proc-macro2 = "1"
+quote = "1"
 
 # 穩定優先（NFR-02）：release 以體積/可重現為先
 [profile.release]

@@ -249,7 +249,7 @@ async fn get_job(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
     json_of(resp).await
 }
 
-/// 輪詢直到終態（FakeEngine 極快；上限 5s 防呆）。
+/// 輪詢直到終態（FakeEngine 極快；上限 30 秒防呆，理由見函式內註解）。
 async fn wait_terminal(app: &Router, cookie: &str, id: &str) -> serde_json::Value {
     // 上限 30 秒（原 5 秒）：單獨跑時數十毫秒就到終態，但 make test 平行跑多個 test binary、
     // 機器另有負載時曾 6 支同時逾時（2026-10-02 實錄，單獨重跑 29/29 綠）。上限只是時間預算，
@@ -1153,7 +1153,7 @@ async fn t909_method_not_allowed_is_json_and_auth_first() {
         }
     }
     // 未登入：受保護路徑先回 401 而非 405。注意 401 仍帶 `Allow`（axum 在 layer 之外補上），
-    // 方法表公開於 ADR-011，不視為機密——本斷言只釘狀態碼的優先序（第三輪複審 server#2）。
+    // 方法表見公開原始碼 router.rs，不視為機密——本斷言只釘狀態碼的優先序（第三輪複審 server#2）。
     let req = with_csrf_and(Request::put("/api/v1/jobs"))
         .body(Body::empty())
         .unwrap();
@@ -1289,288 +1289,98 @@ async fn job_error_message_follows_shared_fallback_fixture() {
     }
 }
 
-/// 剝掉 TS 的 `//` 與 `/* */` 註解，保留字串字面值與行結構（行號不漂）。
-fn strip_ts_comments(src: &str) -> String {
-    let b: Vec<char> = src.chars().collect();
-    let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    let mut quote: Option<char> = None;
-    while i < b.len() {
-        let c = b[i];
-        let n = b.get(i + 1).copied();
-        if let Some(q) = quote {
-            out.push(c);
-            if c == '\\' {
-                if let Some(n) = n {
-                    out.push(n);
-                }
-                i += 2;
-                continue;
-            }
-            if c == q {
-                quote = None;
-            }
-            i += 1;
-        } else if c == '/' && n == Some('/') {
-            while i < b.len() && b[i] != '\n' {
-                i += 1;
-            }
-        } else if c == '/' && n == Some('*') {
-            i += 2;
-            while i < b.len() && !(b[i] == '*' && b.get(i + 1) == Some(&'/')) {
-                if b[i] == '\n' {
-                    out.push('\n');
-                }
-                i += 1;
-            }
-            i += 2;
-        } else {
-            if matches!(c, '\'' | '"' | '`') {
-                quote = Some(c);
-            }
-            out.push(c);
-            i += 1;
-        }
-    }
-    out
-}
-
-/// `pos` 所在位置**直接**被哪個呼叫包住：往回找第一個未閉合的 `(`，取它前面的識別字
-/// （略過泛型 `<…>`）。`request<JobRecord>(`…`)` → `request`。
-fn enclosing_call(text: &str, pos: usize) -> Option<&str> {
-    let b = text.as_bytes();
-    let mut depth = 0i32;
-    let mut i = pos;
-    while i > 0 {
-        i -= 1;
-        match b[i] {
-            b')' => depth += 1,
-            b'(' if depth > 0 => depth -= 1,
-            b'(' => {
-                let mut end = i;
-                if end > 0 && b[end - 1] == b'>' {
-                    let mut d = 0;
-                    while end > 0 {
-                        end -= 1;
-                        match b[end] {
-                            b'>' => d += 1,
-                            b'<' => {
-                                d -= 1;
-                                if d == 0 {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                let mut k = end;
-                while k > 0 && (b[k - 1].is_ascii_alphanumeric() || matches!(b[k - 1], b'_' | b'.'))
-                {
-                    k -= 1;
-                }
-                return Some(&text[k..end]);
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-/// 一個 console 檔的違規清單（`/api/v1/` 字面值未經帶語系的呼叫、或出現第四種請求構造）。
-fn console_request_problems(rel: &str, text: &str) -> (Vec<String>, usize) {
-    // 已知會帶語系的呼叫：request（fetch，Accept-Language）、xhr.open（XHR，Accept-Language）、
-    // withLang（導覽，?lang=）。實際送出的值由 frontend/scripts/console-lang-check.mts 以 stub
-    // 攔截驗證；本函式只管「字面值有沒有走進這三個呼叫」。
-    const CARRIERS: [&str; 3] = ["request", "xhr.open", "withLang"];
-    let text = strip_ts_comments(text);
-    let mut problems = Vec::new();
-    let mut literals = 0usize;
-    // 比對 `/api/` 而非完整的 `/api/v1/`：拆成 `'/api/v1' + `/jobs/…`` 相接時，完整字面值不存在
-    //（第三輪完整性批判）。實際送出值另由 console-lang-check.mts 枚舉 api / artifactUrl 驗。
-    // 只算「字串以 /api 起頭」者（前一字元是引號），import 路徑 `'../api/client'` 不算。
-    for (pos, _) in text.match_indices("/api/") {
-        if !matches!(text[..pos].chars().last(), Some('\'' | '"' | '`')) {
-            continue;
-        }
-        literals += 1;
-        let line = text[..pos].matches('\n').count() + 1;
-        match enclosing_call(&text, pos) {
-            Some(c) if CARRIERS.contains(&c) => {}
-            other => problems.push(format!(
-                "{rel}:{line}: /api/ 字面值未經會帶語系的呼叫（直接包住它的是 {other:?}）"
-            )),
-        }
-    }
-    for (n, l) in text.lines().enumerate() {
-        if (l.contains("fetch(") && rel != "api/client.ts")
-            || (l.contains("XMLHttpRequest") && rel != "api/upload.ts")
-        {
-            problems.push(format!(
-                "{rel}:{}: 新的請求構造（只准在 client.ts/upload.ts）：{}",
-                n + 1,
-                l.trim()
-            ));
-        }
-    }
-    (problems, literals)
-}
-
-/// 比對器的正負對照：壞樣本必中、好樣本必不中。
+/// console 的**每一條** API 請求路徑都必須帶 **UI 語系**——由 `frontend/scripts/console-lang-check.mts`
+/// 把關（載入真的 client.ts / upload.ts 驗實際送出值、以 TypeScript AST 限定 `/api` 字面值只准出現在
+/// 那兩支檔案）。本測試只確保那支檢查**確實接在 land 前的閘上**。
 ///
-/// 前版的豁免是「前一行含 `request<`」——api 物件裡每一行都是單行閉合的 `request<…>(…)`，
-/// 在任一行後面插入不帶語系的導覽 URL 都會被放行（T909 第二輪複審 tests#2，3/3 確認）。
-#[test]
-fn console_request_matcher_detects_known_violations() {
-    let bad: &[(&str, &str)] = &[
-        (
-            "前一行是單行閉合的 request",
-            "  getJob: (id: string) => request<JobRecord>(`/api/v1/jobs/${id}`),\n  reportHref: (id: string) => `/api/v1/jobs/${id}/report`,\n",
-        ),
-        (
-            "呼叫只出現在註解裡",
-            "// request<JobList>(\nconst u = '/api/v1/jobs'\n",
-        ),
-        ("包住它的是別的呼叫", "window.open(`/api/v1/jobs/${id}/report`)\n"),
-        (
-            "同一行另有 request 但字面值不在其參數內",
-            "a: () => request<X>('/api/v1/x'), b: `/api/v1/y`,\n",
-        ),
-        ("頂層字面值", "const href = '/api/v1/jobs'\n"),
-        (
-            "拆成兩段字串相接",
-            "  artifact: (id: string, k: string) => '/api/v1' + `/jobs/${id}/artifacts/${k}`,\n",
-        ),
-    ];
-    for (why, src) in bad {
-        let (p, _) = console_request_problems("pages/Sample.tsx", src);
-        assert!(!p.is_empty(), "壞樣本沒被抓到（{why}）：{src}");
-    }
-    let (p, _) = console_request_problems("pages/Sample.tsx", "const r = fetch('/x')\n");
-    assert!(!p.is_empty(), "client.ts 以外的 fetch 沒被抓到");
-    let good: &[&str] = &[
-        "request<JobList>('/api/v1/jobs')\n",
-        "request<JobList>(\n    '/api/v1/jobs',\n    { method: 'POST' },\n  )\n",
-        "withLang(`/api/v1/jobs/${id}/report${download ? '?download=1' : ''}`)\n",
-        "xhr.open('POST', '/api/v1/jobs/upload')\n",
-        "request<void>(`/api/v1/jobs/${encodeURIComponent(id)}`, { method: 'DELETE' })\n",
-        "// 舊寫法：const u = '/api/v1/jobs'\nrequest<X>('/api/v1/jobs')\n",
-    ];
-    for src in good {
-        let (p, n) = console_request_problems("api/client.ts", src);
-        assert!(p.is_empty(), "好樣本被誤判：{src}\n{p:?}");
-        assert!(n >= 1, "好樣本沒有抽到字面值：{src}");
-    }
-}
-
-/// console 的**每一條** API 請求路徑都必須帶 **UI 語系**（非瀏覽器預設）。
-///
-/// server 依請求語系渲染錯誤 message。三種請求形態、三種帶法：
-/// - `fetch`（client.ts `request`）→ `Accept-Language` header
-/// - 上傳 XHR（upload.ts）→ `Accept-Language` header
-/// - `<a href>` 導覽（`artifactUrl`）→ 無法設 header，走 `?lang=`（`withLang`）
-///
-/// 分工：本測試管**結構**——每個 `/api/v1/` 字面值都必須是上述三個呼叫的直接參數，且不得
-/// 出現第四種請求構造。**實際送出的值**由 `frontend/scripts/console-lang-check.mts` 載入真的
-/// client.ts / upload.ts、stub fetch 與 XHR 攔下來驗——前版在這裡對整檔做 `contains`，
-/// 把 header 那行移進註解照樣綠（T909 第二輪複審 claims#2）。
+/// 前版在這裡另有一道以文字剝註解、找「直接包住字面值的呼叫」的結構閘：`'/api' + '/v1/…'`、
+/// `${API}/v1/…`、同一行先出現含 `\//` 的 regex 都繞得過（第四輪複審 lang#1／claims#0）。
+/// 已移到前端檢查，改用 AST。
 #[test]
 fn t909_console_requests_send_ui_language() {
     let repo = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
-    let root = repo.join("frontend/src/console");
-    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for e in std::fs::read_dir(d).unwrap() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                walk(&p, out);
-            } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ts" | "tsx")) {
-                out.push(p);
-            }
-        }
-    }
-    let mut files = Vec::new();
-    walk(&root, &mut files);
-    assert!(
-        files.len() >= 10,
-        "只找到 {} 個前端檔——掃描可能失效",
-        files.len()
-    );
-
-    let mut problems = Vec::new();
-    let mut api_literals = 0usize;
-    for f in &files {
-        let rel = f
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        let (p, n) = console_request_problems(&rel, &std::fs::read_to_string(f).unwrap());
-        problems.extend(p);
-        api_literals += n;
-    }
-    assert!(
-        api_literals >= 10,
-        "只看到 {api_literals} 個 /api/v1/ 字面值——掃描可能失效"
-    );
-    assert!(
-        problems.is_empty(),
-        "console 有請求路徑沒帶 UI 語系：\n{}",
-        problems.join("\n")
-    );
-
-    // 送出值的行為檢查必須接在 land 前的閘上，否則本測試的分工就落空。
-    // CI 無法設為 required（free 方案），land 前真正會跑到的是 make lint——所以釘的是
-    // **`lint:` target 的 recipe**，不是 Makefile 任一行（第三輪複審 claims#1：`frontend-check`
-    // 本來就有這行，把 lint 裡的呼叫刪掉照樣綠）。
+    // CI 無法設為 required（free 方案），land 前真正會跑到的是 make lint——釘 lint 的**生效** recipe
     let makefile = std::fs::read_to_string(repo.join("Makefile")).unwrap();
     assert!(
         recipe_runs(&makefile, "lint", "console-lang-check.mts"),
-        "make lint 的 recipe 沒有執行 frontend/scripts/console-lang-check.mts"
+        "make lint 的生效 recipe 沒有執行 frontend/scripts/console-lang-check.mts（或失敗會被吞掉）"
     );
+    // CI：必須是一個 run 步驟、逐字執行該檢查（`echo …console-lang-check.mts` 之類不算）
     let ci = std::fs::read_to_string(repo.join(".github/workflows/ci.yml")).unwrap();
     assert!(
-        ci.lines()
-            .any(|l| !l.trim_start().starts_with('#') && l.contains("console-lang-check.mts")),
-        "CI 沒有執行 frontend/scripts/console-lang-check.mts"
+        ci.lines().any(|l| l.trim()
+            == "run: node --experimental-strip-types frontend/scripts/console-lang-check.mts"),
+        "CI 沒有以獨立步驟執行 frontend/scripts/console-lang-check.mts"
     );
 }
 
-/// Makefile 的 `target:` recipe（到下一個 target 為止）是否有一行**非註解**的指令含 `needle`。
+/// Makefile 中 `target` **生效的** recipe 是否有一行非註解、失敗不會被吞掉的指令含 `needle`。
+///
+/// Make 對重複定義的 target 採**最後一份** recipe（並印 overriding 警告）；前版只看第一個
+/// `lint:` 區塊，在後面再定義一次就能讓檢查不再執行，或把那行改成 `-node … || true`（失敗被吞）
+/// 照樣綠（第四輪完整性批判）。
 fn recipe_runs(makefile: &str, target: &str, needle: &str) -> bool {
     let header = format!("{target}:");
-    let mut inside = false;
+    let mut recipes: Vec<Vec<&str>> = Vec::new();
+    let mut current: Option<Vec<&str>> = None;
     for line in makefile.lines() {
-        if !line.starts_with('\t') && !line.trim().is_empty() && !line.starts_with('#') {
-            // 新的 target（或變數定義）開始：只有在它就是目標 target 時才進入
-            inside = line.starts_with(&header);
+        if let Some(cmd) = line.strip_prefix('\t') {
+            if let Some(r) = current.as_mut() {
+                r.push(cmd);
+            }
             continue;
         }
-        let t = line.trim_start();
-        if inside && !(t.starts_with('#') || t.starts_with("@#")) && t.contains(needle) {
-            return true;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // 新的 target 或變數定義：先收起上一份 recipe
+        if let Some(r) = current.take() {
+            if !r.is_empty() {
+                recipes.push(r);
+            }
+        }
+        if line.starts_with(&header) && !line.starts_with(&format!("{header}=")) {
+            current = Some(Vec::new());
         }
     }
-    false
+    if let Some(r) = current.take() {
+        if !r.is_empty() {
+            recipes.push(r);
+        }
+    }
+    let Some(effective) = recipes.last() else {
+        return false;
+    };
+    effective.iter().any(|cmd| {
+        let c = cmd.trim_start().trim_start_matches('@').trim_start();
+        !c.starts_with('#') && !c.starts_with('-') && !c.contains("||") && c.contains(needle)
+    })
 }
 
 #[test]
-fn recipe_matcher_scopes_to_the_target() {
+fn recipe_matcher_scopes_to_the_effective_target() {
+    let n = "console-lang-check.mts";
     let only_other = "lint:\n\tcargo fmt --check\n\t@# node x/console-lang-check.mts（註解）\n\nfrontend-check:\n\tnode x/console-lang-check.mts\n";
     assert!(
-        !recipe_runs(only_other, "lint", "console-lang-check.mts"),
-        "只有別的 target 執行、或 lint 只在註解提到時，必須判定為未接線"
+        !recipe_runs(only_other, "lint", n),
+        "只有別的 target 執行、或只在註解提到"
     );
-    assert!(recipe_runs(
-        only_other,
-        "frontend-check",
-        "console-lang-check.mts"
-    ));
+    assert!(recipe_runs(only_other, "frontend-check", n));
     let wired = "fmt:\n\tcargo fmt\nlint: fmt\n\tcargo clippy\n\tnode x/console-lang-check.mts\ncoverage:\n\ttrue\n";
-    assert!(recipe_runs(wired, "lint", "console-lang-check.mts"));
+    assert!(recipe_runs(wired, "lint", n));
     assert!(
-        !recipe_runs(wired, "lint-ci", "console-lang-check.mts"),
+        !recipe_runs(wired, "lint-ci", n),
         "前綴相同的 target 不得誤認"
     );
+    let overridden = format!("{wired}lint:\n\tcargo clippy\n");
+    assert!(
+        !recipe_runs(&overridden, "lint", n),
+        "後面重新定義的 lint 才是生效的那份"
+    );
+    let swallowed = "lint:\n\t-node x/console-lang-check.mts\n";
+    assert!(!recipe_runs(swallowed, "lint", n), "`-` 前綴會吞掉失敗");
+    let ored = "lint:\n\tnode x/console-lang-check.mts || true\n";
+    assert!(!recipe_runs(ored, "lint", n), "`|| true` 會吞掉失敗");
 }
 
 /// rejection 原生**不是 400** 的案例：狀態語意須保留（413 不得被壓成 400）。

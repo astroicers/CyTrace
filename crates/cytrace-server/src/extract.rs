@@ -4,23 +4,25 @@
 //! （`Failed to deserialize the JSON body…`）——完全繞過 [`ApiError`]：zh-TW 用戶端收到英文、
 //! console 的 client 解不出 `{"error":{…}}` 而退回泛用訊息（T909 分類 workflow 反向追蹤發現）。
 //!
-//! handler 一律用本模組的型別取代 axum 原生 extractor；回應的 JSON 用 [`JsonOut`]。
-//! 回退由 clippy `disallowed-types`（workspace `clippy.toml`）擋住——`Path`/`Query`/`Multipart`/
-//! `Json`/`ConnectInfo` 全列。clippy 看的是**解析後的型別**，別名（含分組 `use`）、
-//! `extract::Json`、`type` 別名、closure handler、跨檔 re-export 都繞不過。
+//! handler 一律用本模組的型別取代 axum 原生 extractor；回應的 JSON 用 [`JsonOut`]、對端位址用
+//! [`PeerAddr`]。回退由兩道機械閘擋住：
+//! - clippy `disallowed-types`（workspace `clippy.toml`）列 `Path`/`Query`/`Multipart`/`Json`/
+//!   `ConnectInfo`。它看的是**寫出來的型別**（解析後），別名、分組 `use`、`extract::Json`、
+//!   `type` 別名、標了型別的 closure 參數都繞不過。
+//! - **它看不到推論出的型別**：`post(|axum::Json(b)| …)` 只以 pattern 解構、不標型別，clippy 不報
+//!   （第四輪複審 server#0／claims#1）。故另以 `tests::no_closure_handlers_in_server`（syn AST）
+//!   禁止以 closure 註冊 handler——具名函式的簽名一定寫出型別。
 //!
-//! `Json` 原本因為「同時是回應型別」而沒列，改由一支簽名級文字閘把關——兩輪複審各找到一批
-//! 繞過寫法（第二輪 claims#3、第三輪 server#0），列舉寫法的文字比對永遠追不完。回應改用
-//! [`JsonOut`] 之後就能全面禁用。合法的裸用處（本模組、`ConnectInfo` 的登入節流）各自以
-//! `#[allow]` 附理由豁免。
-
-// 本模組是 axum 原生 extractor 唯一的合法使用處（clippy.toml disallowed-types）
-#![allow(clippy::disallowed_types)]
+//! 本模組是原生 extractor 唯一的合法使用處，`#[allow]` **逐項**標在需要的 impl 上，不用模組層級：
+//! 模組層級的 allow 會連帶放行在這裡新增的 `type RawJson = axum::Json<…>` 之類的別名，其他模組
+//! 再用它 clippy 就看不到（第四輪複審 server#1）。
 
 use crate::error::{bad_request, ApiError, Lang};
-use axum::extract::{FromRequest, FromRequestParts, Multipart, Path, Query, Request};
+#[allow(clippy::disallowed_types)] // 包裝型別的實作需要原生 extractor
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Multipart, Path, Query, Request};
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
+#[allow(clippy::disallowed_types)] // 同上；回應另由 JsonOut 包裝
 use axum::Json;
 
 /// 從 request parts 協商語系（與 [`Lang`] 的 extractor 同一規則：`?lang=` > `Accept-Language`）。
@@ -35,6 +37,7 @@ fn lang_of(parts: &Parts) -> Lang {
 /// `Json<T>` 的包裝：解析失敗 → `ApiError(Validation, server.err.bad_request)`。
 pub struct ApiJson<T>(pub T);
 
+#[allow(clippy::disallowed_types)]
 impl<T, S> FromRequest<S> for ApiJson<T>
 where
     Json<T>: FromRequest<S, Rejection = axum::extract::rejection::JsonRejection>,
@@ -56,6 +59,7 @@ where
 /// `Query<T>` 的包裝。
 pub struct ApiQuery<T>(pub T);
 
+#[allow(clippy::disallowed_types)]
 impl<T, S> FromRequestParts<S> for ApiQuery<T>
 where
     Query<T>: FromRequestParts<S, Rejection = axum::extract::rejection::QueryRejection>,
@@ -75,6 +79,7 @@ where
 /// `Path<T>` 的包裝。
 pub struct ApiPath<T>(pub T);
 
+#[allow(clippy::disallowed_types)]
 impl<T, S> FromRequestParts<S> for ApiPath<T>
 where
     Path<T>: FromRequestParts<S, Rejection = axum::extract::rejection::PathRejection>,
@@ -92,8 +97,10 @@ where
 }
 
 /// `Multipart` 的包裝（`Content-Type` 缺 boundary 等情形）。
+#[allow(clippy::disallowed_types)]
 pub struct ApiMultipart(pub Multipart);
 
+#[allow(clippy::disallowed_types)]
 impl<S> FromRequest<S> for ApiMultipart
 where
     S: Send + Sync,
@@ -111,10 +118,31 @@ where
     }
 }
 
+/// 對端位址（登入節流用）。取代裸 `ConnectInfo`：rejection 只在 server 未以 connect_info 啟動時
+/// 發生（伺服器組態 bug、非用戶端輸入），經 [`bad_request`] 轉成 JSON 500。
+pub struct PeerAddr(pub std::net::SocketAddr);
+
+#[allow(clippy::disallowed_types)]
+impl<S> FromRequestParts<S> for PeerAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let lang = lang_of(parts);
+        ConnectInfo::<std::net::SocketAddr>::from_request_parts(parts, state)
+            .await
+            .map(|ConnectInfo(a)| PeerAddr(a))
+            .map_err(|r| bad_request(lang, r))
+    }
+}
+
 /// 回應用的 JSON 包裝。handler 的回應一律用它——`axum::Json` 同時是 extractor，
 /// 全面禁用它（clippy.toml）才能讓裸 `Json` 的請求解析在任何寫法下都被擋下。
 pub struct JsonOut<T>(pub T);
 
+#[allow(clippy::disallowed_types)]
 impl<T: serde::Serialize> IntoResponse for JsonOut<T> {
     fn into_response(self) -> Response {
         Json(self.0).into_response()
@@ -148,6 +176,189 @@ mod tests {
                 "clippy.toml 未禁用 {want}：{listed:?}"
             );
         }
+
+        // 生效的必須是這一份：crate 層級的 clippy.toml／.clippy.toml 會**整份取代** workspace 的
+        // （不合併），禁令靜默失效而本測試照綠（第四輪複審 server#2）；CLIPPY_CONF_DIR 同理。
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut stack = vec![root.clone()];
+        let mut extra = Vec::new();
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                let name = p.file_name().unwrap().to_string_lossy().to_string();
+                if p.is_dir() {
+                    if !matches!(
+                        name.as_str(),
+                        "target" | "node_modules" | ".git" | "dist" | "dist-console"
+                    ) {
+                        stack.push(p);
+                    }
+                } else if (name == "clippy.toml" || name == ".clippy.toml") && d != root {
+                    extra.push(p.display().to_string());
+                }
+            }
+        }
+        assert!(
+            extra.is_empty(),
+            "有其他層級的 clippy 設定會取代 workspace 的：{extra:?}"
+        );
+        for f in ["Makefile", ".github/workflows/ci.yml"] {
+            let t = std::fs::read_to_string(root.join(f)).unwrap();
+            assert!(
+                !t.contains("CLIPPY_CONF_DIR"),
+                "{f} 設了 CLIPPY_CONF_DIR，會改變生效的 clippy 設定"
+            );
+        }
+    }
+
+    /// 以 closure 註冊 handler 一律禁止。
+    ///
+    /// clippy `disallowed-types` 看的是**寫出來的型別**：`post(|axum::Json(b)| async move {…})`
+    /// 只以 pattern 解構、不標型別，參數型別由推論而來，clippy 看不到，裸 Json 的 rejection 照樣回
+    /// 英文純文字（第四輪複審 server#0／claims#1，副本實測）。handler 一律寫成具名函式，簽名上的
+    /// 型別就都在 clippy 的視野內。以 `syn` 解析 AST 判定，不受排版與註解影響。
+    /// 以自由函式呼叫的路由建構子（`axum::routing::get(h)`、`any(h)`…）。
+    const ROUTING_FNS: &[&str] = &[
+        "get",
+        "post",
+        "put",
+        "delete",
+        "patch",
+        "head",
+        "options",
+        "trace",
+        "any",
+        "on",
+        "get_service",
+        "post_service",
+        "any_service",
+        "on_service",
+    ];
+    /// 以方法呼叫的（`MethodRouter::post`、`Router::fallback`…）。不含 `any`：
+    /// MethodRouter 沒有 `.any()`，而 `Iterator::any(|c| …)` 會誤中。
+    const ROUTING_METHODS: &[&str] = &[
+        "get",
+        "post",
+        "put",
+        "delete",
+        "patch",
+        "head",
+        "options",
+        "trace",
+        "on",
+        "fallback",
+        "method_not_allowed_fallback",
+        "route_service",
+        "nest_service",
+        "fallback_service",
+    ];
+
+    #[derive(Default)]
+    struct ClosureHandlers {
+        hits: Vec<String>,
+        routing_calls: usize,
+    }
+
+    fn is_closure(e: &syn::Expr) -> bool {
+        match e {
+            syn::Expr::Closure(_) => true,
+            syn::Expr::Paren(p) => is_closure(&p.expr),
+            syn::Expr::Group(g) => is_closure(&g.expr),
+            _ => false,
+        }
+    }
+
+    impl<'ast> syn::visit::Visit<'ast> for ClosureHandlers {
+        fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(p) = &*c.func {
+                if let Some(seg) = p.path.segments.last() {
+                    if ROUTING_FNS.contains(&seg.ident.to_string().as_str()) {
+                        self.routing_calls += 1;
+                        if c.args.iter().any(is_closure) {
+                            self.hits
+                                .push(quote::ToTokens::to_token_stream(c).to_string());
+                        }
+                    }
+                }
+            }
+            syn::visit::visit_expr_call(self, c);
+        }
+        fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+            if ROUTING_METHODS.contains(&m.method.to_string().as_str()) {
+                self.routing_calls += 1;
+                if m.args.iter().any(is_closure) {
+                    self.hits
+                        .push(quote::ToTokens::to_token_stream(m).to_string());
+                }
+            }
+            syn::visit::visit_expr_method_call(self, m);
+        }
+    }
+
+    fn closure_handlers(src: &str) -> ClosureHandlers {
+        let file = syn::parse_file(src).expect("解析 Rust 原始碼");
+        let mut v = ClosureHandlers::default();
+        syn::visit::Visit::visit_file(&mut v, &file);
+        v
+    }
+
+    #[test]
+    fn closure_handler_matcher_detects_known_violations() {
+        let bad = [
+            // 第四輪實測的兩種：不標型別的 pattern
+            "fn r() -> R { Router::new().route(\"/x\", axum::routing::post(|axum::Json(b)| async move { b })) }",
+            "fn r() -> R { Router::new().route(\"/p/{n}\", get(|axum::extract::Path(n)| async move { n })) }",
+            "fn r() -> R { Router::new().fallback(|| async { \"x\" }) }",
+            "fn r() -> R { Router::new().route(\"/y\", get(h).post(|b: String| async move { b })) }",
+            "fn r() -> R { Router::new().route(\"/z\", on(MethodFilter::GET, (|| async {}))) }",
+            "fn r() -> R { Router::new().route(\"/w\", axum::routing::any(|| async {})) }",
+        ];
+        for s in bad {
+            assert!(!closure_handlers(s).hits.is_empty(), "比對器漏抓：{s}");
+        }
+        let good = [
+            "fn r() -> R { Router::new().route(\"/x\", get(api::jobs::list).post(api::jobs::create)) }",
+            "fn f(v: &[u8]) -> Vec<u8> { v.iter().map(|x| x + 1).collect() }",
+            "fn f(s: &str) -> bool { s.chars().any(|c| c == 'x') }",
+        ];
+        for s in good {
+            let h = closure_handlers(s);
+            assert!(h.hits.is_empty(), "比對器誤報：{s} → {:?}", h.hits);
+        }
+    }
+
+    #[test]
+    fn no_closure_handlers_in_server() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut stack = vec![src.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap() {
+                let p = e.unwrap().path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if p.extension().is_some_and(|x| x == "rs") {
+                    files.push(p);
+                }
+            }
+        }
+        let mut hits = Vec::new();
+        let mut routing_calls = 0;
+        for f in &files {
+            let v = closure_handlers(&std::fs::read_to_string(f).unwrap());
+            routing_calls += v.routing_calls;
+            hits.extend(v.hits.into_iter().map(|h| format!("{}: {h}", f.display())));
+        }
+        // 反空轉：router.rs 至少有十來個具名 handler 的路由呼叫
+        assert!(
+            routing_calls >= 10,
+            "只看到 {routing_calls} 個路由呼叫——解析可能失效"
+        );
+        assert!(
+            hits.is_empty(),
+            "以 closure 註冊 handler（clippy 看不到推論出的型別）：\n{}",
+            hits.join("\n")
+        );
     }
 
     /// rejection 原生是 **5xx**（伺服器自己的 bug）→ `Internal`，不得被壓成 400 怪到用戶端。

@@ -201,61 +201,107 @@ for (const [url, lang, wantPath, wantQs] of [
 }
 
 // ── 3. AST 閘：node 載不起來的檔案（.tsx、main.tsx）只能靜態釘住 ──
-// 讀語系一律經 effectiveLang；日期／數字格式化只准在 console/format.ts（它有上面的行為檢查）。
+// 規則（皆以 TypeScript AST 判定，註解、字串內容、regex 不會誤中或誤放）：
+// a. 讀語系一律經 effectiveLang：`.language(s)` 的屬性存取、元素存取、解構宣告、解構賦值、計算鍵皆禁。
+// b. 日期／數字格式化只准在 console/format.ts，且那裡每一個格式化呼叫的第一個引數必須**逐字**是
+//    `effectiveLang(i18n)`（前版整檔豁免，新增一個用預設 locale 的函式照樣綠——第四輪 lang#0）。
+//    format.ts 以外：`toLocale*String`、任何指向 `Intl` 的識別字（含 globalThis.Intl、解構）皆禁。
+//    固定輸出英文的 `toDateString`／`toTimeString`／`toUTCString`／`toGMTString` 任何地方皆禁。
+// c. `/api` 字串片段只准出現在 api/client.ts 與 api/upload.ts——那兩支的每個成員都有上面的行為檢查；
+//    頁面一律經 `api`／`artifactUrl`（前版在 Rust 端找「直接包住字面值的呼叫」，拆字串、`${API}/v1`、
+//    含 `\//` 的 regex 都繞得過——第四輪 lang#1／claims#0）。
+// d. `fetch` 只准在 client.ts、`XMLHttpRequest` 只准在 upload.ts。
+// 已知限制：以程式組出的鍵或路徑（`'lang' + 'uage'`、`['', 'api'].join('/')`）不在靜態檢查範圍。
 const LANG_PROPS = new Set(['language', 'languages'])
 const FORMAT_HOME = 'frontend/src/console/format.ts'
+const API_HOMES = new Set(['frontend/src/console/api/client.ts', 'frontend/src/console/api/upload.ts'])
+const ENGLISH_ONLY = new Set(['toDateString', 'toTimeString', 'toUTCString', 'toGMTString'])
 function bannedUses(file: string, src: string): string[] {
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true,
     file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
   const out: string[] = []
   const at = (n: ts.Node, why: string) =>
     out.push(`${file}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}：${why}`)
+  const nameOf = (n: ts.Node | undefined): string | undefined =>
+    n && (ts.isIdentifier(n) || ts.isStringLiteralLike(n) || ts.isPrivateIdentifier(n)) ? n.text
+      : n && ts.isComputedPropertyName(n) && ts.isStringLiteralLike(n.expression) ? n.expression.text
+        : undefined
+  const isModuleSpecifier = (n: ts.Node) =>
+    (ts.isImportDeclaration(n.parent) || ts.isExportDeclaration(n.parent)) && n.parent.moduleSpecifier === n
   const visit = (n: ts.Node) => {
-    if (ts.isPropertyAccessExpression(n) && LANG_PROPS.has(n.name.text)) {
-      at(n, `讀 .${n.name.text}——改用 effectiveLang(i18n)`)
-    }
-    if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)
-      && LANG_PROPS.has(n.argumentExpression.text)) {
-      at(n, `讀 ["${n.argumentExpression.text}"]——改用 effectiveLang(i18n)`)
-    }
-    if (ts.isBindingElement(n)) {
-      const key = n.propertyName ?? n.name
-      if ((ts.isIdentifier(key) || ts.isStringLiteral(key)) && LANG_PROPS.has(key.text)) {
-        at(n, `解構取出 ${key.text}——改用 effectiveLang(i18n)`)
-      }
-    }
+    // a. 語系
+    let key: string | undefined
+    if (ts.isPropertyAccessExpression(n)) key = n.name.text
+    else if (ts.isElementAccessExpression(n)) key = nameOf(n.argumentExpression)
+    else if (ts.isBindingElement(n)) key = nameOf(n.propertyName ?? n.name)
+    else if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) key = nameOf(n.name)
+    if (key && LANG_PROPS.has(key)) at(n, `讀 ${key}——改用 effectiveLang(i18n)`)
+    // b. 格式化
+    const member = ts.isPropertyAccessExpression(n) ? n.name.text
+      : ts.isElementAccessExpression(n) ? nameOf(n.argumentExpression) : undefined
+    if (member && ENGLISH_ONLY.has(member)) at(n, `${member} 固定輸出英文——改用 format.ts 的 fmtTime`)
     if (file !== FORMAT_HOME) {
-      if (ts.isPropertyAccessExpression(n) && /^toLocale\w*String$/.test(n.name.text)) {
-        at(n, `${n.name.text} 只准在 ${FORMAT_HOME}（依 UI 語系格式化）`)
-      }
-      if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'Intl') {
-        at(n, `Intl.${n.name.text} 只准在 ${FORMAT_HOME}`)
+      if (member && /^toLocale\w*String$/.test(member)) at(n, `${member} 只准在 ${FORMAT_HOME}`)
+      if (ts.isIdentifier(n) && n.text === 'Intl') at(n, `Intl 只准在 ${FORMAT_HOME}`)
+    } else if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+      const callee = n.expression.getText(sf)
+      if (/(^|\.)toLocale\w*String$/.test(callee) || /^(globalThis\.)?Intl\./.test(callee)) {
+        const arg0 = n.arguments?.[0]?.getText(sf)
+        if (arg0 !== 'effectiveLang(i18n)') at(n, `${callee}(…) 的 locale 必須逐字是 effectiveLang(i18n)，得 ${arg0 ?? '（缺席）'}`)
       }
     }
+    // c. /api 字串片段
+    if ((ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateHead(n)
+      || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) && n.text.includes('/api')
+      && !isModuleSpecifier(n) && !API_HOMES.has(file)) {
+      at(n, '/api 路徑只准在 api/client.ts、api/upload.ts——頁面請經 api／artifactUrl（才會帶語系）')
+    }
+    // d. 請求構造
+    if (ts.isCallExpression(n) && /(^|\.)fetch$/.test(n.expression.getText(sf))
+      && file !== 'frontend/src/console/api/client.ts') at(n, 'fetch 只准在 api/client.ts')
+    if (ts.isIdentifier(n) && n.text === 'XMLHttpRequest'
+      && file !== 'frontend/src/console/api/upload.ts') at(n, 'XMLHttpRequest 只准在 api/upload.ts')
     ts.forEachChild(n, visit)
   }
   visit(sf)
   return out
 }
-// 比對器的正負對照：壞樣本必中、只在註解／字串／regex 裡出現必不中
-const SELF: Array<[string, number]> = [
-  ['x = i18n.language', 1],
-  ['x = i18n["languages"]', 1],
-  ['const { t, i18n: { language } } = useTranslation()', 1],
-  ["const { 'language': l } = i18n", 1],
-  ['d.toLocaleString()', 1],
-  ["d.toLocaleString(undefined, { dateStyle: 'medium' })", 1],
-  ['new Intl.DateTimeFormat().format(d)', 1],
-  ['const abs = /^https?:\\/\\//.test(u) ? u : i18n.language', 1],
-  ["s.replace(/'/g, '’'); const h = 'file://' + navigator.language", 1],
-  ['// i18n.language 在註解裡', 0],
-  ["const s = 'i18n.language 在字串裡'", 0],
-  ['const r = /i18n\\.language/', 0],
-  ['x = i18n.resolvedLanguage; document.documentElement.lang = x', 0],
+// 比對器的正負對照：[檔案, 原始碼, 應命中次數]。壞樣本必中、只在註解／字串內容／regex 裡出現必不中
+const PAGE = 'frontend/src/console/pages/Sample.tsx'
+const SELF: Array<[string, string, number]> = [
+  [PAGE, 'x = i18n.language', 1],
+  [PAGE, 'x = i18n["languages"]', 1],
+  [PAGE, 'const { t, i18n: { language } } = useTranslation()', 1],
+  [PAGE, "const { 'language': l } = i18n", 1],
+  [PAGE, "const { ['language']: l } = i18n", 1],
+  [PAGE, 'let l = ""; ({ language: l } = i18n)', 1],
+  [PAGE, 'd.toLocaleString()', 1],
+  [PAGE, "d.toLocaleString(undefined, { dateStyle: 'medium' })", 1],
+  [PAGE, "d['toLocaleString']()", 1],
+  [PAGE, 'new Intl.DateTimeFormat().format(d)', 1],
+  [PAGE, 'new globalThis.Intl.DateTimeFormat().format(d)', 1],
+  [PAGE, 'const { DateTimeFormat } = Intl', 1],
+  [PAGE, 'd.toDateString()', 1],
+  [PAGE, 'const abs = /^https?:\\/\\//.test(u) ? u : i18n.language', 1],
+  [PAGE, "s.replace(/'/g, '’'); const h = 'file://' + navigator.language", 1],
+  [PAGE, "<a href={'/api' + `/v1/jobs/${id}/artifacts/cbom`} />", 1],
+  [PAGE, "const API = '/api'; const u = `${API}/v1/jobs`", 1],
+  [PAGE, "const u = `${base}/api/v1/jobs`", 1],
+  [PAGE, "fetch('/x')", 1],
+  [PAGE, 'new XMLHttpRequest()', 1],
+  [FORMAT_HOME, "d.toLocaleDateString(undefined, { dateStyle: 'medium' })", 1],
+  [FORMAT_HOME, 'new Intl.DateTimeFormat().format(d)', 1],
+  [FORMAT_HOME, 'd.toLocaleString(effectiveLang(i18n))', 0],
+  [PAGE, '// i18n.language 在註解裡', 0],
+  [PAGE, "const s = 'i18n.language 在字串裡'", 0],
+  [PAGE, 'const r = /i18n\\.language/', 0],
+  [PAGE, 'x = i18n.resolvedLanguage; document.documentElement.lang = x', 0],
+  [PAGE, "import { api } from '../api/client'", 0],
+  ['frontend/src/console/api/client.ts', "request<X>('/api/v1/jobs')", 0],
 ]
-for (const [src, want] of SELF) {
-  const got = bannedUses('frontend/src/Sample.tsx', src).length
-  if (got !== want) fail(`比對器自檢：${JSON.stringify(src)} 命中 ${got} 次，應為 ${want}`)
+for (const [file, src, want] of SELF) {
+  const got = bannedUses(file, src).length
+  if (got !== want) fail(`比對器自檢：${JSON.stringify(src)}（${file}）命中 ${got} 次，應為 ${want}`)
 }
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -267,9 +313,15 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 const files = walk(path.join(ROOT, 'frontend/src'))
 if (files.length < 25) fail(`只掃到 ${files.length} 個前端檔——掃描可能失效`)
+let apiLiterals = 0
 for (const f of files) {
-  for (const hit of bannedUses(path.relative(ROOT, f).replace(/\\/g, '/'), fs.readFileSync(f, 'utf8'))) fail(hit)
+  const rel = path.relative(ROOT, f).replace(/\\/g, '/')
+  const src = fs.readFileSync(f, 'utf8')
+  if (API_HOMES.has(rel)) apiLiterals += (src.match(/['"`]\/api\//g) ?? []).length
+  for (const hit of bannedUses(rel, src)) fail(hit)
 }
+// 反空轉：/api 字面值確實集中在那兩支檔案（client.ts 的 api 物件與 artifactUrl、upload.ts）
+if (apiLiterals < 10) fail(`api/client.ts、upload.ts 只有 ${apiLiterals} 個 /api 字面值——掃描可能失效`)
 // main.tsx（帶 DOM，載不起來）：白名單接線
 const mainFile = path.join(ROOT, 'frontend/src/console/main.tsx')
 const mainSf = ts.createSourceFile(mainFile, fs.readFileSync(mainFile, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
@@ -293,5 +345,5 @@ if (failures.length) {
 }
 console.log(
   `✓ console 語系檢查通過（${RAW.length} 種輸入 × ${API.length} 個 api 方法 / 上傳 XHR / ${NAV.length} 個導覽成員 / 時間格式，` +
-    `實際送出值皆為畫面語系；${diverged} 種要求≠送出、${fallbackHit} 種走 fallback；${files.length} 檔 AST 無繞過 effectiveLang 的讀法）`,
+    `實際送出值皆為畫面語系；${diverged} 種要求≠送出、${fallbackHit} 種走 fallback；${files.length} 檔通過 AST 規則：語系經 effectiveLang、格式化限 format.ts、/api 限 client/upload，自檢 ${SELF.length} 例）`,
 )

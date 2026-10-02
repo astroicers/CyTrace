@@ -31,8 +31,10 @@ export function describeJobError(
   // t() 查不到時回傳鍵本身；裸鍵與空白對操作員都等於沒有訊息。
   for (const k of [key, error.kind ? `server.err.${error.kind}` : '']) {
     if (!k) continue
-    const msg = t(k)
-    if (msg && msg !== k) return { text: msg, detailConsumed: false }
+    // 只認**葉節點**的字串：鍵指向物件（例如 server.err 這種非葉節點）時 i18next 回傳一段
+    // 「returned an object instead of string」警告字串，Rust 端則視為查不到（第四輪複審 server#4）
+    const msg = t(k, { returnObjects: true }) as unknown
+    if (typeof msg === 'string' && msg && msg !== k) return { text: msg, detailConsumed: false }
   }
   if (error.detail) return { text: error.detail, detailConsumed: true }
   return { text: t('server.err.internal'), detailConsumed: false }

@@ -3,28 +3,69 @@
   "cases": [
     {
       "name": "已知鍵",
-      "error": { "kind": "engine", "i18n_key": "server.err.engine", "detail": "syft exit Some(1): " },
-      "expect": { "key": "server.err.engine" }
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err.engine",
+        "detail": "syft exit Some(1): "
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
     },
     {
       "name": "重啟中斷（非 server.err.* 的鍵）",
-      "error": { "kind": "interrupted", "i18n_key": "server.job.interrupted", "detail": "" },
-      "expect": { "key": "server.job.interrupted" }
+      "error": {
+        "kind": "interrupted",
+        "i18n_key": "server.job.interrupted",
+        "detail": ""
+      },
+      "expect": {
+        "key": "server.job.interrupted"
+      }
     },
     {
       "name": "未知鍵 → kind 泛用句（較新版本寫入後回滾）",
-      "error": { "kind": "engine", "i18n_key": "server.err.engine_v2", "detail": "syft exit Some(2): image pull denied" },
-      "expect": { "key": "server.err.engine" }
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err.engine_v2",
+        "detail": "syft exit Some(2): image pull denied"
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
     },
     {
       "name": "未知鍵與未知 kind → detail 原文",
-      "error": { "kind": "quantum", "i18n_key": "server.err.quantum_v9", "detail": "raw: theia exit 3" },
-      "expect": { "detail": true }
+      "error": {
+        "kind": "quantum",
+        "i18n_key": "server.err.quantum_v9",
+        "detail": "raw: theia exit 3"
+      },
+      "expect": {
+        "detail": true
+      }
+    },
+    {
+      "name": "鍵指向非葉節點 → 視為查不到、退回 kind",
+      "error": {
+        "kind": "engine",
+        "i18n_key": "server.err",
+        "detail": "x"
+      },
+      "expect": {
+        "key": "server.err.engine"
+      }
     },
     {
       "name": "全空 → internal",
-      "error": { "kind": "", "i18n_key": "", "detail": "" },
-      "expect": { "key": "server.err.internal" }
+      "error": {
+        "kind": "",
+        "i18n_key": "",
+        "detail": ""
+      },
+      "expect": {
+        "key": "server.err.internal"
+      }
     }
   ]
 }

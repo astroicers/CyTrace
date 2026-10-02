@@ -1,7 +1,8 @@
-@import 'tailwindcss';
-/* 不掃開發用檢查腳本：其文字（如 `static`）原本會長進出貨的 console CSS 與報表樣板，
-   只改腳本註解就讓產物 hash 改變（T909 第三輪完整性批判）。 */
-@source not '../scripts';
+/* 掃描來源明定為 src/（本檔所在目錄）：Tailwind 的自動偵測依 .gitignore 決定掃什麼，
+   有 git 的工作樹與沒有 git 的 Docker 建置環境掃到的東西不同——Docker 會掃進 dist/ 的上一次
+   產物，映像內嵌的 CSS 與 commit 版不一致（T909 第四輪完整性批判）；開發用的 scripts/ 也會
+   長出類別（第三輪完整性批判，前版以 `@source not` 只擋住了這一個）。 */
+@import 'tailwindcss' source('.');
 
 /* next-themes 以 class 切換深色 */
 @custom-variant dark (&:where(.dark, .dark *));

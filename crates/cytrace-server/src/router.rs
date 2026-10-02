@@ -58,7 +58,8 @@ pub fn build_router_with_state(state: AppState) -> Router {
         // 包住的 fallback，未登入者就會拿到 405 而非 401。
         //
         // 注意：未登入的 401 **仍帶 `Allow`**（axum 在所有 layer 之外、對 method-not-allowed
-        // 分支的任何狀態碼補上，router 層剝不掉）。API 方法表公開於 ADR-011 與原始碼，不視為機密；
+        // 分支的任何狀態碼補上，router 層剝不掉）。API 方法表見公開原始碼（本檔；repo 為公開）——ADR-011 並未列方法，前版說法
+        // 不實（第四輪複審 claims#5）——不視為機密；
         // 本排序保證的只是「未登入回 401 而非 405」（第三輪複審 server#2 更正前版「不透露方法表」）。
         .method_not_allowed_fallback(method_not_allowed)
         .layer(axum::extract::DefaultBodyLimit::disable()) // 上傳大小由 handler 串流計數把關
