@@ -36,7 +36,17 @@
       "vulnerable": "Quantum-vulnerable or undetermined cryptographic assets detected; exiting with code 2",
       "no_result": "--fail-on-quantum-vulnerable was set but no CBOM result was obtained; \"not scanned\" is not \"passed\"; exiting with code 1"
     },
-    "schema_ahead": "This file was produced by a newer CyTrace (schema v{{found}}; this build supports v{{supported}}); unknown fields are dropped and the report may be incomplete"
+    "schema_ahead": "This file was produced by a newer CyTrace (schema v{{found}}; this build supports v{{supported}}); unknown fields are dropped and the report may be incomplete",
+    "err": {
+      "prefix": "error: {{message}}",
+      "with_detail": "{{what}}: {{detail}}",
+      "read_failed": "Cannot read {{path}}: {{detail}}",
+      "write_failed": "Cannot write {{path}}: {{detail}}",
+      "parse_failed": "{{path}} is not a valid ScanResult JSON: {{detail}}",
+      "invalid_address": "Invalid address: {{value}} (e.g. 127.0.0.1:8443)",
+      "password_input": "Cannot read the password (an interactive terminal is required; add -it for containers): {{detail}}"
+    },
+    "lang_unsupported": "Unsupported language \"{{value}}\"; using zh-TW (available: zh-TW, en-US)"
   },
   "server": {
     "listening": "CyTrace server listening on {{addr}}",
@@ -69,6 +79,26 @@
     },
     "job": {
       "interrupted": "Interrupted by server restart; please re-submit the scan"
+    },
+    "startup": {
+      "bind_invalid": "{{source}} is not a valid listen address: {{value}} (e.g. 127.0.0.1:8443)",
+      "admin_hash_missing": "CYTRACE_ADMIN_PASSWORD_HASH is not set; refusing to start (generate one with `cytrace hash-password`)",
+      "admin_hash_invalid": "CYTRACE_ADMIN_PASSWORD_HASH is not a valid PHC string; refusing to start (generate one with `cytrace hash-password`)",
+      "not_integer": "{{name}} must be a non-negative integer: {{value}}",
+      "tls_unpaired": "TLS certificate and key must be set together (--tls-cert/--tls-key or CYTRACE_TLS_CERT/CYTRACE_TLS_KEY)",
+      "scan_roots_format": "CYTRACE_SCAN_ROOTS entries must look like name=/abs/path: {{item}}",
+      "scan_roots_not_absolute": "CYTRACE_SCAN_ROOTS entry paths must be absolute: {{item}}",
+      "tls_load_failed": "Failed to load TLS certificate (cert={{cert}}, key={{key}}): {{detail}}",
+      "data_dir_failed": "Cannot create data directory {{path}}: {{detail}}",
+      "data_dir_unreadable": "Cannot read data directory {{path}}: {{detail}}",
+      "listen_failed": "Cannot serve on {{addr}}: {{detail}}",
+      "runtime_failed": "Cannot create the async runtime: {{detail}}"
+    },
+    "runtime": {
+      "job_quarantined_missing": "Job directory has no job.json; quarantined to {{to}}",
+      "job_quarantined_corrupt": "Corrupt job.json; quarantined to {{to}}: {{detail}}",
+      "job_quarantine_failed": "Corrupt job record could not be quarantined and was left at {{path}} (will retry on next start): {{detail}}",
+      "job_persist_failed": "Failed to persist job.json ({{id}}): {{detail}}"
     }
   },
   "console": {

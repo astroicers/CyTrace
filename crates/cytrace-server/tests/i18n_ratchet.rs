@@ -1,42 +1,55 @@
-//! i18n 棘輪：server 非測試程式碼的中文字面值只減不增（NFR-06 / T909 / T912）。
+//! i18n 棘輪：所有 crate 的生產碼不得有中文字面值，只有 [`EXEMPT`] 明列的例外（NFR-06 / T909 / T912）。
 //!
-//! T909 把流進 **API 回應**的中文散文全數改走 i18n 鍵（經 53 個代理分類 + 反證確認範圍）。
-//! 剩下的都印在**操作員終端**（serve 啟動錯誤、job 落盤警告），屬 T912，列於 [`T912_BACKLOG`]。
+//! T909 把流進 **API 回應**的中文散文全數改走 i18n 鍵（經 53 個代理分類 + 反證確認範圍）；
+//! T912 把印在**操作者終端**的（serve 啟動錯誤、job 隔離與落盤警告、CLI 錯誤）也改走鍵，
+//! 並把掃描範圍從 server 擴到全部 crate——cli 與 core 一樣會把字串印給操作者。
 //!
 //! 本測試是雙向的：
-//! - 出現清單外的新中文字面值 → 紅（T909 修掉的不得回來；新增的必須走 i18n 鍵或進清單並說明）
-//! - 清單內的項目已不存在 → 紅（T912 修掉一個就得從清單移除——否則清單變陳舊，
+//! - 出現清單外的中文字面值 → 紅（使用者可見字串必須走 i18n 鍵）
+//! - 清單內的項目次數不符 → 紅（多了＝複製了例外字串；少了＝修掉後沒更新清單，
 //!   日後有人照同樣字串加回來也不會被抓）
 //!
-//! 鍵為（檔案, 字面值片段），不用行號——行號一改就漂。
+//! 鍵為（crate 相對路徑, 字面值全文），不用行號——行號一改就漂。
 
 use std::path::Path;
 
-/// T912 待辦：已知印在操作員終端、尚未 i18n 的字面值片段與**出現次數**。**只能減，不該加**。
+/// 明列的例外：（crate 相對路徑, 字面值**全文**, 出現次數, 理由）。
 ///
-/// 計次數而非只看片段是否存在：只看存在的話，一筆清單能豁免任意多個同片段字面值——
-/// 複製既有錯誤訊息（例如再貼一處「job.json 落盤失敗」送進 API）正是新散文最常見的來源
-/// （T909 對抗式複審 v11，3/3 確認）。
-const T912_BACKLOG: &[(&str, &str, usize)] = &[
-    ("config.rs", "CYTRACE_BIND 不是合法位址", 1),
-    ("config.rs", "缺少 CYTRACE_ADMIN_PASSWORD_HASH", 1),
+/// 比對全文而不是片段：片段比對下，一筆 `"（"` 會豁免該檔所有含全形括號的字面值。
+/// 計次數：只看存在的話，一筆清單能豁免任意多個同字串字面值——複製既有訊息正是新散文
+/// 最常見的來源（T909 對抗式複審 v11，3/3 確認）。
+const EXEMPT: &[(&str, &str, usize, &str)] = &[
     (
-        "config.rs",
-        "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串",
+        "cytrace-core/src/engine.rs",
+        "reap 只在 early return 時取走",
         1,
+        "unreachable! 的不變式說明；panic 訊息給開發者，依構造到不了",
     ),
-    ("config.rs", "CYTRACE_SESSION_TTL_HOURS 不是整數", 1),
-    ("config.rs", "TLS 憑證與金鑰必須成對設定", 1),
-    ("config.rs", "{key} 不是整數", 1),
-    ("config.rs", "CYTRACE_MAX_EXTRACT_MB 不是整數", 1),
-    // 只含全形冒號、無漢字——初版 is_cjk 只認 U+4E00–9FFF，這條看不到
-    ("config.rs", "CYTRACE_SCAN_ROOTS：", 1),
-    ("jobs/registry.rs", "無法建立資料目錄", 1),
-    ("jobs/registry.rs", "損毀的 job 記錄", 1),
-    ("jobs/registry.rs", "job.json 落盤失敗", 2),
-    ("targets.rs", "格式應為 name=/abs/path：", 1),
-    ("targets.rs", "格式應為 name=/abs/path（絕對路徑）", 1),
-    ("tls.rs", "TLS 憑證載入失敗", 1),
+    (
+        "cytrace-core/src/engine.rs",
+        "正常結束路徑上 reap 必然還在",
+        1,
+        "expect 的不變式說明；同上",
+    ),
+    (
+        "cytrace-i18n/src/lib.rs",
+        "內嵌 locale 應為合法 JSON",
+        1,
+        "expect：locale 以 include_str! 內嵌，壞掉在測試就紅，執行期到不了",
+    ),
+    (
+        "cytrace-i18n/src/lib.rs",
+        "內嵌 zh-TW 應為合法 JSON",
+        1,
+        "同上",
+    ),
+    (
+        "cytrace-i18n/src/lib.rs",
+        "（",
+        1,
+        "Catalog::parens 的 zh-TW 分支（依語系選全形／半形括號，en-US 走半形）",
+    ),
+    ("cytrace-i18n/src/lib.rs", "）", 1, "同上"),
 ];
 
 /// 與 tests/jobs.rs 的 `has_cjk` 同範圍：漢字 + CJK 標點 + 全形字元。
@@ -279,12 +292,34 @@ fn walk(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 #[test]
-fn server_cjk_literals_only_shrink() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+fn cjk_literals_only_in_exempt_places() {
+    // 掃全部 crate 的 src：cli 與 core 也印操作者終端訊息（T912 前只掃 server，
+    // cli 與 core 修好後沒有任何機械閘防回歸）
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let mut files = Vec::new();
-    walk(&src, &mut files);
+    let mut scanned = Vec::new();
+    for e in std::fs::read_dir(&crates).expect("讀 crates/") {
+        let dir = e.unwrap().path();
+        let src = dir.join("src");
+        if src.is_dir() {
+            scanned.push(dir.file_name().unwrap().to_string_lossy().into_owned());
+            walk(&src, &mut files);
+        }
+    }
+    // 反空轉：目錄結構一改，掃描範圍可能悄悄縮成零
+    for must in [
+        "cytrace-server",
+        "cytrace-cli",
+        "cytrace-core",
+        "cytrace-i18n",
+    ] {
+        assert!(
+            scanned.iter().any(|c| c == must),
+            "沒掃到 {must}——掃描範圍可能已失效（掃到：{scanned:?}）"
+        );
+    }
     assert!(
-        files.len() >= 15,
+        files.len() >= 30,
         "只找到 {} 個 .rs——掃描可能已失效",
         files.len()
     );
@@ -292,7 +327,7 @@ fn server_cjk_literals_only_shrink() {
     let mut found: Vec<(String, String)> = Vec::new();
     for f in &files {
         let rel = f
-            .strip_prefix(&src)
+            .strip_prefix(&crates)
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
@@ -302,27 +337,15 @@ fn server_cjk_literals_only_shrink() {
         }
     }
 
-    // 每筆清單項目的實際出現次數
-    let count_of = |bf: &str, frag: &str| {
-        found
-            .iter()
-            .filter(|(f, l)| f == bf && l.contains(frag))
-            .count()
-    };
-
-    // 方向 1：清單外的新中文字面值
+    // 方向 1：清單外的中文字面值
     let unexpected: Vec<_> = found
         .iter()
-        .filter(|(file, lit)| {
-            !T912_BACKLOG
-                .iter()
-                .any(|(bf, frag, _)| file == bf && lit.contains(frag))
-        })
+        .filter(|(file, lit)| !EXEMPT.iter().any(|(ef, el, _, _)| file == ef && lit == el))
         .collect();
     assert!(
         unexpected.is_empty(),
-        "server 出現清單外的中文字面值（使用者可見字串須走 i18n 鍵；若確屬操作員終端，\
-         加進 T912_BACKLOG 並在 commit 說明）：\n{}",
+        "出現清單外的中文字面值（使用者可見字串須走 i18n 鍵；確屬開發者訊息者，\
+         加進 EXEMPT 並寫明理由）：\n{}",
         unexpected
             .iter()
             .map(|(f, l)| format!("  {f}: \"{l}\""))
@@ -330,23 +353,17 @@ fn server_cjk_literals_only_shrink() {
             .join("\n")
     );
 
-    // 方向 2：次數必須精確相符——多了是複製了既有散文，少了是 T912 修掉後沒更新清單
-    let drift: Vec<_> = T912_BACKLOG
+    // 方向 2：次數必須精確相符
+    let drift: Vec<_> = EXEMPT
         .iter()
-        .filter_map(|(bf, frag, want)| {
-            let got = count_of(bf, frag);
-            (got != *want).then(|| format!("  {bf} 「{frag}」：清單記 {want} 處，實際 {got} 處"))
+        .filter_map(|(ef, el, want, _)| {
+            let got = found.iter().filter(|(f, l)| f == ef && l == el).count();
+            (got != *want).then(|| format!("  {ef} 「{el}」：清單記 {want} 處，實際 {got} 處"))
         })
         .collect();
     assert!(
         drift.is_empty(),
-        "T912_BACKLOG 與程式碼次數不符（多了＝複製了既有中文散文；少了＝修掉後請更新清單）：\n{}",
+        "EXEMPT 與程式碼次數不符（多了＝複製了例外字串；少了＝修掉後請更新清單）：\n{}",
         drift.join("\n")
-    );
-
-    // 反空轉：清單非空時必須真的看到中文字面值，否則抽取邏輯可能失效
-    assert!(
-        !found.is_empty() || T912_BACKLOG.is_empty(),
-        "一個中文字面值都沒抽到，但 T912_BACKLOG 非空——抽取可能失效"
     );
 }

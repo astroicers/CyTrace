@@ -5,6 +5,7 @@ use crate::config::ServerConfig;
 use crate::jobs::registry::JobRegistry;
 use crate::session::SessionStore;
 use cytrace_core::engine::{RealEngine, ScanEngine};
+use cytrace_i18n::Localized;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -21,14 +22,14 @@ pub struct AppState {
 
 impl AppState {
     /// 真實引擎（子程序呼叫 syft/grype）。開啟 data_dir 失敗（不可寫等）→ 啟動錯誤。
-    pub fn new(cfg: ServerConfig) -> anyhow::Result<Self> {
+    pub fn new(cfg: ServerConfig) -> Result<Self, Localized> {
         Self::with_engine(cfg, Arc::new(RealEngine))
     }
 
     /// 注入引擎（整合測試用 fake，免 syft/grype binary）。
-    pub fn with_engine(cfg: ServerConfig, engine: Arc<dyn ScanEngine>) -> anyhow::Result<Self> {
+    pub fn with_engine(cfg: ServerConfig, engine: Arc<dyn ScanEngine>) -> Result<Self, Localized> {
         let sessions = Arc::new(SessionStore::new(cfg.session_ttl));
-        let jobs = Arc::new(JobRegistry::open(&cfg.data_dir)?);
+        let jobs = Arc::new(JobRegistry::open(&cfg.data_dir, cfg.lang)?);
         let scan_semaphore = Arc::new(Semaphore::new(cfg.max_concurrent_scans));
         Ok(AppState {
             cfg: Arc::new(cfg),

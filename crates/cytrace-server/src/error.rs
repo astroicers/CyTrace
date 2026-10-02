@@ -31,11 +31,20 @@ impl Lang {
         }
     }
 
-    fn from_code(code: &str) -> Lang {
-        if code.trim().to_ascii_lowercase().starts_with("en") {
-            Lang::EnUs
-        } else {
-            Lang::ZhTw
+    /// 正規化規則與 CLI、`Catalog::load` 共用（`cytrace_i18n::lang_code`）；不支援的值依
+    /// ADR-011 §7 退回 zh-TW。
+    pub fn from_code(code: &str) -> Lang {
+        match cytrace_i18n::lang_code(code) {
+            Some("en-US") => Lang::EnUs,
+            _ => Lang::ZhTw,
+        }
+    }
+
+    /// 語系碼（`zh-TW`／`en-US`）。
+    pub fn code(self) -> &'static str {
+        match self {
+            Lang::ZhTw => "zh-TW",
+            Lang::EnUs => "en-US",
         }
     }
 
@@ -207,9 +216,9 @@ impl ApiError {
         // Cbom 的 Display 是「鍵：細節」——直接當 detail 就是把裸鍵送出 API。
         // 改以請求語系渲染，與 CLI 共用 Catalog::render_cbom（單一實作）。
         //
-        // 其餘變體的 Display 各帶一段中文前綴（「引擎子程序錯誤：」…），直接當 detail
-        // 會讓 `--lang en-US` 的 API 回應夾中文（第七輪複審：與 collect_cbom 同一種錯法，
-        // 只是位置在 server）。故一律走 CytraceError::untranslatable_detail。
+        // 其餘變體的 Display 帶分類前綴（T912 前是中文「引擎子程序錯誤：」…，直接當 detail
+        // 會讓 `--lang en-US` 的 API 回應夾中文——第七輪複審；現為 ASCII `engine: …`，
+        // 仍與 kind 重複）。故一律走 CytraceError::untranslatable_detail。
         let detail = match err {
             CytraceError::Cbom { key, detail } => {
                 Some(lang.catalog().render_cbom(key, detail.as_deref()))

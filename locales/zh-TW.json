@@ -36,7 +36,17 @@
       "vulnerable": "偵測到量子脆弱或無法判定的密碼學資產，以退出碼 2 結束",
       "no_result": "已指定 --fail-on-quantum-vulnerable 但未取得 CBOM 結果；「沒掃到」不等於「通過」，以退出碼 1 結束"
     },
-    "schema_ahead": "此檔由較新版 CyTrace 產生（schema v{{found}}，本版支援 v{{supported}}）；未知欄位會被略過，報表可能不完整"
+    "schema_ahead": "此檔由較新版 CyTrace 產生（schema v{{found}}，本版支援 v{{supported}}）；未知欄位會被略過，報表可能不完整",
+    "err": {
+      "prefix": "錯誤：{{message}}",
+      "with_detail": "{{what}}：{{detail}}",
+      "read_failed": "無法讀取 {{path}}：{{detail}}",
+      "write_failed": "無法寫入 {{path}}：{{detail}}",
+      "parse_failed": "{{path}} 不是合法的 ScanResult JSON：{{detail}}",
+      "invalid_address": "位址不合法：{{value}}（格式如 127.0.0.1:8443）",
+      "password_input": "無法讀取密碼輸入（需要互動式終端機；容器請加 -it）：{{detail}}"
+    },
+    "lang_unsupported": "不支援的語言「{{value}}」，改用 zh-TW（可用：zh-TW、en-US）"
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",
@@ -69,6 +79,26 @@
     },
     "job": {
       "interrupted": "伺服器重啟時中斷；請重新建立掃描"
+    },
+    "startup": {
+      "bind_invalid": "{{source}} 不是合法的監聽位址：{{value}}（格式如 127.0.0.1:8443）",
+      "admin_hash_missing": "缺少 CYTRACE_ADMIN_PASSWORD_HASH，拒絕啟動（以 `cytrace hash-password` 產生）",
+      "admin_hash_invalid": "CYTRACE_ADMIN_PASSWORD_HASH 不是合法的 PHC 字串，拒絕啟動（以 `cytrace hash-password` 產生）",
+      "not_integer": "{{name}} 必須是非負整數：{{value}}",
+      "tls_unpaired": "TLS 憑證與金鑰必須成對設定（--tls-cert／--tls-key 或 CYTRACE_TLS_CERT／CYTRACE_TLS_KEY）",
+      "scan_roots_format": "CYTRACE_SCAN_ROOTS 的項目格式應為 name=/abs/path：{{item}}",
+      "scan_roots_not_absolute": "CYTRACE_SCAN_ROOTS 的項目路徑必須是絕對路徑：{{item}}",
+      "tls_load_failed": "TLS 憑證載入失敗（cert={{cert}}，key={{key}}）：{{detail}}",
+      "data_dir_failed": "無法建立資料目錄 {{path}}：{{detail}}",
+      "data_dir_unreadable": "無法讀取資料目錄 {{path}}：{{detail}}",
+      "listen_failed": "無法在 {{addr}} 提供服務：{{detail}}",
+      "runtime_failed": "無法建立非同步執行環境：{{detail}}"
+    },
+    "runtime": {
+      "job_quarantined_missing": "job 目錄缺少 job.json，已隔離至 {{to}}",
+      "job_quarantined_corrupt": "job.json 損毀，已隔離至 {{to}}：{{detail}}",
+      "job_quarantine_failed": "job 記錄損毀但隔離失敗，留在原處 {{path}}（下次啟動會再試）：{{detail}}",
+      "job_persist_failed": "job.json 落盤失敗（{{id}}）：{{detail}}"
     }
   },
   "console": {

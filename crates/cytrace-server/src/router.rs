@@ -19,7 +19,7 @@ use axum::Router;
 use serde_json::{json, Value};
 
 /// 組出完整 Router（供 `serve` 與 oneshot 整合測試共用）。
-pub fn build_router(cfg: ServerConfig) -> anyhow::Result<Router> {
+pub fn build_router(cfg: ServerConfig) -> Result<Router, cytrace_i18n::Localized> {
     Ok(build_router_with_state(AppState::new(cfg)?))
 }
 

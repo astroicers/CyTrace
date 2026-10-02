@@ -1,9 +1,11 @@
 //! 服務設定。來源優先序：CLI 旗標 > 環境變數 > 預設（SDS §6 慣例）。
 //!
 //! `resolve` 是純函式（env 以 `HashMap` 傳入）——可單元測試且無測試間 env 競態。
+//! 錯誤以 [`Localized`] 回傳（`server.startup.*`），由呼叫端以操作者語言渲染（T912）。
 
 use crate::auth;
-use cytrace_core::error::{CytraceError, Result};
+use crate::error::Lang;
+use cytrace_i18n::Localized;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -59,18 +61,25 @@ pub struct ServerConfig {
     pub max_upload_bytes: u64,
     /// 總解壓量上限 bytes（`CYTRACE_MAX_EXTRACT_MB`，預設 min(10×上傳, 4GB)）。
     pub max_extract_bytes: u64,
+    /// 操作者語言：終端機訊息（啟動、job 隔離／落盤失敗）用。`resolve` 給 zh-TW，
+    /// 由 `serve` 依 CLI 的 `--lang`／`CYTRACE_LANG` 覆寫。與 API 回應的語言（每個請求各自協商）無關。
+    pub lang: Lang,
 }
 
 impl ServerConfig {
     /// 由 CLI 旗標與環境變數解析設定。
-    pub fn resolve(flags: CliFlags, env: HashMap<String, String>) -> Result<Self> {
-        let bind_raw = flags
-            .bind
-            .or_else(|| env.get("CYTRACE_BIND").cloned())
-            .unwrap_or_else(|| DEFAULT_BIND.to_string());
-        let bind: SocketAddr = bind_raw
-            .parse()
-            .map_err(|_| CytraceError::Config(format!("CYTRACE_BIND 不是合法位址：{bind_raw}")))?;
+    pub fn resolve(flags: CliFlags, env: HashMap<String, String>) -> Result<Self, Localized> {
+        // 錯誤訊息指名值的實際來源（旗標或環境變數），操作者才知道要改哪裡
+        let (bind_source, bind_raw) = match (flags.bind, env.get("CYTRACE_BIND")) {
+            (Some(v), _) => ("--bind", v),
+            (None, Some(v)) => ("CYTRACE_BIND", v.clone()),
+            (None, None) => ("--bind", DEFAULT_BIND.to_string()),
+        };
+        let bind: SocketAddr = bind_raw.parse().map_err(|_| {
+            Localized::new("server.startup.bind_invalid")
+                .var("source", bind_source)
+                .var("value", bind_raw.as_str())
+        })?;
 
         let data_dir = flags
             .data_dir
@@ -79,20 +88,12 @@ impl ServerConfig {
 
         let db_cache_dir = env.get("GRYPE_DB_CACHE_DIR").map(PathBuf::from);
 
-        let admin_password_hash =
-            env.get("CYTRACE_ADMIN_PASSWORD_HASH")
-                .cloned()
-                .ok_or_else(|| {
-                    CytraceError::Config(
-                        "缺少 CYTRACE_ADMIN_PASSWORD_HASH（以 `cytrace hash-password` 產生）"
-                            .into(),
-                    )
-                })?;
+        let admin_password_hash = env
+            .get("CYTRACE_ADMIN_PASSWORD_HASH")
+            .cloned()
+            .ok_or_else(|| Localized::new("server.startup.admin_hash_missing"))?;
         if !auth::is_valid_phc(&admin_password_hash) {
-            return Err(CytraceError::Config(
-                "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串（以 `cytrace hash-password` 產生）"
-                    .into(),
-            ));
+            return Err(Localized::new("server.startup.admin_hash_invalid"));
         }
 
         let admin_user = env
@@ -100,10 +101,15 @@ impl ServerConfig {
             .cloned()
             .unwrap_or_else(|| "admin".into());
 
+        let not_integer = |name: &'static str, raw: &str| {
+            Localized::new("server.startup.not_integer")
+                .var("name", name)
+                .var("value", raw)
+        };
         let ttl_hours = match env.get("CYTRACE_SESSION_TTL_HOURS") {
-            Some(raw) => raw.parse::<u64>().map_err(|_| {
-                CytraceError::Config(format!("CYTRACE_SESSION_TTL_HOURS 不是整數：{raw}"))
-            })?,
+            Some(raw) => raw
+                .parse::<u64>()
+                .map_err(|_| not_integer("CYTRACE_SESSION_TTL_HOURS", raw))?,
             None => DEFAULT_SESSION_TTL_HOURS,
         };
         let session_ttl = Duration::from_secs(ttl_hours * 3600);
@@ -117,24 +123,17 @@ impl ServerConfig {
         let tls = match (tls_cert, tls_key) {
             (Some(cert), Some(key)) => Some(TlsPaths { cert, key }),
             (None, None) => None,
-            _ => {
-                return Err(CytraceError::Config(
-                    "TLS 憑證與金鑰必須成對設定（CYTRACE_TLS_CERT + CYTRACE_TLS_KEY）".into(),
-                ))
-            }
+            _ => return Err(Localized::new("server.startup.tls_unpaired")),
         };
 
         let scan_roots = match env.get("CYTRACE_SCAN_ROOTS") {
-            Some(raw) => crate::targets::parse_roots(raw)
-                .map_err(|e| CytraceError::Config(format!("CYTRACE_SCAN_ROOTS：{e}")))?,
+            Some(raw) => crate::targets::parse_roots(raw)?,
             None => Vec::new(),
         };
 
-        let parse_usize = |key: &str, default: usize| -> Result<usize> {
+        let parse_usize = |key: &'static str, default: usize| -> Result<usize, Localized> {
             match env.get(key) {
-                Some(raw) => raw
-                    .parse::<usize>()
-                    .map_err(|_| CytraceError::Config(format!("{key} 不是整數：{raw}"))),
+                Some(raw) => raw.parse::<usize>().map_err(|_| not_integer(key, raw)),
                 None => Ok(default),
             }
         };
@@ -148,9 +147,9 @@ impl ServerConfig {
         let max_upload_bytes = parse_usize("CYTRACE_MAX_UPLOAD_MB", 512)? as u64 * 1024 * 1024;
         let max_extract_bytes = match env.get("CYTRACE_MAX_EXTRACT_MB") {
             Some(raw) => {
-                (raw.parse::<u64>().map_err(|_| {
-                    CytraceError::Config(format!("CYTRACE_MAX_EXTRACT_MB 不是整數：{raw}"))
-                })?) * 1024
+                raw.parse::<u64>()
+                    .map_err(|_| not_integer("CYTRACE_MAX_EXTRACT_MB", raw))?
+                    * 1024
                     * 1024
             }
             None => (max_upload_bytes.saturating_mul(10)).min(4 * 1024 * 1024 * 1024),
@@ -170,6 +169,7 @@ impl ServerConfig {
             keep_input,
             max_upload_bytes,
             max_extract_bytes,
+            lang: Lang::ZhTw,
         })
     }
 
@@ -239,14 +239,32 @@ mod tests {
             env(&[]),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.bind_invalid");
+        assert_eq!(
+            err.vars,
+            vec![
+                ("source", "--bind".to_string()),
+                ("value", "not-an-addr".to_string())
+            ]
+        );
+
+        // 值來自環境變數時，訊息指名環境變數
+        let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_BIND", "x:y")]))
+            .unwrap_err();
+        assert_eq!(
+            err.vars,
+            vec![
+                ("source", "CYTRACE_BIND".to_string()),
+                ("value", "x:y".to_string())
+            ]
+        );
     }
 
     #[test]
     fn admin_hash_required_and_validated() {
         // 缺失 → 拒絕啟動
         let err = ServerConfig::resolve(CliFlags::default(), HashMap::new()).unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.admin_hash_missing");
         // 非 PHC → 拒絕啟動
         let err = ServerConfig::resolve(
             CliFlags::default(),
@@ -257,7 +275,7 @@ mod tests {
             .into(),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.admin_hash_invalid");
     }
 
     #[test]
@@ -270,7 +288,7 @@ mod tests {
             env(&[]),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.tls_unpaired");
 
         let c = ServerConfig::resolve(
             CliFlags::default(),
@@ -293,5 +311,34 @@ mod tests {
         )
         .unwrap();
         assert!(!c.db_present());
+    }
+
+    #[test]
+    fn integer_and_scan_root_errors_name_the_variable() {
+        for name in [
+            "CYTRACE_SESSION_TTL_HOURS",
+            "CYTRACE_MAX_CONCURRENT_SCANS",
+            "CYTRACE_MAX_QUEUED",
+            "CYTRACE_MAX_UPLOAD_MB",
+            "CYTRACE_MAX_EXTRACT_MB",
+        ] {
+            let err =
+                ServerConfig::resolve(CliFlags::default(), env(&[(name, "12x")])).unwrap_err();
+            assert_eq!(err.key, "server.startup.not_integer", "{name}");
+            assert_eq!(
+                err.vars,
+                vec![("name", name.to_string()), ("value", "12x".to_string())]
+            );
+        }
+
+        let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_SCAN_ROOTS", "bad")]))
+            .unwrap_err();
+        assert_eq!(err.key, "server.startup.scan_roots_format");
+        let err = ServerConfig::resolve(
+            CliFlags::default(),
+            env(&[("CYTRACE_SCAN_ROOTS", "t=relative/p")]),
+        )
+        .unwrap_err();
+        assert_eq!(err.key, "server.startup.scan_roots_not_absolute");
     }
 }
