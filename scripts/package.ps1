@@ -71,12 +71,15 @@ Get-Engine "syft" $SyftVersion
 Get-Engine "grype" $GrypeVersion
 
 # 引擎釘選版本的單一事實源（與 package.sh 一致）
-# 與 build.rs / package.sh 同一規則：恰一行且為 數字(.數字)+——取第一行或退回 "unknown"
-# 會讓 NOTICE 與報表上的引擎版本靜默分歧（T909 第二輪複審 build#1）。
-$TheiaLines = @(Select-String -Path "$PSScriptRoot\versions.env" -Pattern '^THEIA_VERSION=')
-if ($TheiaLines.Count -ne 1) { throw "versions.env must contain exactly one THEIA_VERSION= line (found $($TheiaLines.Count))" }
-$TheiaVersion = ($TheiaLines[0].Line -replace '^THEIA_VERSION=', '').Trim()
-if ($TheiaVersion -notmatch '^[0-9]+(\.[0-9]+)+$') { throw "THEIA_VERSION '$TheiaVersion' is not digits(.digits)+" }
+# 與 build.rs（crates/cytrace-core/theia_version_rule.rs）、package.sh（check-theia-version.sh）
+# 同一規則：註解以外只准有一行提到 THEIA_VERSION，且逐字是 THEIA_VERSION=<數字(.數字)+>。
+# 取第一行或退回 "unknown" 會讓 NOTICE 與報表上的引擎版本靜默分歧（T909 第二、三輪複審 build#1）。
+# 本實作是對照實作：shell 端有機械對帳，PowerShell 端沒有（Linux CI 不跑 pwsh）。
+$TheiaLines = @(Get-Content "$PSScriptRoot\versions.env" |
+  Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\bTHEIA_VERSION\b' })
+if ($TheiaLines.Count -ne 1) { throw "versions.env: exactly one non-comment line may mention THEIA_VERSION (found $($TheiaLines.Count))" }
+if ($TheiaLines[0] -notmatch '^THEIA_VERSION=([0-9]+(\.[0-9]+)+)$') { throw "versions.env: THEIA_VERSION line must be exactly THEIA_VERSION=<digits(.digits)+>: '$($TheiaLines[0])'" }
+$TheiaVersion = $Matches[1]
 
 # 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
 #

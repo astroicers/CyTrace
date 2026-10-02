@@ -8,12 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 引擎版本與校驗和的單一事實源（ADR-012 決策 7 / ADR-013 決策 1）
 # shellcheck source=versions.env
 [ -f "$ROOT/scripts/versions.env" ] && . "$ROOT/scripts/versions.env"
-# THEIA_VERSION 同時被 build.rs（編進報表）與本檔（寫進 NOTICE）讀：重複行時 shell 取最後一行，
-# 兩邊會靜默分歧——與 build.rs 同一規則，恰一行且為 數字(.數字)+ 才繼續。
-[ "$(grep -c '^THEIA_VERSION=' "$ROOT/scripts/versions.env")" = 1 ] \
-  || { echo "✗ scripts/versions.env 應恰有一行 THEIA_VERSION="; exit 1; }
-[[ "${THEIA_VERSION:-}" =~ ^[0-9]+(\.[0-9]+)+$ ]] \
-  || { echo "✗ THEIA_VERSION='${THEIA_VERSION:-}' 不是 數字(.數字)+"; exit 1; }
+# THEIA_VERSION 同時被 build.rs（編進報表）與本檔（寫進 NOTICE）讀，兩邊必須取到同一個值：
+# 規則與 build.rs 共用（check-theia-version.sh，由 cytrace-core 的 theia_version 測試對帳）。
+# 前版只數 `^THEIA_VERSION=` 行數、驗 source 後的值，多一行 `export THEIA_VERSION=…` 就讓
+# NOTICE 與報表分歧（T909 第三輪複審 build#1）。
+THEIA_VERSION="$("$ROOT/scripts/check-theia-version.sh" "$ROOT/scripts/versions.env")" || exit 1
 OUT_DIR="${1:-$ROOT/delivery}"
 TARGET="x86_64-unknown-linux-musl"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
@@ -31,6 +30,9 @@ mkdir -p "$BUNDLE/bin" "$BUNDLE/db"
 
 # 1) musl 靜態 binary
 say "build musl 靜態 cytrace"
+# touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
+# 報表沿用舊的 theia 版號（第三輪複審 build#0）。強制重跑，讀到當前檔案的值。
+touch "$ROOT/scripts/versions.env"
 ( cd "$ROOT" && RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target "$TARGET" -p cytrace-cli >/dev/null 2>&1 )
 cp "$ROOT/target/$TARGET/release/cytrace" "$BUNDLE/bin/cytrace"
 

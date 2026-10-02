@@ -30,9 +30,12 @@ RUN rm -rf crates/cytrace-server/assets/console \
     && mkdir -p crates/cytrace-server/assets/console
 COPY --from=frontend-builder /app/frontend/dist-console/ crates/cytrace-server/assets/console/
 # BuildKit cache mount 加速；cache 內 binary 需 cp 出到普通 layer 供下一 stage COPY
+# touch：固定 WORKDIR + target cache mount + COPY 保留來源 mtime，versions.env 若比 cache 裡上次
+# 建置舊，cargo 不重跑 build script，映像內 binary 標舊的 theia 版號（T909 第三輪複審 build#0）
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release --locked --target x86_64-unknown-linux-musl -p cytrace-cli \
+    touch scripts/versions.env \
+    && cargo build --release --locked --target x86_64-unknown-linux-musl -p cytrace-cli \
     && cp target/x86_64-unknown-linux-musl/release/cytrace /usr/local/bin/cytrace
 # 預建 non-root 可寫的資料目錄（distroless 無 shell 無法 runtime mkdir/chown）
 RUN mkdir -p /scaffold/data && chown -R 65532:65532 /scaffold
