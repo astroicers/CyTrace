@@ -315,7 +315,7 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                     tls_cert: tls_cert.clone(),
                     tls_key: tls_key.clone(),
                 },
-                server_env()?,
+                cytrace_server::config::Env::from_process(),
             )?;
             cytrace_server::serve(cfg, lang)?;
             Ok(EXIT_OK)
@@ -327,7 +327,9 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
             // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
             let bind_raw = match bind.clone() {
                 Some(b) => b,
-                None => env_utf8("CYTRACE_BIND")?
+                None => cytrace_server::config::Env::from_process()
+                    .get("CYTRACE_BIND")?
+                    .cloned()
                     .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string()),
             };
             let target: std::net::SocketAddr = bind_raw.parse().map_err(|_| {
@@ -345,46 +347,6 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                 }
             }
         }
-    }
-}
-
-/// 我方環境變數（`CYTRACE_*`、`GRYPE_DB_CACHE_DIR`）的值必須是 UTF-8。
-///
-/// 不用 `std::env::vars()`：任一變數（含與我方無關的）不是 UTF-8 時它會 panic。也不能以替代字元
-/// 帶過：路徑類變數會悄悄改用另一個目錄——`CYTRACE_DATA_DIR=d\xff` 實測寫進 `d\u{FFFD}/jobs`
-/// 且不留任何訊息，同樣的位元組經 `--data-dir` 卻是正確的目錄（T912 複審 newcode#0）。
-#[cfg(feature = "server")]
-fn is_ours(name: &str) -> bool {
-    name.starts_with("CYTRACE_") || name == "GRYPE_DB_CACHE_DIR"
-}
-
-#[cfg(feature = "server")]
-fn env_not_utf8(name: &str) -> Localized {
-    Localized::new("server.startup.env_not_utf8").var("name", name)
-}
-
-/// serve 的環境：名稱不是 UTF-8 的、或與我方無關且值不是 UTF-8 的略過；我方變數壞掉即錯誤。
-#[cfg(feature = "server")]
-fn server_env() -> Result<std::collections::HashMap<String, String>, Localized> {
-    let mut env = std::collections::HashMap::new();
-    for (k, v) in std::env::vars_os() {
-        let Ok(k) = k.into_string() else { continue };
-        match v.into_string() {
-            Ok(v) => {
-                env.insert(k, v);
-            }
-            Err(_) if is_ours(&k) => return Err(env_not_utf8(&k)),
-            Err(_) => {}
-        }
-    }
-    Ok(env)
-}
-
-#[cfg(feature = "server")]
-fn env_utf8(name: &str) -> Result<Option<String>, Localized> {
-    match std::env::var_os(name) {
-        None => Ok(None),
-        Some(v) => v.into_string().map(Some).map_err(|_| env_not_utf8(name)),
     }
 }
 

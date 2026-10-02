@@ -798,6 +798,47 @@ mod serve {
                 assert_operator_text(lang, &o, &ctx);
             }
         }
+
+        // 不該擋的：旗標已覆寫的變數、serve 不讀的變數（第三輪複審：前版在收集環境時就報錯，
+        // `--data-dir` 配上壞掉的 CYTRACE_DATA_DIR 照樣起不來）。以不存在的 TLS 檔讓服務在綁定前結束
+        let sb = Sandbox::new("nonutf8-ok");
+        let data = sb.path("data");
+        for (var, extra) in [
+            // 基本參數已帶 --data-dir：覆寫壞掉的 CYTRACE_DATA_DIR
+            ("CYTRACE_DATA_DIR", &[][..]),
+            ("CYTRACE_BIND", &["--bind", "127.0.0.1:0"]),
+            ("CYTRACE_LANG", &[]),
+            ("CYTRACE_CBOM_TIMEOUT_SECS", &[]),
+            ("FOO", &[]),
+        ] {
+            let mut args = vec![
+                "--lang",
+                "en-US",
+                "serve",
+                "--data-dir",
+                data.as_str(),
+                "--tls-cert",
+                "/no/such.crt",
+                "--tls-key",
+                "/no/such.key",
+            ];
+            args.extend_from_slice(extra);
+            let o = exec(
+                Command::new(env!("CARGO_BIN_EXE_cytrace"))
+                    .args(&args)
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .env("CYTRACE_ADMIN_PASSWORD_HASH", PHC.as_str())
+                    .env("CYTRACE_BIND", "127.0.0.1:0")
+                    .env(var, bad)
+                    .stdin(std::process::Stdio::null()),
+            );
+            let ctx = format!("{var} {extra:?}\nstderr:\n{}", o.stderr);
+            assert_eq!(o.code, 1, "{ctx}");
+            assert!(o.stderr.contains("Failed to load TLS certificate"), "{ctx}");
+            assert!(!o.stderr.contains("UTF-8"), "{ctx}");
+            assert_operator_text("en-US", &o, &ctx);
+        }
     }
 
     #[test]

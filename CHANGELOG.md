@@ -50,9 +50,10 @@
   先前不論成敗都印「已隔離」。缺少 job.json 與 job.json 內容損毀分開說明。
   重啟時把未完成的任務標為中斷、寫回卻失敗時，先前不留訊息，現在會印出警告。
 - 監聽位址不合法時，訊息指出值來自 `--bind` 還是 `CYTRACE_BIND`；先前一律寫 `CYTRACE_BIND`。
-- 環境中任一變數不是合法 UTF-8 時，`serve` 會當掉（退出碼非 1、訊息未在地化）。現在無關的變數
-  照常略過；`CYTRACE_*` 或 `GRYPE_DB_CACHE_DIR` 的值不是 UTF-8 時，以 `1` 結束並指名該變數
-  （路徑可改用對應的命令列旗標，例如 `--data-dir`）。`health` 讀 `CYTRACE_BIND` 時亦同。
+- 環境中任一變數不是合法 UTF-8 時，`serve` 會當掉（退出碼非 1、訊息未在地化）。現在只有 serve
+  實際要讀的變數（例如 `CYTRACE_DATA_DIR`、`GRYPE_DB_CACHE_DIR`）值不是 UTF-8 時才以 `1` 結束並
+  指名該變數；已由命令列旗標覆寫的（如給了 `--data-dir`）與 serve 不讀的變數不受影響。
+  `health` 讀 `CYTRACE_BIND` 時亦同。
 - serve 在印出監聽位址之前就先掛好 Ctrl-C 的處理；先前剛啟動就按下 Ctrl-C，可能直接中止
   （未優雅關閉）或被忽略。
 - 文件中以容器產生管理密碼的指令補上 `-it`（`docker run --rm -it <image> hash-password`）。
