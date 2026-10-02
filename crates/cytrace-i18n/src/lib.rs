@@ -21,8 +21,8 @@ pub struct Catalog {
 ///
 /// CLI（`--lang`／`CYTRACE_LANG`）、[`Catalog::load`] 與 server 的 `Lang` 共用這一份規則；
 /// 不支援時各自決定退回方式（CLI 印警告後用 zh-TW；API 協商依 ADR-011 §7 退回 zh-TW）。
-/// 前綴判斷是既有行為（`--lang en`、`en_US.UTF-8` 一直可用），T912 只把三處各寫一份的
-/// 判斷收成一份，不收緊。
+/// 前綴判斷是既有行為（`--lang en`、`en_US.UTF-8` 一直可用）。T912 前 `Catalog::load` 與
+/// server 的 `Lang::from_code` 各寫一份，T912 收成這一份（CLI 的 `resolve_lang` 也用它），不收緊。
 pub fn lang_code(raw: &str) -> Option<&'static str> {
     let l = raw.trim().to_ascii_lowercase();
     if l.starts_with("en") {

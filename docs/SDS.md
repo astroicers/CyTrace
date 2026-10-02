@@ -78,12 +78,13 @@ ScanResult {
 
 ## 5. 錯誤處理（result_type）
 
-- 一律 `Result<T, CytraceError>`；`CytraceError`（thiserror）分類：`Engine`（子程序）、`Parse`（JSON）、`Io`、`Config`、`DbMissing`、`Cbom`（純 i18n 鍵 + 不可翻譯細節）。
+- core 一律 `Result<T, CytraceError>`；serve 啟動路徑與 CLI 的讀寫錯誤為 `Result<_, Localized>`（見下）。`CytraceError`（thiserror）分類：`Engine`（子程序）、`Parse`（JSON）、`Io`、`Config`、`DbMissing`、`Cbom`（純 i18n 鍵 + 不可翻譯細節）。
 - `CytraceError` 的 `Display` 是**語系中立的 ASCII 診斷**（`engine: …`），不給使用者看。使用者可見文字由呼叫端以
   `i18n_key()`（`server.err.{kind}` 或 `cbom.err.*`）加 `untranslatable_detail()`（路徑、子程序訊息）依語系渲染。
 - serve 啟動錯誤與 CLI 的 I/O 錯誤以 `cytrace_i18n::Localized { key, vars }` 傳遞，鍵分別在 `server.startup.*`、`cli.err.*`。
 - **終端錯誤格式**：stderr 一行 `cli.err.prefix`（「錯誤：…」／“error: …”），內文依上兩條渲染；第三方函式庫與作業系統的訊息原樣附在細節裡（語言由該來源決定）。
 - 退出碼語意：`0` 正常、`2` `--fail-on`（或 `--fail-on-quantum-vulnerable`）觸發、`1` 錯誤——**含參數用法錯誤**
+  （含 `--fail-on` 的值不在 critical／high／medium／low／negligible／unknown 之內，大小寫不拘）
   （clap 預設的 `2` 會與 `--fail-on` 撞號，故以 `try_parse` 自行決定；`--help`／`--version` 為 `0`）。
 
 ## 6. i18n（CLI 端）

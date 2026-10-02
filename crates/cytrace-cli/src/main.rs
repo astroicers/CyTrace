@@ -35,7 +35,7 @@ enum Command {
         /// 掃描目標（目錄/容器映像/檔案系統）。
         target: String,
         /// 達指定嚴重度即以退出碼 2 結束（critical|high|medium|low|negligible|unknown）。
-        #[arg(long)]
+        #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
         /// 報表輸出路徑（預設 ./<basename>.report.html）。
         #[arg(long, short)]
@@ -51,7 +51,7 @@ enum Command {
     Batch {
         /// 一或多個掃描目標。
         targets: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
         /// 報表輸出目錄（預設目前目錄）。
         #[arg(long, short)]
@@ -107,6 +107,11 @@ enum Command {
         #[arg(long)]
         bind: Option<String>,
     },
+}
+
+/// `--fail-on` 只收已知嚴重度：打錯字是用法錯誤（退出碼 1），不是「以 unknown 為門檻」。
+fn fail_on_parser() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(failon::FAIL_ON_LEVELS)
 }
 
 fn main() -> ExitCode {
@@ -310,7 +315,13 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                     tls_cert: tls_cert.clone(),
                     tls_key: tls_key.clone(),
                 },
-                std::env::vars().collect(),
+                // 不用 `std::env::vars()`：任一變數不是合法 UTF-8 時它會 panic（與我方無關的
+                // 變數也一樣）。名稱非 UTF-8 的略過；值以替代字元保留，壞掉的 CYTRACE_* 照常報錯
+                std::env::vars_os()
+                    .filter_map(|(k, v)| {
+                        Some((k.into_string().ok()?, v.to_string_lossy().into_owned()))
+                    })
+                    .collect(),
             )?;
             cytrace_server::serve(cfg, lang)?;
             Ok(EXIT_OK)
@@ -322,7 +333,9 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
             // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
             let bind_raw = bind
                 .clone()
-                .or_else(|| std::env::var("CYTRACE_BIND").ok())
+                .or_else(|| {
+                    std::env::var_os("CYTRACE_BIND").map(|v| v.to_string_lossy().into_owned())
+                })
                 .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string());
             let target: std::net::SocketAddr = bind_raw.parse().map_err(|_| {
                 Localized::new("cli.err.invalid_address").var("value", bind_raw.as_str())
@@ -342,22 +355,26 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
     }
 }
 
+/// 讀不到密碼（沒有 tty：管線、容器未加 `-t`）。系統訊息只說 "No such device or address"，
+/// 補上前後文與處置。
+#[cfg(feature = "server")]
+fn password_input_err(e: std::io::Error) -> Localized {
+    Localized::new("cli.err.password_input").var("detail", e.to_string())
+}
+
 /// 互動式讀密碼兩次（隱藏輸入）→ 輸出 argon2id PHC 字串。
 #[cfg(feature = "server")]
 fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
     use cytrace_server::auth::{hash_password, MIN_PASSWORD_LEN};
     let min = MIN_PASSWORD_LEN.to_string();
-    // 沒有 tty（管線、容器未加 -it）時讀不到密碼：系統訊息只說 "No such device"，補上前後文
-    let password_input =
-        |e: std::io::Error| Localized::new("cli.err.password_input").var("detail", e.to_string());
     let pw = rpassword::prompt_password(cat.t("cli.hashpw.prompt", &[("min", &min)]))
-        .map_err(password_input)?;
+        .map_err(password_input_err)?;
     if pw.chars().count() < MIN_PASSWORD_LEN {
         eprintln!("{}", cat.t("cli.hashpw.too_short", &[("min", &min)]));
         return Ok(EXIT_ERR);
     }
     let confirm =
-        rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[])).map_err(password_input)?;
+        rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[])).map_err(password_input_err)?;
     if pw != confirm {
         eprintln!("{}", cat.t("cli.hashpw.mismatch", &[]));
         return Ok(EXIT_ERR);
@@ -739,6 +756,51 @@ mod tests {
         let wrapped =
             anyhow::Error::from(Localized::new("cli.err.invalid_address").var("value", "x"));
         assert!(render_error(&wrapped, &en).starts_with("Invalid address: x"));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn password_input_error_renders_with_its_detail() {
+        // 系統訊息（ENXIO）原樣帶出；兩語都不得殘留佔位符
+        let e = std::io::Error::from_raw_os_error(6);
+        let detail = e.to_string();
+        for lang in ["zh-TW", "en-US"] {
+            let out = password_input_err(std::io::Error::from_raw_os_error(6))
+                .render(&Catalog::load(lang));
+            assert!(out.contains(&detail), "{lang}：{out}");
+            assert!(
+                !out.contains("{{") && !out.contains("cli.err.password_input"),
+                "{lang}：{out}"
+            );
+            assert_eq!(lang == "zh-TW", cjk(&out), "{lang}：{out}");
+        }
+    }
+
+    #[test]
+    fn fail_on_accepts_known_levels_in_any_case_and_rejects_typos() {
+        let cli = Cli::try_parse_from(["cytrace", "run", "x", "--fail-on", "HIGH"]).unwrap();
+        match cli.command {
+            // 原樣保留；`Severity::from_grype_str` 不分大小寫
+            Command::Run { fail_on, .. } => assert_eq!(fail_on.as_deref(), Some("HIGH")),
+            _ => panic!("expected run"),
+        }
+        for bad in ["hgih", "", "severe"] {
+            for sub in ["run", "batch"] {
+                let err = Cli::try_parse_from(["cytrace", sub, "x", "--fail-on", bad]).unwrap_err();
+                assert_eq!(
+                    err.kind(),
+                    clap::error::ErrorKind::InvalidValue,
+                    "{sub} {bad:?}"
+                );
+            }
+        }
+        // 每個合法值都要能被 Severity 認得（否則 clap 收了、門檻卻落到 unknown）
+        for level in failon::FAIL_ON_LEVELS {
+            assert_eq!(
+                Severity::from_grype_str(level).i18n_key(),
+                format!("severity.{level}")
+            );
+        }
     }
 
     #[test]

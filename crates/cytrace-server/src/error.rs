@@ -213,7 +213,7 @@ impl ApiError {
             // CBOM 引擎失敗歸引擎類（掃描整體仍可完成，只是 crypto 區段缺）
             CytraceError::Cbom { .. } => ErrorKind::Engine,
         };
-        // Cbom 的 Display 是「鍵：細節」——直接當 detail 就是把裸鍵送出 API。
+        // Cbom 的 Display 是「鍵: 細節」——直接當 detail 就是把裸鍵送出 API。
         // 改以請求語系渲染，與 CLI 共用 Catalog::render_cbom（單一實作）。
         //
         // 其餘變體的 Display 帶分類前綴（T912 前是中文「引擎子程序錯誤：」…，直接當 detail
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn cbom_error_detail_is_translated_not_a_bare_key() {
-        // Cbom 的 Display 是「鍵：細節」；若直接當 detail，API 消費者收到的是裸鍵。
+        // Cbom 的 Display 是「鍵: 細節」；若直接當 detail，API 消費者收到的是裸鍵。
         let err = CytraceError::Cbom {
             key: "cbom.err.timeout",
             detail: Some("600".into()),

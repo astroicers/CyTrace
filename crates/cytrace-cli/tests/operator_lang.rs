@@ -1,14 +1,17 @@
 //! 操作者終端訊息的語言與退出碼（T912）——以真實 binary 端到端驗證。
 //!
-//! 以修正前的 binary（476c150）執行本檔，9 支情境測試全數轉紅（`--lang en-US` 下印出
+//! 以修正前的 binary（476c150）執行本檔，13 支情境測試全數轉紅（`--lang en-US` 下印出
 //! 「錯誤 / error: 引擎子程序錯誤：…」、serve 啟動錯誤整句中文、clap 用法錯誤回 2）。
 //! 每支在第一個不符的斷言就停下，故這不代表同一支裡的每個樣本都逐一驗過紅燈。
 //!
 //! 斷言只針對**我方文字**：細節裡的系統訊息（`No such file or directory`）語言由 OS 決定，
 //! 這裡的 CI 與開發機都是英文 locale，但不斷言其內容。
 //!
-//! 未涵蓋：`hash-password` 沒有 tty 的錯誤——有 tty 的終端機上執行測試時 rpassword 會改讀
-//! /dev/tty 而卡住，無法在這裡穩定重現；該路徑只有單元層級的渲染驗證。
+//! stdout 與 stderr 都驗：listening、明文警告、shutdown 等在 stdout（T912 複審 gates#8）。
+//! 每個輸出都不得殘留 `{{`（插值變數漏給時 `Catalog::t` 會原樣保留；複審 gates#7）。
+//!
+//! `hash-password` 沒有 tty 的情境以 `setsid -w` 在新 session 執行（沒有控制終端機，/dev/tty
+//! 開不了，與容器未加 `-t` 相同），只在 Linux 跑。
 
 #![cfg(unix)]
 
@@ -51,7 +54,36 @@ struct Sandbox {
 
 struct Out {
     code: i32,
+    stdout: String,
     stderr: String,
+}
+
+impl Out {
+    /// 兩條輸出合併：語言與裸鍵的判定對兩者一視同仁。
+    fn all(&self) -> String {
+        format!("{}{}", self.stdout, self.stderr)
+    }
+}
+
+fn out_of(o: std::process::Output) -> Out {
+    Out {
+        code: o.status.code().expect("退出碼"),
+        stdout: String::from_utf8_lossy(&o.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&o.stderr).into_owned(),
+    }
+}
+
+/// 我方輸出的共同不變量：無裸鍵、無殘留佔位符、語言相符。
+fn assert_operator_text(lang: &str, o: &Out, ctx: &str) {
+    let all = o.all();
+    assert_eq!(bare_key(&all), None, "裸鍵：{ctx}");
+    assert!(!all.contains("{{"), "殘留佔位符：{ctx}");
+    assert!(!all.contains("panicked"), "panic：{ctx}");
+    if lang == "en-US" {
+        assert!(!has_cjk(&all), "en-US 不得出現中文：{ctx}");
+    } else {
+        assert!(has_cjk(&all), "zh-TW 應為中文：{ctx}");
+    }
 }
 
 impl Sandbox {
@@ -85,11 +117,7 @@ impl Sandbox {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let out = cmd.output().expect("執行 cytrace");
-        Out {
-            code: out.status.code().expect("退出碼"),
-            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-        }
+        out_of(cmd.output().expect("執行 cytrace"))
     }
 }
 
@@ -99,8 +127,8 @@ impl Drop for Sandbox {
     }
 }
 
-/// 同一情境各以兩種語言跑一次：en-US 不得有 CJK、zh-TW 必須有 CJK，兩者都不得有裸鍵，
-/// 且各自含預期的我方文字片段。回傳兩次的輸出供個別情境加驗。
+/// 同一情境各以兩種語言跑一次：en-US 不得有 CJK、zh-TW 必須有 CJK，兩者都不得有裸鍵或
+/// 殘留佔位符，且各自含預期的我方文字片段。回傳兩次的輸出供個別情境加驗（例如實際的路徑）。
 fn both_langs(
     sb: &Sandbox,
     args: &[&str],
@@ -114,15 +142,13 @@ fn both_langs(
         let mut full = vec!["--lang", lang];
         full.extend_from_slice(args);
         let o = sb.run(&full, env);
-        let ctx = format!("{lang} {args:?}\nstderr:\n{}", o.stderr);
+        let ctx = format!(
+            "{lang} {args:?}\nstdout:\n{}\nstderr:\n{}",
+            o.stdout, o.stderr
+        );
         assert_eq!(o.code, expect_code, "退出碼：{ctx}");
-        assert!(o.stderr.contains(has), "應含「{has}」：{ctx}");
-        assert_eq!(bare_key(&o.stderr), None, "裸鍵：{ctx}");
-        if lang == "en-US" {
-            assert!(!has_cjk(&o.stderr), "en-US 不得出現中文：{ctx}");
-        } else {
-            assert!(has_cjk(&o.stderr), "zh-TW 應為中文：{ctx}");
-        }
+        assert!(o.all().contains(has), "應含「{has}」：{ctx}");
+        assert_operator_text(lang, &o, &ctx);
         outs.push(o);
     }
     let zh = outs.pop().unwrap();
@@ -143,7 +169,7 @@ fn self_check_detectors() {
 fn report_read_and_parse_failures_name_the_path() {
     let sb = Sandbox::new("report");
     let missing = sb.path("nope.json");
-    let (en, _) = both_langs(
+    let (en, zh) = both_langs(
         &sb,
         &["report", &missing],
         &[],
@@ -151,11 +177,13 @@ fn report_read_and_parse_failures_name_the_path() {
         "error: Cannot read",
         "錯誤：無法讀取",
     );
-    assert!(en.stderr.contains(&missing), "應指名路徑：{}", en.stderr);
+    for o in [&en, &zh] {
+        assert!(o.stderr.contains(&missing), "應指名路徑：{}", o.stderr);
+    }
 
     fs::write(sb.dir.join("bad.json"), "{not json").unwrap();
     let bad = sb.path("bad.json");
-    both_langs(
+    let (en, zh) = both_langs(
         &sb,
         &["report", &bad],
         &[],
@@ -163,6 +191,9 @@ fn report_read_and_parse_failures_name_the_path() {
         "is not a valid ScanResult JSON",
         "不是合法的 ScanResult JSON",
     );
+    for o in [&en, &zh] {
+        assert!(o.stderr.contains(&bad), "應指名路徑：{}", o.stderr);
+    }
 }
 
 #[test]
@@ -221,6 +252,39 @@ fn usage_errors_exit_one_not_the_fail_on_code() {
     for args in [&["--help"][..], &["--version"], &["run", "--help"]] {
         let o = sb.run(args, &[]);
         assert_eq!(o.code, 0, "{args:?} 應以 0 結束：{}", o.stderr);
+    }
+}
+
+/// `--fail-on hgih`：T912 前任何字串都被接受、未知值落到最低的 unknown，打錯字等於
+/// 「有任何弱點就以 2 結束」（複審 cli#2）。
+///
+/// 掃描必須真的跑得完（shim），才分得出「門檻觸發的 2」與「用法錯誤的 1」——沒有 shim 時
+/// 程式會因找不到 syft 而回 1，不論值是否被驗都一樣（故障注入 R9 抓到前版這裡空轉）。
+#[test]
+fn fail_on_typo_is_a_usage_error_not_a_threshold() {
+    let sb = Sandbox::new("failon");
+    sb.shim("syft", "cyclonedx.json");
+    sb.shim("grype", "grype.json");
+    let target = sb.path("target");
+    let report = sb.path("r.html");
+    let dir = sb.path("");
+
+    // 對照組：合法值（大小寫不拘）照常觸發——fixture 含 high 弱點
+    for v in ["high", "HIGH"] {
+        let o = sb.run(&["run", &target, "--fail-on", v, "-o", &report], &[]);
+        assert_eq!(o.code, 2, "{v}：{}", o.stderr);
+    }
+    for args in [
+        vec!["run", &target, "--fail-on", "hgih", "-o", &report],
+        vec!["batch", &target, "--fail-on", "", "--out-dir", &dir],
+    ] {
+        let o = sb.run(&args, &[("CYTRACE_LANG", "en-US")]);
+        assert_eq!(o.code, 1, "{args:?}：{}", o.stderr);
+        assert!(
+            !o.all().contains("Reached --fail-on threshold"),
+            "{args:?} 不得被當成門檻：{}",
+            o.all()
+        );
     }
 }
 
@@ -339,10 +403,32 @@ mod serve {
             "CYTRACE_MAX_QUEUED 必須是非負整數：lots",
         );
 
+        // 位址已被占用：listen_failed 指名位址
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = taken.local_addr().unwrap().to_string();
+        let (en, zh) = both_langs(
+            &sb,
+            &[
+                "serve",
+                "--bind",
+                &addr,
+                "--data-dir",
+                &sb.path("data-listen"),
+            ],
+            &hash,
+            1,
+            "Cannot serve on",
+            "無法在",
+        );
+        for o in [&en, &zh] {
+            assert!(o.stderr.contains(&addr), "應指名位址：{}", o.stderr);
+        }
+        drop(taken);
+
         // 資料目錄建不了：data/jobs 被一般檔案佔住
         fs::create_dir_all(&data).unwrap();
         fs::write(sb.dir.join("data/jobs"), "").unwrap();
-        both_langs(
+        let (en, zh) = both_langs(
             &sb,
             &["serve", "--bind", "127.0.0.1:0", "--data-dir", &data],
             &hash,
@@ -350,6 +436,177 @@ mod serve {
             "Cannot create data directory",
             "無法建立資料目錄",
         );
+        let jobs = sb.path("data/jobs");
+        for o in [&en, &zh] {
+            assert!(o.stderr.contains(&jobs), "應指名路徑：{}", o.stderr);
+        }
+    }
+
+    /// 服務真的起來：listening、明文警告（stdout）與收到 SIGINT 後的 shutdown 訊息。
+    /// 語言只由 `CYTRACE_LANG` 給——這個來源是 T912 新加的，錯誤路徑以外沒有別處驗它。
+    #[test]
+    fn running_server_messages_follow_operator_language() {
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::Stdio;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        for (env_lang, want) in [
+            (
+                Some("en-US"),
+                [
+                    "serving plaintext HTTP",
+                    "listening on",
+                    "Shutdown signal received",
+                ],
+            ),
+            (None, ["以 HTTP 明文提供服務", "服務已啟動", "收到中止訊號"]),
+        ] {
+            let lang = env_lang.unwrap_or("zh-TW");
+            let sb = Sandbox::new(&format!("up-{lang}"));
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_cytrace"));
+            cmd.args([
+                "serve",
+                "--bind",
+                "127.0.0.1:0",
+                "--data-dir",
+                &sb.path("data"),
+            ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("CYTRACE_ADMIN_PASSWORD_HASH", PHC.as_str())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+            if let Some(l) = env_lang {
+                cmd.env("CYTRACE_LANG", l);
+            }
+            let mut child = cmd.spawn().expect("啟動 serve");
+            let (tx, rx) = mpsc::channel();
+            let stdout = child.stdout.take().unwrap();
+            let reader = std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    let Ok(line) = line else { break };
+                    let _ = tx.send(line);
+                }
+            });
+            let mut stderr = child.stderr.take().unwrap();
+            let err_reader = std::thread::spawn(move || {
+                let mut s = String::new();
+                let _ = stderr.read_to_string(&mut s);
+                s
+            });
+
+            // 等到 listening 行（實際位址確定後才印）
+            let mut lines: Vec<String> = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !lines.iter().any(|l| l.contains("127.0.0.1:")) {
+                let left = deadline.saturating_duration_since(Instant::now());
+                match rx.recv_timeout(left) {
+                    Ok(l) => lines.push(l),
+                    Err(_) => {
+                        let _ = child.kill();
+                        panic!("{lang}：30 秒內沒等到 listening 行：{lines:?}");
+                    }
+                }
+            }
+            let pid = child.id().to_string();
+            assert!(Command::new("kill")
+                .args(["-INT", &pid])
+                .status()
+                .unwrap()
+                .success());
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let status = loop {
+                if let Some(st) = child.try_wait().unwrap() {
+                    break st;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    panic!("{lang}：SIGINT 後 30 秒未結束");
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            };
+            reader.join().unwrap();
+            lines.extend(rx.try_iter());
+            let o = Out {
+                code: status.code().expect("退出碼"),
+                stdout: lines.join("\n"),
+                stderr: err_reader.join().unwrap(),
+            };
+            let ctx = format!("{lang}\nstdout:\n{}\nstderr:\n{}", o.stdout, o.stderr);
+            assert_eq!(o.code, 0, "{ctx}");
+            for w in want {
+                assert!(o.stdout.contains(w), "應含「{w}」：{ctx}");
+            }
+            assert_operator_text(lang, &o, &ctx);
+        }
+    }
+
+    /// 沒有控制終端機（容器未加 `-t`）：rpassword 開不了 /dev/tty。
+    /// `setsid -w` 讓子程序在新 session 執行——有 tty 的開發機上也不會改讀終端而卡住。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hash_password_without_a_terminal_is_localized() {
+        for (lang, has) in [
+            ("en-US", "error: Cannot read the password"),
+            ("zh-TW", "錯誤：無法讀取密碼輸入"),
+        ] {
+            let o = out_of(
+                Command::new("setsid")
+                    .arg("-w")
+                    .arg(env!("CARGO_BIN_EXE_cytrace"))
+                    .args(["--lang", lang, "hash-password"])
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .expect("執行 setsid（util-linux）"),
+            );
+            let ctx = format!("{lang}\nstdout:\n{}\nstderr:\n{}", o.stdout, o.stderr);
+            assert_eq!(o.code, 1, "{ctx}");
+            assert!(o.stderr.contains(has), "應含「{has}」：{ctx}");
+            assert_operator_text(lang, &o, &ctx);
+        }
+    }
+
+    /// 任一環境變數不是合法 UTF-8 時不得 panic（T912 前 serve 用 `std::env::vars()`，
+    /// 退出碼 101、訊息不經在地化；複審 cli#4）。
+    #[test]
+    fn non_utf8_environment_is_tolerated() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let bad = OsStr::from_bytes(b"\xff");
+        let run = |args: &[&str], var: &str| {
+            out_of(
+                Command::new(env!("CARGO_BIN_EXE_cytrace"))
+                    .args(args)
+                    .env_clear()
+                    .env("PATH", "/usr/bin:/bin")
+                    .env(var, bad)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+                    .unwrap(),
+            )
+        };
+        // 無關的變數：照常走到「缺管理密碼」
+        let o = run(&["--lang", "en-US", "serve"], "FOO");
+        assert_eq!(o.code, 1, "{}", o.stderr);
+        assert!(
+            o.stderr.contains("CYTRACE_ADMIN_PASSWORD_HASH is not set"),
+            "{}",
+            o.stderr
+        );
+        // 我方變數本身壞掉：以替代字元呈現，照常報「位址不合法」
+        for args in [
+            &["--lang", "en-US", "serve"][..],
+            &["--lang", "en-US", "health"],
+        ] {
+            let o = run(args, "CYTRACE_BIND");
+            assert_eq!(o.code, 1, "{args:?}：{}", o.stderr);
+            assert!(o.stderr.contains('\u{FFFD}'), "{args:?}：{}", o.stderr);
+            assert!(!o.stderr.contains("panicked"), "{args:?}：{}", o.stderr);
+        }
     }
 
     #[test]
@@ -385,11 +642,15 @@ mod serve {
                 ],
                 &[("CYTRACE_ADMIN_PASSWORD_HASH", PHC.as_str())],
             );
-            assert_eq!(o.code, 1, "{lang}：{}", o.stderr);
-            assert!(o.stderr.contains(quarantined), "{lang}：{}", o.stderr);
-            assert!(o.stderr.contains(tls), "{lang}：{}", o.stderr);
-            assert_eq!(bare_key(&o.stderr), None, "{lang}：{}", o.stderr);
-            assert_eq!(lang == "zh-TW", has_cjk(&o.stderr), "{lang}：{}", o.stderr);
+            let ctx = format!("{lang}\nstdout:\n{}\nstderr:\n{}", o.stdout, o.stderr);
+            assert_eq!(o.code, 1, "{ctx}");
+            assert!(o.stderr.contains(quarantined), "{ctx}");
+            assert!(o.stderr.contains(tls), "{ctx}");
+            // 實際的值要印出來：隔離目的地與兩個 PEM 路徑
+            for v in ["1-bad.corrupt", "/no/such.crt", "/no/such.key"] {
+                assert!(o.stderr.contains(v), "應含「{v}」：{ctx}");
+            }
+            assert_operator_text(lang, &o, &ctx);
             assert!(sb.dir.join("data/jobs/1-bad.corrupt").is_dir());
         }
     }

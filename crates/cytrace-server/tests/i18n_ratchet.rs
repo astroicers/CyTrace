@@ -1,8 +1,17 @@
-//! i18n 棘輪：所有 crate 的生產碼不得有中文字面值，只有 [`EXEMPT`] 明列的例外（NFR-06 / T909 / T912）。
+//! i18n 棘輪：所有 workspace 成員的生產碼不得有含中文的字串／字元字面值，只有 [`EXEMPT`]
+//! 明列的例外（NFR-06 / T909 / T912）。
 //!
 //! T909 把流進 **API 回應**的中文散文全數改走 i18n 鍵（經 53 個代理分類 + 反證確認範圍）；
 //! T912 把印在**操作者終端**的（serve 啟動錯誤、job 隔離與落盤警告、CLI 錯誤）也改走鍵，
-//! 並把掃描範圍從 server 擴到全部 crate——cli 與 core 一樣會把字串印給操作者。
+//! 並把掃描範圍從 server 擴到全部成員——cli 與 core 一樣會把字串印給操作者。範圍的推導見
+//! `common/mod.rs`（cargo metadata；build.rs 不在內）。
+//!
+//! **看得到的**：字串、字元、C 字串字面值（`"…"`、`'：'`、`c"…"`；含巨集與非 doc 屬性內）。
+//! **看不到的**（已知限制）：
+//! - doc 註解——一般而言不是使用者可見字串，但 **clap derive 的 doc 註解就是 `--help` 文字**，
+//!   目前整頁中文；在地化與相應的閘屬 T914；
+//! - `include_str!` 引入的檔案內容（現有用途是 locale、報表樣板，本來就是資料）；
+//! - 以程式組出的字元（`char::from_u32`、`\u{…}` 以外的計算）。
 //!
 //! 本測試是雙向的：
 //! - 出現清單外的中文字面值 → 紅（使用者可見字串必須走 i18n 鍵）
@@ -11,7 +20,7 @@
 //!
 //! 鍵為（crate 相對路徑, 字面值全文），不用行號——行號一改就漂。
 
-use std::path::Path;
+mod common;
 
 /// 明列的例外：（crate 相對路徑, 字面值**全文**, 出現次數, 理由）。
 ///
@@ -20,36 +29,36 @@ use std::path::Path;
 /// 最常見的來源（T909 對抗式複審 v11，3/3 確認）。
 const EXEMPT: &[(&str, &str, usize, &str)] = &[
     (
-        "cytrace-core/src/engine.rs",
+        "crates/cytrace-core/src/engine.rs",
         "reap 只在 early return 時取走",
         1,
         "unreachable! 的不變式說明；panic 訊息給開發者，依構造到不了",
     ),
     (
-        "cytrace-core/src/engine.rs",
+        "crates/cytrace-core/src/engine.rs",
         "正常結束路徑上 reap 必然還在",
         1,
         "expect 的不變式說明；同上",
     ),
     (
-        "cytrace-i18n/src/lib.rs",
+        "crates/cytrace-i18n/src/lib.rs",
         "內嵌 locale 應為合法 JSON",
         1,
         "expect：locale 以 include_str! 內嵌，壞掉在測試就紅，執行期到不了",
     ),
     (
-        "cytrace-i18n/src/lib.rs",
+        "crates/cytrace-i18n/src/lib.rs",
         "內嵌 zh-TW 應為合法 JSON",
         1,
         "同上",
     ),
     (
-        "cytrace-i18n/src/lib.rs",
+        "crates/cytrace-i18n/src/lib.rs",
         "（",
         1,
         "Catalog::parens 的 zh-TW 分支（依語系選全形／半形括號，en-US 走半形）",
     ),
-    ("cytrace-i18n/src/lib.rs", "）", 1, "同上"),
+    ("crates/cytrace-i18n/src/lib.rs", "）", 1, "同上"),
 ];
 
 /// 與 tests/jobs.rs 的 `has_cjk` 同範圍：漢字 + CJK 標點 + 全形字元。
@@ -84,28 +93,34 @@ struct Collector {
     out: Vec<String>,
 }
 
-fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg")
-            && a.meta
-                .require_list()
-                .is_ok_and(|l| l.tokens.to_string().trim() == "test")
-    })
-}
+use common::is_cfg_test;
 
 impl Collector {
-    /// token 串裡的字串字面值（巨集參數、屬性參數；含 raw string 與跳脫序列）。
+    /// token 串裡的字面值（巨集參數、屬性參數；含 raw string 與跳脫序列）。
+    /// 原本只認字串：`['無', '法'].into_iter().collect()` 組出的中文訊息整條看不到（複審 gates#9）。
     fn tokens(&mut self, ts: proc_macro2::TokenStream) {
         for tt in ts {
             match tt {
                 proc_macro2::TokenTree::Group(g) => self.tokens(g.stream()),
                 proc_macro2::TokenTree::Literal(l) => {
-                    if let Ok(s) = syn::parse_str::<syn::LitStr>(&l.to_string()) {
-                        self.out.push(s.value());
+                    if let Ok(lit) = syn::parse_str::<syn::Lit>(&l.to_string()) {
+                        self.lit(&lit);
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn lit(&mut self, l: &syn::Lit) {
+        match l {
+            syn::Lit::Str(s) => self.out.push(s.value()),
+            syn::Lit::Char(c) => self.out.push(c.value().to_string()),
+            syn::Lit::CStr(c) => self.out.push(c.value().to_string_lossy().into_owned()),
+            syn::Lit::ByteStr(b) => self
+                .out
+                .push(String::from_utf8_lossy(&b.value()).into_owned()),
+            _ => {}
         }
     }
 }
@@ -119,8 +134,8 @@ macro_rules! skip_cfg_test {
 }
 
 impl<'ast> Visit<'ast> for Collector {
-    fn visit_lit_str(&mut self, l: &'ast syn::LitStr) {
-        self.out.push(l.value());
+    fn visit_lit(&mut self, l: &'ast syn::Lit) {
+        self.lit(l);
     }
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         self.tokens(m.tokens.clone());
@@ -274,66 +289,33 @@ fn extractor_sees_past_test_only_items() {
             "fn f() {\n    #[cfg(test)]\n    let _a = \"測一\";\n    #[cfg(test)]\n    println!(\"測二\");\n    eprintln!(\"生產\");\n}\n",
             &["生產"],
         ),
+        (
+            // 複審 gates#9：只認字串時，這三種形狀都看不到
+            "字元與 C 字串字面值（含巨集內）",
+            "fn f() -> String { ['無', '法'].into_iter().collect() }
+const C: &core::ffi::CStr = c\"中\";
+fn g(w: &str) -> String { format!(\"{w}{}\", '（') }
+fn h(c: char) -> bool { c == 'a' }
+",
+            &["無", "法", "中", "（"],
+        ),
     ];
     for (name, src, want) in cases {
         assert_eq!(production_cjk_literals(src), *want, "{name}：\n{src}");
     }
 }
 
-fn walk(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
-    for e in std::fs::read_dir(dir).expect("讀 src") {
-        let p = e.unwrap().path();
-        if p.is_dir() {
-            walk(&p, files);
-        } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
-            files.push(p);
-        }
-    }
-}
-
 #[test]
 fn cjk_literals_only_in_exempt_places() {
-    // 掃全部 crate 的 src：cli 與 core 也印操作者終端訊息（T912 前只掃 server，
-    // cli 與 core 修好後沒有任何機械閘防回歸）
-    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    let mut files = Vec::new();
-    let mut scanned = Vec::new();
-    for e in std::fs::read_dir(&crates).expect("讀 crates/") {
-        let dir = e.unwrap().path();
-        let src = dir.join("src");
-        if src.is_dir() {
-            scanned.push(dir.file_name().unwrap().to_string_lossy().into_owned());
-            walk(&src, &mut files);
-        }
-    }
-    // 反空轉：目錄結構一改，掃描範圍可能悄悄縮成零
-    for must in [
-        "cytrace-server",
-        "cytrace-cli",
-        "cytrace-core",
-        "cytrace-i18n",
-    ] {
-        assert!(
-            scanned.iter().any(|c| c == must),
-            "沒掃到 {must}——掃描範圍可能已失效（掃到：{scanned:?}）"
-        );
-    }
-    assert!(
-        files.len() >= 30,
-        "只找到 {} 個 .rs——掃描可能已失效",
-        files.len()
-    );
+    // 範圍：全部 workspace 成員的 lib／bin（cargo metadata 推導；見 common/mod.rs）
+    let sources = common::production_sources();
+    common::assert_scope_not_vacuous(&sources, 30);
 
     let mut found: Vec<(String, String)> = Vec::new();
-    for f in &files {
-        let rel = f
-            .strip_prefix(&crates)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        let text = std::fs::read_to_string(f).unwrap();
+    for f in &sources.files {
+        let text = std::fs::read_to_string(&f.path).unwrap();
         for lit in production_cjk_literals(&text) {
-            found.push((rel.clone(), lit));
+            found.push((f.rel.clone(), lit));
         }
     }
 

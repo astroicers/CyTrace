@@ -16,7 +16,7 @@ CyTrace 容器跑 `cytrace serve` Web 服務模式（登入控制台 + 掃描/�
 
 ```bash
 # 1) 產生管理密碼 hash（不收明文）
-docker run --rm ghcr.io/astroicers/cytrace:latest hash-password
+docker run --rm -it ghcr.io/astroicers/cytrace:latest hash-password
 # 輸出 $argon2id$... 字串
 
 # 2) 起站（最小；HTTP 明文，內網測試用）

@@ -2,6 +2,13 @@
 
 use cytrace_types::{CbomStatus, CryptoInventory, QuantumStatus, Severity, Vulnerability};
 
+/// `--fail-on`／API `fail_on` 的合法值。CLI（clap，大小寫不拘）與 server API 共用這一份。
+///
+/// `Severity::from_grype_str` 把任何不認得的字串對到最低的 `unknown`——若不先驗值，
+/// 打錯字（`hgih`）等於「有任何弱點就觸發」（T912 複審 cli#2）。
+pub const FAIL_ON_LEVELS: [&str; 6] =
+    ["critical", "high", "medium", "low", "negligible", "unknown"];
+
 /// 量子閘門判定結果（ADR-013 決策 9）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuantumGate {

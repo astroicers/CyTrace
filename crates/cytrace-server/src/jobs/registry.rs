@@ -261,6 +261,19 @@ mod tests {
         assert_eq!(reg3.get(&id).unwrap().status, JobStatus::Interrupted);
     }
 
+    /// 通知以兩種語言渲染後不得殘留佔位符，且必須含指定的值（路徑、id）。
+    /// 變數名打錯時 `Catalog::t` 會原樣留下 `{{to}}`，路徑整段消失（複審 server#0）。
+    fn assert_renders(n: &Localized, must_contain: &str) {
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            let out = n.render(lang.catalog());
+            assert!(!out.contains("{{"), "{lang:?} 殘留佔位符：{out}");
+            assert!(
+                out.contains(must_contain),
+                "{lang:?} 應含 {must_contain}：{out}"
+            );
+        }
+    }
+
     /// 不經 `open` 的 registry——直接取 `recover` 的通知（`open` 會把它們印掉）。
     fn bare(dir: &Path) -> JobRegistry {
         let jobs_dir = dir.join("jobs");
@@ -297,6 +310,8 @@ mod tests {
             .any(|(k, v)| *k == "detail" && !v.is_empty()));
         assert!(jobs.join("1-missing.corrupt").is_dir());
         assert!(jobs.join("2-bad.corrupt").is_dir());
+        assert_renders(&notices[0], "2-bad.corrupt");
+        assert_renders(&notices[1], "1-missing.corrupt");
     }
 
     #[test]
@@ -312,6 +327,7 @@ mod tests {
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].key, "server.runtime.job_quarantine_failed");
         assert!(jobs.join("3-bad").join("job.json").exists());
+        assert_renders(&notices[0], "3-bad");
     }
 
     #[test]
@@ -333,6 +349,7 @@ mod tests {
         let notices = reg.recover().unwrap();
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].key, "server.runtime.job_persist_failed");
+        assert_renders(&notices[0], &record.id);
         // 落盤失敗不影響本次啟動的索引
         assert_eq!(reg.get(&record.id).unwrap().status, JobStatus::Interrupted);
     }
@@ -344,6 +361,7 @@ mod tests {
         std::fs::write(dir.join("jobs"), "").unwrap();
         let err = JobRegistry::open(&dir, Lang::ZhTw).err().unwrap();
         assert_eq!(err.key, "server.startup.data_dir_failed");
+        assert_renders(&err, &dir.join("jobs").display().to_string());
     }
 
     #[test]

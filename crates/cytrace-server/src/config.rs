@@ -334,11 +334,13 @@ mod tests {
         let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_SCAN_ROOTS", "bad")]))
             .unwrap_err();
         assert_eq!(err.key, "server.startup.scan_roots_format");
+        assert_eq!(err.vars, vec![("item", "bad".to_string())]);
         let err = ServerConfig::resolve(
             CliFlags::default(),
             env(&[("CYTRACE_SCAN_ROOTS", "t=relative/p")]),
         )
         .unwrap_err();
         assert_eq!(err.key, "server.startup.scan_roots_not_absolute");
+        assert_eq!(err.vars, vec![("item", "t=relative/p".to_string())]);
     }
 }
