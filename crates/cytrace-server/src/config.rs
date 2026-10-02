@@ -1,6 +1,6 @@
 //! 服務設定。來源優先序：CLI 旗標 > 環境變數 > 預設（SDS §6 慣例）。
 //!
-//! `resolve` 是純函式（env 以 `HashMap` 傳入）——可單元測試且無測試間 env 競態。
+//! `resolve` 是純函式（env 以 [`Env`] 傳入，`HashMap` 可直接轉換）——可單元測試且無測試間 env 競態。
 //! 錯誤以 [`Localized`] 回傳（`server.startup.*`），由呼叫端以操作者語言渲染（T912）。
 
 use crate::auth;
@@ -71,7 +71,8 @@ pub struct ServerConfig {
 ///
 /// 為什麼延後：
 /// - 不能在收集時就報錯——旗標已覆寫的變數（`--data-dir` 配上壞掉的 `CYTRACE_DATA_DIR`）、
-///   serve 根本不讀的變數（`CYTRACE_LANG`、`CYTRACE_CBOM_TIMEOUT_SECS`）都會擋下啟動
+///   不經 `resolve` 讀取的變數（`CYTRACE_LANG` 由 CLI 以 lossy 讀、`CYTRACE_CBOM_TIMEOUT_SECS`
+///   由引擎讀，壞值皆退回預設）都會擋下啟動
 ///   （T912 第三輪複審）；
 /// - 也不能以替代字元帶過——路徑類變數會悄悄改用另一個目錄（`d\xff` 寫進 `d\u{FFFD}/jobs`，
 ///   第二輪複審 newcode#0）；
@@ -442,15 +443,36 @@ mod tests {
         assert_eq!(err.vars, vec![("name", "CYTRACE_DATA_DIR".to_string())]);
         assert_renders(&err, "CYTRACE_DATA_DIR");
 
-        // 旗標已覆寫、或 serve 不讀：不報錯
+        // 旗標已覆寫、或不經 resolve 讀取：不報錯。四個有旗標的變數都要驗
         let c = ServerConfig::resolve(
             CliFlags {
+                bind: Some("127.0.0.1:1".into()),
                 data_dir: Some("/srv".into()),
-                ..Default::default()
+                tls_cert: Some("/c.crt".into()),
+                tls_key: Some("/c.key".into()),
             },
-            Env::from_os([phc.clone(), bad("CYTRACE_DATA_DIR"), bad("CYTRACE_LANG")]),
+            Env::from_os([
+                phc.clone(),
+                bad("CYTRACE_BIND"),
+                bad("CYTRACE_DATA_DIR"),
+                bad("CYTRACE_TLS_CERT"),
+                bad("CYTRACE_TLS_KEY"),
+                bad("CYTRACE_LANG"),
+            ]),
         )
         .unwrap();
         assert_eq!(c.data_dir, PathBuf::from("/srv"));
+        assert_eq!(c.tls.unwrap().cert, PathBuf::from("/c.crt"));
+
+        // 只給一半的 TLS 旗標：另一半要讀環境變數，壞掉就指名它
+        let err = ServerConfig::resolve(
+            CliFlags {
+                tls_cert: Some("/c.crt".into()),
+                ..Default::default()
+            },
+            Env::from_os([phc.clone(), bad("CYTRACE_TLS_KEY")]),
+        )
+        .unwrap_err();
+        assert_eq!(err.vars, vec![("name", "CYTRACE_TLS_KEY".to_string())]);
     }
 }

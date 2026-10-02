@@ -23,7 +23,8 @@
 - `--fail-on` 的值必須是 critical／high／medium／low／negligible／unknown（大小寫不拘），
   否則以 `1` 結束。先前任何字串都被接受，打錯字（如 `hgih`）會被當成最低的 unknown，
   等於「有任何弱點就以 2 結束」。CLI 與 Web API 現在接受同一組值；比對方式不同：CLI 不分大小寫，
-  API 只收小寫，且 API 把空值視為未設定、CLI 拒收空值。
+  API 只收小寫。空值：CLI 拒收；API 的上傳（multipart）先去頭尾空白、空值視為未設定，
+  JSON 的 `POST /api/v1/jobs` 則拒收空字串。
 - 錯誤前綴由固定的「錯誤 / error:」改為依語言擇一（「錯誤：」或 `error:`）；讀寫檔失敗的
   訊息附上檔案路徑。以字串比對錯誤前綴的腳本需調整。
 
@@ -52,7 +53,8 @@
 - 監聽位址不合法時，訊息指出值來自 `--bind` 還是 `CYTRACE_BIND`；先前一律寫 `CYTRACE_BIND`。
 - 環境中任一變數不是合法 UTF-8 時，`serve` 會當掉（退出碼非 1、訊息未在地化）。現在只有 serve
   實際要讀的變數（例如 `CYTRACE_DATA_DIR`、`GRYPE_DB_CACHE_DIR`）值不是 UTF-8 時才以 `1` 結束並
-  指名該變數；已由命令列旗標覆寫的（如給了 `--data-dir`）與 serve 不讀的變數不受影響。
+  指名該變數；已由命令列旗標覆寫的（如給了 `--data-dir`）、以及不屬於服務設定的變數
+  （如 `CYTRACE_LANG`）不受影響。
   `health` 讀 `CYTRACE_BIND` 時亦同。
 - serve 在印出監聽位址之前就先掛好 Ctrl-C 的處理；先前剛啟動就按下 Ctrl-C，可能直接中止
   （未優雅關閉）或被忽略。

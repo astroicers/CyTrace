@@ -799,7 +799,7 @@ mod serve {
             }
         }
 
-        // 不該擋的：旗標已覆寫的變數、serve 不讀的變數（第三輪複審：前版在收集環境時就報錯，
+        // 不該擋的：旗標已覆寫的變數、不經 ServerConfig::resolve 讀取的變數（第三輪複審：前版在收集環境時就報錯，
         // `--data-dir` 配上壞掉的 CYTRACE_DATA_DIR 照樣起不來）。以不存在的 TLS 檔讓服務在綁定前結束
         let sb = Sandbox::new("nonutf8-ok");
         let data = sb.path("data");
