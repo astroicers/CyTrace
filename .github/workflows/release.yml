@@ -107,6 +107,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # 說明取自 CHANGELOG.md（scripts/release-notes.py），故需要原始碼
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -128,6 +131,11 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # 說明由 CHANGELOG.md 該版段落組出——不在此寫死：先前「已知限制（v0.3.0）」逐字寫在
+      # 這裡，下一版會原樣印出上一版的限制。缺段落或標頭未標日期即擋下發布。
+      - name: 組 Release 說明（取自 CHANGELOG.md）
+        run: python3 scripts/release-notes.py render "${{ steps.tag.outputs.tag }}" > release-notes.md
+
       - name: 發布 Release
         uses: softprops/action-gh-release@v2
         with:
@@ -135,23 +143,5 @@ jobs:
           name: CyTrace ${{ steps.tag.outputs.tag }}
           files: release/*
           generate_release_notes: true
-          body: |
-            CyTrace ${{ steps.tag.outputs.tag }} — 雙平台執行檔（ADR-010）
-
-            | 檔案 | 平台 | 說明 |
-            |------|------|------|
-            | `cytrace-x86_64-linux` | Linux x86_64 | musl 靜態 binary，零 runtime 依賴 |
-            | `cytrace-x86_64-windows.exe` | Windows x86_64 | msvc 靜態 CRT，免 VC++ 可轉散發套件 |
-            | `SHA256SUMS` | — | 完整性校驗（`sha256sum -c SHA256SUMS`） |
-
-            > 本 Release 僅含**執行檔**。完整 air-gapped 安裝包（含釘選 **Syft / Grype /
-            > CBOMkit-theia 三引擎** + grype DB 離線快照）由交付端逐平台以 `make package`
-            > 產生（Linux 需先 `scripts/build-theia.sh`；見 docs/DELIVERY_SOP.md）。
-            > 容器映像與其校驗檔（`SHA256SUMS-image`）由 Docker workflow 另掛本 Release。
-
-            **已知限制（v0.3.0）**
-            - CBOM 為檔案系統／映像層盤點；原始碼層演算法辨識不在本版範圍（ADR-013）。
-            - 引擎對 >1 MiB 的檔案跳掃；OpenSSH 格式私鑰偵測到但不建模——
-              兩者皆以「未掃描」計數顯性揭露，量子閘門 fail-closed。
-            - server API 錯誤 detail 尚有少量硬編碼中文（T909，下版處理）。
-            - Windows 交付包經 CI 冒煙驗證，尚未於實機場域驗證。
+          # 本 workflow 是 Release 說明的唯一擁有者（scripts/release-notes.py check 把關）
+          body_path: release-notes.md

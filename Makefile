@@ -75,6 +75,8 @@ lint: fmt-check clippy
 	@# 對抽取邏輯注入故障，確認結構性檢查（區段數 / OUTSIDE needle / 空值）真的會紅
 	@# ——初版與二版都是「逐列變異」，兩版的判別力都等於正常執行（第八輪複審 finding C）
 	python3 scripts/notice-parity-check.py --verify-sentinels
+	@# Release 說明只有 release.yml 能寫、內容取自 CHANGELOG（v0.3.0 的說明被 docker.yml 整份覆蓋過）
+	python3 scripts/release-notes.py check
 	@# 報表成因渲染：本組織 GitHub 為 free 方案、CI 無法設為 required（user-level 實查），
 	@# 故「只在 CI 跑」實質等於「只在事後偵測」；land 前的閘必須跑到（第八輪複審 finding K）。
 	@# 只呼叫這一支而非整個 frontend-check：pnpm 在部分環境會先做 deps check 並要求

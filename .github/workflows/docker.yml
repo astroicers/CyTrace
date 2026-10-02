@@ -195,7 +195,6 @@ jobs:
             SHA256SUMS-image
             IMAGE_DIGEST.txt
             cytrace-image.sbom.cdx.json
-          body: |
-            容器映像（ADR-012）。離線搬運：見 docs/DELIVERY_SOP.md §7。
-            校驗：`sha256sum -c SHA256SUMS-image`（binaries 的校驗檔是另一份 `SHA256SUMS`）。
-            交付工作站以 minisign 簽 `cytrace-*-image.tar`（私鑰不進 CI）。
+          # 刻意不給 body：本 action 更新既有 release 時 `body = workflowBody || existingBody`，
+          # 給了就整份覆蓋 release.yml 寫的說明（v0.3.0 實際發生，公開頁只剩三行）。
+          # 映像說明已併入 scripts/release-notes.py；check 模式擋住此處再加回 body。
