@@ -362,30 +362,57 @@ fn cjk_literals_only_in_exempt_places() {
 /// 目前生產碼沒有任何這種用法，故直接禁止，而不是去追模組樹。
 #[test]
 fn production_code_has_no_out_of_tree_modules() {
-    #[derive(Default)]
-    struct Find(Vec<String>);
-    impl<'ast> Visit<'ast> for Find {
-        fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
-            if m.attrs.iter().any(|a| a.path().is_ident("path")) {
-                self.0.push(format!("#[path] mod {}", m.ident));
-            }
-            visit::visit_item_mod(self, m);
-        }
-        fn visit_macro(&mut self, m: &'ast syn::Macro) {
-            if m.path.segments.last().is_some_and(|s| s.ident == "include") {
-                self.0.push("include!(…)".into());
+    // 掃整個 token 流，不靠 AST 節點的形狀：只看 `#[path]` 與最外層巨集名時，
+    // `format!("{}", include!(…))`、`#[cfg_attr(all(), path = …)]`、`use core::include as inc;`
+    // 都繞得過（第三輪複審 gates）。規則刻意寬：生產碼裡任何 `include` 識別字、任何屬性內的
+    // `path =` 都算命中——目前兩者都沒有，真有需要時再明列例外。
+    fn walk(ts: proc_macro2::TokenStream, in_attr: bool, out: &mut Vec<String>) {
+        use proc_macro2::TokenTree as T;
+        let toks: Vec<T> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                T::Ident(id) if id == "include" => out.push("include".into()),
+                T::Ident(id)
+                    if in_attr
+                        && id == "path"
+                        && matches!(toks.get(i + 1), Some(T::Punct(p)) if p.as_char() == '=') =>
+                {
+                    out.push("屬性內的 path =".into())
+                }
+                T::Group(g) => {
+                    // `#[…]` 或 `#![…]`：方括號群組前面是 `#`（中間可夾 `!`）
+                    let attr = g.delimiter() == proc_macro2::Delimiter::Bracket
+                        && (matches!(i.checked_sub(1).and_then(|j| toks.get(j)), Some(T::Punct(p)) if p.as_char() == '#')
+                            || matches!(
+                                (i.checked_sub(2).and_then(|j| toks.get(j)), i.checked_sub(1).and_then(|j| toks.get(j))),
+                                (Some(T::Punct(a)), Some(T::Punct(b))) if a.as_char() == '#' && b.as_char() == '!'
+                            ));
+                    walk(g.stream(), in_attr || attr, out);
+                }
+                _ => {}
             }
         }
     }
     let scan = |src: &str| {
-        let mut f = Find::default();
-        f.visit_file(&syn::parse_file(src).expect("解析"));
-        f.0
+        let ts: proc_macro2::TokenStream = src.parse().expect("token 化");
+        let mut out = Vec::new();
+        walk(ts, false, &mut out);
+        out
     };
-    // 自檢：兩種形狀都抓得到；include_str! 是資料（locale、樣板），不算
+    // 自檢：直接寫、包在巨集裡、cfg_attr、改名引入都抓得到；include_str! 是資料，不算
+    let hits = |src: &str| scan(src).len();
+    assert_eq!(hits("#[path = \"../x.rs\"] mod x;"), 1);
+    assert_eq!(hits("fn f() { include!(\"y.rs\"); }"), 1);
     assert_eq!(
-        scan("#[path = \"../x.rs\"] mod x;\nfn f() { include!(\"y.rs\"); }\nconst S: &str = include_str!(\"z.json\");\n"),
-        vec!["#[path] mod x".to_string(), "include!(…)".to_string()]
+        hits("fn f() -> String { format!(\"{}\", include!(\"y.rs\")) }"),
+        1
+    );
+    assert_eq!(hits("#[cfg_attr(all(), path = \"../o.rs\")] mod o;"), 1);
+    assert_eq!(hits("use core::include as inc;"), 1);
+    assert_eq!(hits("#![path = \"x\"]"), 1);
+    assert_eq!(
+        hits("const S: &str = include_str!(\"z.json\");\nfn g(path: &str) { let path = 1; }"),
+        0
     );
 
     let sources = common::production_sources();

@@ -15,6 +15,9 @@
 //! - 鍵是字面值、變數清單不是字面值陣列（`&vars`）——**必須為 0**；
 //! - 鍵不是字面值（`t(risk.i18n_key(), &[])`）——逐筆列在 [`NONLITERAL`]，次數必須完全相符，
 //!   每筆寫明由哪支測試涵蓋。新增這種呼叫就會轉紅，逼人補上涵蓋。
+//!   含 UFCS（`Catalog::t(cat, k, …)`）、鍵不是外層參數的 `Localized::new(x.i18n_key())`、
+//!   以非字面值鍵呼叫輔助函式；
+//! - 解析不了、又含 i18n 呼叫的巨集（`macro_rules!` 本體）——**必須為空**。
 //!
 //! 不在 catalog 的鍵交給 `scripts/i18n-check.py`。測試碼也一起比：以真鍵配錯變數同樣是錯。
 
@@ -147,7 +150,10 @@ struct Site {
 #[derive(Default)]
 struct Finder {
     file: String,
-    fn_stack: Vec<String>,
+    /// 外層函式：（名稱, 參數名）。參數名用來判定 `Localized::new(key)` 的 key 是不是參數。
+    fn_stack: Vec<(String, Vec<String>)>,
+    /// 解析不了、又含 i18n 呼叫的巨集：（檔案, 巨集名）。比不到就等於沒驗，必須為空。
+    unparsed: Vec<(String, String)>,
     sites: Vec<Site>,
     /// 以參數當鍵建 `Localized` 的函式 → 它補上的變數。
     helpers: BTreeMap<String, BTreeSet<String>>,
@@ -158,6 +164,8 @@ struct Finder {
     /// 鍵不是字面值的 `.t`／`.with_message` 呼叫：（檔案, 鍵運算式）。只記生產碼——
     /// 測試碼以非字面值鍵呼叫，本身就是在驗那些鍵。
     nonliteral: Vec<(String, String)>,
+    /// 單一識別字函式、第一個引數不是字面值的呼叫：（檔案, 函式名, 鍵運算式）。
+    helper_nonliteral: Vec<(String, String, String)>,
     /// 目前在幾層 `#[cfg(test)]` 模組裡。
     test_depth: usize,
 }
@@ -243,9 +251,24 @@ impl Finder {
         match lit_str(&c.args[0]) {
             Some(key) => self.site("Localized", key, vars),
             None => {
-                // 鍵來自參數：記為輔助函式，呼叫點另行比對
-                if let (Some(f), false) = (self.fn_stack.last().cloned(), dynamic) {
-                    self.helpers.insert(f, names);
+                // 鍵是**外層函式的參數**：記為輔助函式，呼叫點另行比對。
+                // 其他非字面值鍵（`Localized::new(x.i18n_key())`）計入 NONLITERAL——前版一律
+                // 當輔助函式，於是這種形狀既不比對、也不計數（第三輪複審）
+                let param = match &c.args[0] {
+                    Expr::Path(p) if p.path.segments.len() == 1 => {
+                        let id = p.path.segments[0].ident.to_string();
+                        self.fn_stack
+                            .last()
+                            .filter(|(_, params)| params.contains(&id))
+                            .map(|(f, _)| f.clone())
+                    }
+                    _ => None,
+                };
+                match (param, dynamic) {
+                    (Some(f), false) => {
+                        self.helpers.insert(f, names);
+                    }
+                    _ => self.nonliteral_site("Localized::new", &c.args[0]),
                 }
             }
         }
@@ -259,6 +282,63 @@ impl Finder {
     }
 }
 
+impl Finder {
+    fn nonliteral_site(&mut self, shape: &str, key: &Expr) {
+        if self.test_depth == 0 {
+            use quote::ToTokens;
+            let k = key.to_token_stream().to_string().replace(' ', "");
+            let k = if shape == "Localized::new" {
+                format!("Localized::new({k})")
+            } else {
+                k
+            };
+            self.nonliteral.push((self.file.clone(), k));
+        }
+    }
+
+    /// `.t(k, vars)`／`.with_message(k, vars)`，或 UFCS 的 `Catalog::t(cat, k, vars)`。
+    fn keyed_call(&mut self, method: &str, key: &Expr, vars: &Expr) {
+        match lit_str(key) {
+            Some(k) => {
+                let v = var_array(vars).map_or(Vars::Dynamic, Vars::Known);
+                let shape = if method == "t" { "t" } else { "with_message" };
+                self.site(shape, k, v);
+            }
+            None => self.nonliteral_site(method, key),
+        }
+    }
+}
+
+fn params_of(sig: &syn::Signature) -> Vec<String> {
+    sig.inputs
+        .iter()
+        .filter_map(|a| match a {
+            syn::FnArg::Typed(t) => match &*t.pat {
+                syn::Pat::Ident(i) => Some(i.ident.to_string()),
+                _ => None,
+            },
+            syn::FnArg::Receiver(_) => None,
+        })
+        .collect()
+}
+
+/// token 裡是否有 i18n 呼叫的跡象：`Localized`、`with_message`、或 `.t(`。
+fn mentions_i18n(ts: proc_macro2::TokenStream) -> bool {
+    use proc_macro2::TokenTree as T;
+    let toks: Vec<T> = ts.into_iter().collect();
+    toks.iter().enumerate().any(|(i, t)| match t {
+        T::Ident(id) => {
+            id == "Localized"
+                || id == "with_message"
+                || (id == "t"
+                    && matches!(i.checked_sub(1).and_then(|j| toks.get(j)), Some(T::Punct(p)) if p.as_char() == '.')
+                    && matches!(toks.get(i + 1), Some(T::Group(g)) if g.delimiter() == proc_macro2::Delimiter::Parenthesis))
+        }
+        T::Group(g) => mentions_i18n(g.stream()),
+        _ => false,
+    })
+}
+
 impl<'ast> Visit<'ast> for Finder {
     fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
         let test = common::is_cfg_test(&m.attrs);
@@ -267,22 +347,33 @@ impl<'ast> Visit<'ast> for Finder {
         self.test_depth -= usize::from(test);
     }
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
-        self.fn_stack.push(f.sig.ident.to_string());
+        self.fn_stack
+            .push((f.sig.ident.to_string(), params_of(&f.sig)));
         visit::visit_item_fn(self, f);
         self.fn_stack.pop();
     }
     fn visit_impl_item_fn(&mut self, f: &'ast syn::ImplItemFn) {
-        self.fn_stack.push(f.sig.ident.to_string());
+        self.fn_stack
+            .push((f.sig.ident.to_string(), params_of(&f.sig)));
         visit::visit_impl_item_fn(self, f);
         self.fn_stack.pop();
     }
     /// 格式巨集（`eprintln!("{}", cat.t(…))`）的參數 syn 不會自動解析；能解成逗號分隔的
-    /// 運算式就逐一走訪。解不了的巨集（`matches!` 之類）略過。
+    /// 運算式就逐一走訪。解不了的巨集（`matches!`、`macro_rules!` 本體）若含 i18n 呼叫，
+    /// 記入 `unparsed`——前版直接略過，`macro_rules!` 本體裡配錯變數完全看不到（第三輪複審）。
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
-        if let Ok(args) = m.parse_body_with(Punctuated::<Expr, syn::Token![,]>::parse_terminated) {
-            for a in &args {
-                self.visit_expr(a);
+        match m.parse_body_with(Punctuated::<Expr, syn::Token![,]>::parse_terminated) {
+            Ok(args) => {
+                for a in &args {
+                    self.visit_expr(a);
+                }
             }
+            Err(_) if self.test_depth == 0 && mentions_i18n(m.tokens.clone()) => {
+                use quote::ToTokens;
+                let name = m.path.to_token_stream().to_string().replace(' ', "");
+                self.unparsed.push((self.file.clone(), name));
+            }
+            Err(_) => {}
         }
     }
     fn visit_expr(&mut self, e: &'ast Expr) {
@@ -293,25 +384,35 @@ impl<'ast> Visit<'ast> for Finder {
             Expr::MethodCall(m)
                 if (m.method == "t" || m.method == "with_message") && m.args.len() == 2 =>
             {
-                match lit_str(&m.args[0]) {
-                    Some(key) => {
-                        let vars = var_array(&m.args[1]).map_or(Vars::Dynamic, Vars::Known);
-                        let shape = if m.method == "t" { "t" } else { "with_message" };
-                        self.site(shape, key, vars);
-                    }
-                    None if self.test_depth == 0 => {
-                        use quote::ToTokens;
-                        let k = m.args[0].to_token_stream().to_string().replace(' ', "");
-                        self.nonliteral.push((self.file.clone(), k));
-                    }
-                    None => {}
-                }
+                let method = m.method.to_string();
+                self.keyed_call(&method, &m.args[0], &m.args[1]);
+            }
+            // UFCS：`Catalog::t(cat, k, vars)`
+            Expr::Call(c)
+                if c.args.len() == 3
+                    && matches!(&*c.func, Expr::Path(p) if p.path.segments.len() >= 2
+                        && p.path.segments.last().is_some_and(|s| s.ident == "t" || s.ident == "with_message")) =>
+            {
+                let Expr::Path(p) = &*c.func else {
+                    unreachable!()
+                };
+                let method = p.path.segments.last().unwrap().ident.to_string();
+                self.keyed_call(&method, &c.args[1], &c.args[2]);
             }
             Expr::Call(c) => {
-                if let (Expr::Path(p), Some(key)) = (&*c.func, c.args.first().and_then(lit_str)) {
+                if let (Expr::Path(p), Some(first)) = (&*c.func, c.args.first()) {
                     if p.path.segments.len() == 1 {
                         let f = p.path.segments[0].ident.to_string();
-                        self.calls.push((self.file.clone(), f, key));
+                        match lit_str(first) {
+                            Some(key) => self.calls.push((self.file.clone(), f, key)),
+                            // 輔助函式以非字面值鍵呼叫：等知道哪些是輔助函式後再計入 NONLITERAL
+                            None if self.test_depth == 0 => {
+                                use quote::ToTokens;
+                                let k = first.to_token_stream().to_string().replace(' ', "");
+                                self.helper_nonliteral.push((self.file.clone(), f, k));
+                            }
+                            None => {}
+                        }
                     }
                 }
             }
@@ -345,6 +446,11 @@ fn resolve_helpers(f: &mut Finder, helpers: &BTreeMap<String, BTreeSet<String>>)
             });
         }
     }
+    for (file, func, k) in std::mem::take(&mut f.helper_nonliteral) {
+        if helpers.contains_key(&func) {
+            f.nonliteral.push((file, format!("{func}({k})")));
+        }
+    }
     n
 }
 
@@ -362,7 +468,11 @@ fn a(cat: &Catalog, x: &str) {
     let _ = cat.t("k.dynamic", &vs);
     let _ = Localized::new("k.nested").var("inner", cat.t("k.inner", &[]));
     let _ = cat.t(risk.i18n_key(), &[]);
+    let _ = Localized::new(x.i18n_key()).var("v", x);
+    let _ = Catalog::t(cat, "k.ufcs", &[("u", x)]);
+    let _ = helper(other.key(), x);
 }
+macro_rules! m { ($c:expr) => { $c.t("k.inmacro", &[("w", "x")]) }; }
 #[cfg(test)]
 mod tests {
     fn t(cat: &Catalog, k: &str) { let _ = cat.t(k, &[]); }
@@ -386,15 +496,27 @@ mod tests {
         ("k.dynamic", Vars::Dynamic),
         ("k.nested", k(&["inner"])),
         ("k.inner", k(&[])),
+        ("k.ufcs", k(&["u"])),
     ]
     .into_iter()
     .map(|(a, b)| (a.to_string(), b))
     .collect();
     assert_eq!(got, want);
-    // 鍵非字面值：生產碼記下，cfg(test) 模組內不記
+    // 鍵非字面值：生產碼記下（含非參數鍵的 Localized::new、輔助函式的非字面值呼叫），
+    // cfg(test) 模組內不記
+    let nl: Vec<&str> = f.nonliteral.iter().map(|(_, k)| k.as_str()).collect();
     assert_eq!(
-        f.nonliteral,
-        vec![("x.rs".to_string(), "risk.i18n_key()".to_string())]
+        nl,
+        [
+            "risk.i18n_key()",
+            "Localized::new(x.i18n_key())",
+            "helper(other.key())"
+        ]
+    );
+    // 解析不了的巨集本體裡有 i18n 呼叫：記下
+    assert_eq!(
+        f.unparsed,
+        vec![("x.rs".to_string(), "macro_rules".to_string())]
     );
 }
 
@@ -413,6 +535,8 @@ fn code_vars_match_catalog_placeholders() {
         all.calls.extend(f.calls);
         all.skipped_dynamic += f.skipped_dynamic;
         all.nonliteral.extend(f.nonliteral);
+        all.helper_nonliteral.extend(f.helper_nonliteral);
+        all.unparsed.extend(f.unparsed);
     }
 
     let helpers = all.helpers.clone();
@@ -465,6 +589,12 @@ fn code_vars_match_catalog_placeholders() {
         all.skipped_dynamic, 0,
         "有鍵是字面值、但變數清單不是字面值陣列的呼叫（如 `let v = [..]; t(\"k\", &v)`）——\
          比不了就等於沒驗；請改寫成 `t(\"k\", &[(\"a\", …)])`"
+    );
+
+    assert!(
+        all.unparsed.is_empty(),
+        "有解析不了、又含 i18n 呼叫的巨集（比不到就等於沒驗；請把呼叫移出巨集本體）：{:?}",
+        all.unparsed
     );
 
     // 鍵不是字面值的呼叫：與 NONLITERAL 逐筆、逐次數相符

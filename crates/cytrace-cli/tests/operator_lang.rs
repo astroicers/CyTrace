@@ -160,7 +160,16 @@ fn assert_operator_text(lang: &str, o: &Out, ctx: &str) {
     if lang == "en-US" {
         assert!(!has_cjk(&all), "en-US 不得出現中文：{ctx}");
     } else {
-        assert!(has_cjk(&all), "zh-TW 應為中文：{ctx}");
+        // 逐行：整份輸出只要有一個中文字就過的話，夾在中文行之間的英文硬編碼抓不到
+        // （第三輪複審：`Scanning {target}`、`Report written:` 改成英文硬編碼，全套仍綠）
+        let english: Vec<&str> = all
+            .lines()
+            .filter(|l| !l.trim().is_empty() && !has_cjk(l))
+            .collect();
+        assert!(
+            english.is_empty(),
+            "zh-TW 有不含中文的行 {english:?}：{ctx}"
+        );
     }
 }
 
