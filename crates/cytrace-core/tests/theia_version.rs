@@ -9,7 +9,7 @@
 //! 路徑。cargo 執行測試時把 `CARGO_MANIFEST_DIR` 設為受測 package 的目錄。
 //!
 //! 範圍限制：對帳的是 `cargo test` 編出的 debug 單元，不是出貨的 release 單元；同路徑舊 mtime
-//! 那一型由 Dockerfile / package.sh 在建置前 `touch` versions.env 承擔（第三輪複審 build#0）。
+//! 那一型由 Dockerfile、package.sh、package.ps1 在建置前 `touch` versions.env 承擔（第三輪複審 build#0）。
 
 use cytrace_core::engine::tool_versions;
 use cytrace_types::CbomStatus;
@@ -145,6 +145,45 @@ fn rust_and_shell_readers_agree_on_every_sample() {
             "含 NUL",
             [base.as_bytes(), b"# a\x00b\nTHEIA_VERSION=1.1.2\n"].concat(),
             None,
+        ),
+        // glibc iconv 會放行前兩種（宣稱核對 theia#1），嚴格 UTF-8 必須拒收
+        (
+            "超出 U+10FFFF（F4 90 80 80）",
+            [
+                base.as_bytes(),
+                b"# \xf4\x90\x80\x80\nTHEIA_VERSION=1.1.2\n",
+            ]
+            .concat(),
+            None,
+        ),
+        (
+            "5 位元組舊式序列",
+            [
+                base.as_bytes(),
+                b"# \xf8\x88\x80\x80\x80\nTHEIA_VERSION=1.1.2\n",
+            ]
+            .concat(),
+            None,
+        ),
+        (
+            "surrogate（ED A0 80）",
+            [base.as_bytes(), b"# \xed\xa0\x80\nTHEIA_VERSION=1.1.2\n"].concat(),
+            None,
+        ),
+        (
+            "overlong（C0 AF）",
+            [base.as_bytes(), b"# \xc0\xaf\nTHEIA_VERSION=1.1.2\n"].concat(),
+            None,
+        ),
+        (
+            "BOM 開頭",
+            [
+                b"\xef\xbb\xbf".as_slice(),
+                base.as_bytes(),
+                b"THEIA_VERSION=1.1.2\n",
+            ]
+            .concat(),
+            Some("1.1.2"),
         ),
         (
             "eval 組出的再賦值（字面上不提鍵名）",

@@ -15,7 +15,7 @@
 //! **本檔管不到的**（第三輪複審 build#0，更正前版「根治」的說法）：同一路徑、versions.env 的
 //! mtime 比上次建置舊時，cargo 依 mtime 判定新鮮、根本不重跑 build script——讀的是執行期還是
 //! `env!` 都無從介入。Docker（固定 WORKDIR + target cache mount、COPY 保留來源 mtime）正是這一型；
-//! 故 Dockerfile 與 package.sh 在 cargo build 前 `touch` versions.env 強制重跑。
+//! 故 Dockerfile、package.sh、package.ps1 在 cargo build 前 `touch` versions.env 強制重跑。
 //! `tests/theia_version.rs` 對帳的是 `cargo test` 的 debug 單元，不是出貨的 release 單元。
 
 use std::path::Path;

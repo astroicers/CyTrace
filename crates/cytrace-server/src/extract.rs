@@ -138,8 +138,9 @@ where
     }
 }
 
-/// 回應用的 JSON 包裝。handler 的回應一律用它——`axum::Json` 同時是 extractor，
-/// 全面禁用它（clippy.toml）才能讓裸 `Json` 的請求解析在任何寫法下都被擋下。
+/// 回應用的 JSON 包裝。handler 的回應一律用它——`axum::Json` 同時是 extractor，回應改用本型別
+/// 之後才能把 `Json` 列入 clippy 禁用。clippy 只看寫出來的型別；未標型別的 pattern 由
+/// `tests::no_closure_handlers_in_server` 另行把關。
 pub struct JsonOut<T>(pub T);
 
 #[allow(clippy::disallowed_types)]
@@ -193,11 +194,20 @@ mod tests {
                     ) {
                         stack.push(p);
                     }
-                } else if (name == "clippy.toml" || name == ".clippy.toml") && d != root {
+                } else if (name == "clippy.toml" && d != root) || name == ".clippy.toml" {
+                    // 根目錄的 .clippy.toml 也算：它優先於 clippy.toml（宣稱核對 server#1）
+                    extra.push(p.display().to_string());
+                } else if (name == "config" || name == "config.toml")
+                    && d.file_name().is_some_and(|n| n == ".cargo")
+                    && std::fs::read_to_string(&p).is_ok_and(|t| t.contains("CLIPPY_CONF_DIR"))
+                {
+                    // .cargo/config 的 [env] 設 CLIPPY_CONF_DIR 也會換掉生效的設定
                     extra.push(p.display().to_string());
                 }
             }
         }
+        // 範圍：repo 內的檔案與 Makefile／CI。repo 外的 ~/.cargo/config.toml、呼叫者的環境變數
+        // 不在本測試能看到的範圍（已知限制）。
         assert!(
             extra.is_empty(),
             "有其他層級的 clippy 設定會取代 workspace 的：{extra:?}"
@@ -257,6 +267,9 @@ mod tests {
     struct ClosureHandlers {
         hits: Vec<String>,
         routing_calls: usize,
+        /// 本模組是原生 extractor 唯一的合法使用處（與 clippy 的逐項豁免同範圍），
+        /// 包裝實作裡的 `.map(|Json(v)| ApiJson(v))` 不算。
+        allow_extractor_patterns: bool,
     }
 
     fn is_closure(e: &syn::Expr) -> bool {
@@ -268,7 +281,32 @@ mod tests {
         }
     }
 
+    /// 被 clippy 禁用的原生 extractor 名稱（clippy.toml）。
+    const RAW_EXTRACTORS: &[&str] = &["Json", "Path", "Query", "Multipart", "ConnectInfo"];
+
+    fn extractor_pattern(p: &syn::Pat) -> bool {
+        match p {
+            syn::Pat::TupleStruct(t) => t
+                .path
+                .segments
+                .last()
+                .is_some_and(|s| RAW_EXTRACTORS.contains(&s.ident.to_string().as_str())),
+            syn::Pat::Type(t) => extractor_pattern(&t.pat),
+            syn::Pat::Paren(p) => extractor_pattern(&p.pat),
+            _ => false,
+        }
+    }
+
     impl<'ast> syn::visit::Visit<'ast> for ClosureHandlers {
+        /// 參數以原生 extractor 的 pattern 解構的 closure，不論寫在哪裡——先 `let echo = |axum::Json(b)| …`
+        /// 再 `post(echo)` 就不在路由呼叫的引數位置（宣稱核對 server#0，2/2 確認）。
+        fn visit_expr_closure(&mut self, c: &'ast syn::ExprClosure) {
+            if !self.allow_extractor_patterns && c.inputs.iter().any(extractor_pattern) {
+                self.hits
+                    .push(quote::ToTokens::to_token_stream(c).to_string());
+            }
+            syn::visit::visit_expr_closure(self, c);
+        }
         fn visit_expr_call(&mut self, c: &'ast syn::ExprCall) {
             if let syn::Expr::Path(p) = &*c.func {
                 if let Some(seg) = p.path.segments.last() {
@@ -295,9 +333,12 @@ mod tests {
         }
     }
 
-    fn closure_handlers(src: &str) -> ClosureHandlers {
+    fn closure_handlers(src: &str, is_extract_rs: bool) -> ClosureHandlers {
         let file = syn::parse_file(src).expect("解析 Rust 原始碼");
-        let mut v = ClosureHandlers::default();
+        let mut v = ClosureHandlers {
+            allow_extractor_patterns: is_extract_rs,
+            ..Default::default()
+        };
         syn::visit::Visit::visit_file(&mut v, &file);
         v
     }
@@ -312,17 +353,24 @@ mod tests {
             "fn r() -> R { Router::new().route(\"/y\", get(h).post(|b: String| async move { b })) }",
             "fn r() -> R { Router::new().route(\"/z\", on(MethodFilter::GET, (|| async {}))) }",
             "fn r() -> R { Router::new().route(\"/w\", axum::routing::any(|| async {})) }",
+            // 先綁定再傳入：不在路由呼叫的引數位置，以 extractor pattern 抓
+            "fn r() -> R { let echo = |axum::Json(b)| async move { b }; Router::new().route(\"/e\", post(echo)) }",
+            "fn r() -> R { let peek = |Path(n): Path<u32>| async move { n }; Router::new().route(\"/p\", get(peek)) }",
         ];
         for s in bad {
-            assert!(!closure_handlers(s).hits.is_empty(), "比對器漏抓：{s}");
+            assert!(
+                !closure_handlers(s, false).hits.is_empty(),
+                "比對器漏抓：{s}"
+            );
         }
         let good = [
             "fn r() -> R { Router::new().route(\"/x\", get(api::jobs::list).post(api::jobs::create)) }",
             "fn f(v: &[u8]) -> Vec<u8> { v.iter().map(|x| x + 1).collect() }",
             "fn f(s: &str) -> bool { s.chars().any(|c| c == 'x') }",
+            "fn f(v: Vec<Option<u8>>) -> Vec<u8> { v.into_iter().flatten().map(|Wrapper(x)| x).collect() }",
         ];
         for s in good {
-            let h = closure_handlers(s);
+            let h = closure_handlers(s, false);
             assert!(h.hits.is_empty(), "比對器誤報：{s} → {:?}", h.hits);
         }
     }
@@ -345,7 +393,8 @@ mod tests {
         let mut hits = Vec::new();
         let mut routing_calls = 0;
         for f in &files {
-            let v = closure_handlers(&std::fs::read_to_string(f).unwrap());
+            let is_extract_rs = f.file_name().is_some_and(|n| n == "extract.rs");
+            let v = closure_handlers(&std::fs::read_to_string(f).unwrap(), is_extract_rs);
             routing_calls += v.routing_calls;
             hits.extend(v.hits.into_iter().map(|h| format!("{}: {h}", f.display())));
         }

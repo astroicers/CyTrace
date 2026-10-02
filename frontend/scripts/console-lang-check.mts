@@ -203,15 +203,16 @@ for (const [url, lang, wantPath, wantQs] of [
 // ── 3. AST 閘：node 載不起來的檔案（.tsx、main.tsx）只能靜態釘住 ──
 // 規則（皆以 TypeScript AST 判定，註解、字串內容、regex 不會誤中或誤放）：
 // a. 讀語系一律經 effectiveLang：`.language(s)` 的屬性存取、元素存取、解構宣告、解構賦值、計算鍵皆禁。
-// b. 日期／數字格式化只准在 console/format.ts，且那裡每一個格式化呼叫的第一個引數必須**逐字**是
-//    `effectiveLang(i18n)`（前版整檔豁免，新增一個用預設 locale 的函式照樣綠——第四輪 lang#0）。
+// b. 日期／數字格式化只准在 console/format.ts，且那裡只准 `x.toLocale*String(effectiveLang(i18n), …)` 與
+//    `new Intl.X(effectiveLang(i18n), …)` 兩種形態（前版整檔豁免——第四輪 lang#0；前一版只認呼叫形態，
+//    元素存取、別名、`.call` 照樣放行——宣稱核對 console#0）。
 //    format.ts 以外：`toLocale*String`、任何指向 `Intl` 的識別字（含 globalThis.Intl、解構）皆禁。
 //    固定輸出英文的 `toDateString`／`toTimeString`／`toUTCString`／`toGMTString` 任何地方皆禁。
 // c. `/api` 字串片段只准出現在 api/client.ts 與 api/upload.ts——那兩支的每個成員都有上面的行為檢查；
 //    頁面一律經 `api`／`artifactUrl`（前版在 Rust 端找「直接包住字面值的呼叫」，拆字串、`${API}/v1`、
 //    含 `\//` 的 regex 都繞得過——第四輪 lang#1／claims#0）。
-// d. `fetch` 只准在 client.ts、`XMLHttpRequest` 只准在 upload.ts。
-// 已知限制：以程式組出的鍵或路徑（`'lang' + 'uage'`、`['', 'api'].join('/')`）不在靜態檢查範圍。
+// d. 指向 `fetch` 的識別字只准在 client.ts、`XMLHttpRequest` 只准在 upload.ts。
+// 已知限制：以程式組出的鍵或路徑（`'lang' + 'uage'`、`['', 'api'].join('/')`、`globalThis[x]`）不在靜態檢查範圍。
 const LANG_PROPS = new Set(['language', 'languages'])
 const FORMAT_HOME = 'frontend/src/console/format.ts'
 const API_HOMES = new Set(['frontend/src/console/api/client.ts', 'frontend/src/console/api/upload.ts'])
@@ -240,14 +241,25 @@ function bannedUses(file: string, src: string): string[] {
     const member = ts.isPropertyAccessExpression(n) ? n.name.text
       : ts.isElementAccessExpression(n) ? nameOf(n.argumentExpression) : undefined
     if (member && ENGLISH_ONLY.has(member)) at(n, `${member} 固定輸出英文——改用 format.ts 的 fmtTime`)
+    // 「被呼叫、且第一個引數逐字是 effectiveLang(i18n)」——format.ts 內唯一允許的形態
+    const calledWithUiLang = (callee: ts.Node) => {
+      const call = callee.parent
+      return (ts.isCallExpression(call) || ts.isNewExpression(call)) && call.expression === callee
+        && call.arguments?.[0]?.getText(sf) === 'effectiveLang(i18n)'
+    }
     if (file !== FORMAT_HOME) {
       if (member && /^toLocale\w*String$/.test(member)) at(n, `${member} 只准在 ${FORMAT_HOME}`)
       if (ts.isIdentifier(n) && n.text === 'Intl') at(n, `Intl 只准在 ${FORMAT_HOME}`)
-    } else if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
-      const callee = n.expression.getText(sf)
-      if (/(^|\.)toLocale\w*String$/.test(callee) || /^(globalThis\.)?Intl\./.test(callee)) {
-        const arg0 = n.arguments?.[0]?.getText(sf)
-        if (arg0 !== 'effectiveLang(i18n)') at(n, `${callee}(…) 的 locale 必須逐字是 effectiveLang(i18n)，得 ${arg0 ?? '（缺席）'}`)
+    } else {
+      // format.ts 內也用白名單形態，不再只認 `x.toLocale*String(…)` 的呼叫：元素存取、解構或別名
+      // Intl、`.call`、window.Intl 前版都放行（宣稱核對 console#0，2/2 確認）
+      if (member && /^toLocale\w*String$/.test(member)
+        && !(ts.isPropertyAccessExpression(n) && calledWithUiLang(n))) {
+        at(n, `${member} 在 ${FORMAT_HOME} 只准寫成 x.${member}(effectiveLang(i18n), …)`)
+      }
+      if (ts.isIdentifier(n) && n.text === 'Intl'
+        && !(ts.isPropertyAccessExpression(n.parent) && n.parent.expression === n && calledWithUiLang(n.parent))) {
+        at(n, `Intl 在 ${FORMAT_HOME} 只准寫成 new Intl.X(effectiveLang(i18n), …)`)
       }
     }
     // c. /api 字串片段
@@ -257,7 +269,9 @@ function bannedUses(file: string, src: string): string[] {
       at(n, '/api 路徑只准在 api/client.ts、api/upload.ts——頁面請經 api／artifactUrl（才會帶語系）')
     }
     // d. 請求構造
-    if (ts.isCallExpression(n) && /(^|\.)fetch$/.test(n.expression.getText(sf))
+    // 比照 XMLHttpRequest：任何指向 fetch 的識別字或元素存取都算（別名、`window['fetch']`、`.call`
+    // 前版只擋直接呼叫——宣稱核對 console#5）
+    if (((ts.isIdentifier(n) && n.text === 'fetch') || (ts.isElementAccessExpression(n) && member === 'fetch'))
       && file !== 'frontend/src/console/api/client.ts') at(n, 'fetch 只准在 api/client.ts')
     if (ts.isIdentifier(n) && n.text === 'XMLHttpRequest'
       && file !== 'frontend/src/console/api/upload.ts') at(n, 'XMLHttpRequest 只准在 api/upload.ts')
@@ -292,6 +306,15 @@ const SELF: Array<[string, string, number]> = [
   [FORMAT_HOME, "d.toLocaleDateString(undefined, { dateStyle: 'medium' })", 1],
   [FORMAT_HOME, 'new Intl.DateTimeFormat().format(d)', 1],
   [FORMAT_HOME, 'd.toLocaleString(effectiveLang(i18n))', 0],
+  [FORMAT_HOME, 'new Intl.DateTimeFormat(effectiveLang(i18n), { dateStyle: "medium" }).format(d)', 0],
+  [FORMAT_HOME, "d['toLocaleDateString']()", 1],
+  [FORMAT_HOME, 'const { DateTimeFormat } = Intl', 1],
+  [FORMAT_HOME, 'const I = Intl; new I.DateTimeFormat()', 1],
+  [FORMAT_HOME, 'new window.Intl.DateTimeFormat(effectiveLang(i18n))', 1],
+  [FORMAT_HOME, 'd.toLocaleString.call(d)', 1],
+  [PAGE, "const f = fetch; f('/x')", 1],
+  [PAGE, "window['fetch']('/x')", 1],
+  [PAGE, 'fetch.call(window, u)', 1],
   [PAGE, '// i18n.language 在註解裡', 0],
   [PAGE, "const s = 'i18n.language 在字串裡'", 0],
   [PAGE, 'const r = /i18n\\.language/', 0],

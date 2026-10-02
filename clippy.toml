@@ -3,11 +3,12 @@
 #
 # 用 clippy 而非文字比對：文字比對擋不住 rustfmt 收成單行的簽名、全限定路徑、
 # `as` 別名與 api/ 以外的檔案（T909 對抗式複審 v3／v6／v9，3/3、3/3、2/3 確認）；disallowed-types
-# 看的是解析後的型別，排版與寫法都繞不過。
+# 看的是**寫出來的型別**（解析後），排版、別名、全限定路徑都繞不過；推論出的型別（不標型別的
+# closure pattern）看不到，由 crates/cytrace-server/src/extract.rs 的 no_closure_handlers_in_server 補。
 # `Json` 原本因「同時是回應型別」而沒列、改由文字閘把關，兩輪複審各找到一批繞過寫法
 #（第二輪 claims#3、第三輪 server#0）。回應改用 crate::extract::JsonOut 後一併禁用。
-# `ConnectInfo` 的 rejection 是伺服器組態 bug（未以 connect_info 啟動），只准登入節流裸用，
-# 該處與測試以 #[allow] 附理由豁免。
+# `ConnectInfo` 的 rejection 是伺服器組態 bug（未以 connect_info 啟動），只准 crate::extract::PeerAddr
+# 的實作與測試（注入對端位址）裸用，皆以 #[allow] 附理由豁免。
 # `Form`/`RawForm` 未列：axum 未開 `form` feature，型別不存在（clippy 會報 unreachable）；
 # 日後開啟該 feature 時須同步列入。
 disallowed-types = [
@@ -15,5 +16,5 @@ disallowed-types = [
     { path = "axum::extract::Query", reason = "改用 crate::extract::ApiQuery" },
     { path = "axum::extract::Multipart", reason = "改用 crate::extract::ApiMultipart" },
     { path = "axum::Json", reason = "請求改用 crate::extract::ApiJson；回應改用 crate::extract::JsonOut" },
-    { path = "axum::extract::ConnectInfo", reason = "只准登入節流（api/session.rs）裸用；新用處須 #[allow] 附理由" },
+    { path = "axum::extract::ConnectInfo", reason = "改用 crate::extract::PeerAddr；新的裸用處須 #[allow] 附理由" },
 ]

@@ -14,7 +14,13 @@ set -euo pipefail
 export LC_ALL=C # [[:space:]] 與 grep -w 的詞字元只認 ASCII，判定不隨呼叫者的 locale 改變
 f="${1:?用法：$0 <versions.env>}"
 [ -f "$f" ] || { echo "✗ 找不到 $f" >&2; exit 1; }
-iconv -f UTF-8 -t UTF-8 "$f" >/dev/null 2>&1 || { echo "✗ $f：不是 UTF-8" >&2; exit 1; }
+# UTF-8：C.UTF-8 下 grep 的「整行匹配 .*」對非法序列失敗。不用 iconv——glibc 的 iconv 放行超出
+# U+10FFFF 與 5／6 位元組的舊式序列，Rust 的 from_utf8 與 .NET 嚴格解碼都拒收（宣稱核對 theia#1）。
+# 先自檢 C.UTF-8 可用：不可用時 grep 退化成 C locale、什麼都放行——必須失敗而不是放行。
+printf '\377\n' | LC_ALL=C.UTF-8 grep -qaxv '.*' \
+  || { echo "✗ 系統缺 C.UTF-8 locale，無法驗證 UTF-8" >&2; exit 1; }
+bad=$(LC_ALL=C.UTF-8 grep -caxv '.*' "$f" || true)
+[ "$bad" = 0 ] || { echo "✗ $f：不是 UTF-8（$bad 行含非法序列）" >&2; exit 1; }
 # NUL：bash 變數裝不下（指令替換會默默丟掉），兩端讀到的字會不同——直接拒收
 tr -d '\000' < "$f" | cmp -s - "$f" || { echo "✗ $f：含 NUL 位元組" >&2; exit 1; }
 lines=$(sed 's/\r$//' "$f" | grep -av '^[[:space:]]*#' | grep -aw 'THEIA_VERSION' || true)

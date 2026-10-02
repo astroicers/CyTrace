@@ -1303,7 +1303,21 @@ fn t909_console_requests_send_ui_language() {
     let makefile = std::fs::read_to_string(repo.join("Makefile")).unwrap();
     assert!(
         recipe_runs(&makefile, "lint", "console-lang-check.mts"),
-        "make lint 的生效 recipe 沒有執行 frontend/scripts/console-lang-check.mts（或失敗會被吞掉）"
+        "Makefile 最後一份 lint: recipe 沒有執行 frontend/scripts/console-lang-check.mts（或失敗會被吞掉）"
+    );
+    // 由 Make 本身確認生效的 recipe：文字解析看不到單行 recipe（`lint: ; true`）、include 進來的
+    // 重新定義（宣稱核對 console#3）。`.IGNORE: lint` 與行接續的 `|| true` 仍不在範圍（已知限制）。
+    let out = std::process::Command::new("make")
+        .args(["-n", "--no-print-directory", "lint"])
+        .current_dir(&repo)
+        .output()
+        .expect("執行 make -n lint");
+    let dry = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success()
+            && dry.lines().any(|l| l.trim()
+                == "node --experimental-strip-types frontend/scripts/console-lang-check.mts"),
+        "make -n lint 的實際指令沒有 console-lang-check.mts：\n{dry}"
     );
     // CI：必須是一個 run 步驟、逐字執行該檢查（`echo …console-lang-check.mts` 之類不算）
     let ci = std::fs::read_to_string(repo.join(".github/workflows/ci.yml")).unwrap();
@@ -1314,11 +1328,12 @@ fn t909_console_requests_send_ui_language() {
     );
 }
 
-/// Makefile 中 `target` **生效的** recipe 是否有一行非註解、失敗不會被吞掉的指令含 `needle`。
+/// Makefile 本檔中**最後一份** tab 縮排的 `target:` recipe 是否有一行非註解、失敗不會被吞掉
+/// （無 `-` 前綴、不含 `||`）的指令含 `needle`。
 ///
-/// Make 對重複定義的 target 採**最後一份** recipe（並印 overriding 警告）；前版只看第一個
-/// `lint:` 區塊，在後面再定義一次就能讓檢查不再執行，或把那行改成 `-node … || true`（失敗被吞）
-/// 照樣綠（第四輪完整性批判）。
+/// 前版只看第一個 `lint:` 區塊，在後面再定義一次就能讓檢查不再執行（第四輪完整性批判）。
+/// 本函式不等於 Make 的生效 recipe（單行 recipe、include 看不到）——那部分由呼叫端另跑
+/// `make -n` 確認（宣稱核對 console#3 更正前版「以生效的 recipe 為準」的說法）。
 fn recipe_runs(makefile: &str, target: &str, needle: &str) -> bool {
     let header = format!("{target}:");
     let mut recipes: Vec<Vec<&str>> = Vec::new();

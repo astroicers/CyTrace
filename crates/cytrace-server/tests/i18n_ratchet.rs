@@ -205,7 +205,9 @@ impl<'ast> Visit<'ast> for Collector {
 }
 
 /// 抽取器的正負對照：反空轉只驗「抽到東西」不夠，要驗「抓得到違規」。
-/// 每一個形狀都是某一輪複審實際找到、前一版掃描器會吃掉其後生產碼的寫法。
+/// 前 8 組是歷輪複審實際找到、前一版掃描器會吃掉其後生產碼的形狀（第二輪 1 組、第三輪 2 組、
+/// 第四輪 5 組）；最後 2 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
+/// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）。
 #[test]
 fn extractor_sees_past_test_only_items() {
     let cases: &[(&str, &str, &[&str])] = &[
@@ -240,9 +242,9 @@ fn extractor_sees_past_test_only_items() {
             &["戊", "庚"],
         ),
         (
-            "跨行字串續行以大括號開頭",
-            "fn f() -> &'static str {\n    \"第一行\n{ 第二行\"\n}\nfn g() -> &'static str { \"辛\" }\n",
-            &["第一行\n{ 第二行", "辛"],
+            "cfg(test) 項目內的跨行字串、續行以大括號開頭（第四輪 server#3 的實際形狀）",
+            "#[cfg(test)]\nmod t {\n    const S: &str = \"第一行\n{ 第二行\";\n}\nfn g() -> &'static str { \"辛\" }\n",
+            &["辛"],
         ),
         (
             "測試模組裡的區塊註解含大括號、raw string 結尾反斜線",
