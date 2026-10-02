@@ -130,17 +130,73 @@ fn lookup(root: &Value, key: &str) -> Option<String> {
 }
 
 /// `{{var}}` 插值（與 react-i18next 共用語法；不支援複數/context，見 ADR-004 共用值契約）。
+///
+/// **單次掃描模板，替換結果不再被掃描**。原實作依 `vars` 順序逐個 `replace`：
+/// 前一個變數的值若含 `{{後一個變數}}`，會在下一輪被展開。T909 起 `with_message`
+/// 第一次把**使用者輸入**接進插值（`fail_on` 的值），送 `{"fail_on":"{{allowed}}"}`
+/// 就讓訊息變成「不合法的值是整串合法值」——使用者真正送的值從 message 消失
+/// （T909 對抗式複審 v8：反證票 1/3、未達確認門檻；但下方單元測試對舊實作可重現，故仍修）。
+/// i18next 前端預設 `skipOnVariables: true`，行為本就是單次。
+///
+/// 查不到的 `{{name}}` 原樣保留（`render_cbom` 等呼叫端靠殘留的 `{{` 偵測未插值）。
 fn interpolate(template: &str, vars: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (k, v) in vars {
-        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find("{{") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+        match after.find("}}") {
+            Some(close) => {
+                let name = &after[..close];
+                match vars.iter().find(|(k, _)| *k == name) {
+                    Some((_, v)) => out.push_str(v),
+                    None => {
+                        out.push_str("{{");
+                        out.push_str(name);
+                        out.push_str("}}");
+                    }
+                }
+                rest = &after[close + 2..];
+            }
+            None => {
+                // 沒有收尾的 `{{`：原樣保留剩餘部分
+                out.push_str(&rest[open..]);
+                rest = "";
+            }
+        }
     }
+    out.push_str(rest);
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interpolation_does_not_re_expand_substituted_values() {
+        // 使用者輸入恰好長得像另一個變數的佔位符時，不得被二次展開
+        let out = interpolate(
+            "bad: {{value}} (allowed: {{allowed}})",
+            &[("value", "{{allowed}}"), ("allowed", "a / b")],
+        );
+        assert_eq!(out, "bad: {{allowed}} (allowed: a / b)", "值必須原樣插入");
+        // 順序顛倒也一樣
+        let out = interpolate("{{a}}{{b}}", &[("b", "{{a}}"), ("a", "X")]);
+        assert_eq!(out, "X{{a}}");
+    }
+
+    #[test]
+    fn interpolation_keeps_unknown_and_unclosed_placeholders() {
+        assert_eq!(interpolate("x {{nope}} y", &[("a", "1")]), "x {{nope}} y");
+        assert_eq!(interpolate("x {{a", &[("a", "1")]), "x {{a");
+        assert_eq!(
+            interpolate("{{a}}{{a}}", &[("a", "1")]),
+            "11",
+            "同一變數多處皆替換"
+        );
+        assert_eq!(interpolate("no vars", &[]), "no vars");
+    }
 
     // ── render_cbom 的兩個邊界（第七輪複審 finding）──
 

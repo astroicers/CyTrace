@@ -34,7 +34,7 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
 
 /// 驗證密碼與 PHC 字串是否相符。
 pub fn verify_password(password: &str, phc: &str) -> anyhow::Result<bool> {
-    let parsed = PasswordHash::new(phc).map_err(|e| anyhow::anyhow!("PHC 格式錯誤: {e}"))?;
+    let parsed = PasswordHash::new(phc).map_err(|e| anyhow::anyhow!("invalid PHC: {e}"))?;
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())

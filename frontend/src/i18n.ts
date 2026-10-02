@@ -4,18 +4,17 @@ import { initReactI18next } from 'react-i18next'
 import zhTW from '../../locales/zh-TW.json'
 import enUS from '../../locales/en-US.json'
 
-export const SUPPORTED_LANGS = [
-  { code: 'zh-TW', label: '繁體中文' },
-  { code: 'en-US', label: 'English' },
-] as const
+import { DEFAULT_LANG } from './langs'
+
+export { SUPPORTED_LANGS } from './langs'
 
 void i18n.use(initReactI18next).init({
   resources: {
     'zh-TW': { translation: zhTW },
     'en-US': { translation: enUS },
   },
-  lng: 'zh-TW',
-  fallbackLng: 'zh-TW',
+  lng: DEFAULT_LANG,
+  fallbackLng: DEFAULT_LANG,
   interpolation: { escapeValue: false },
 })
 

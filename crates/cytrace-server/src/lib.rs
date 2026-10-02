@@ -11,6 +11,7 @@ pub mod archive;
 pub mod auth;
 pub mod config;
 pub mod error;
+pub mod extract;
 pub mod jobs;
 pub mod router;
 pub mod session;

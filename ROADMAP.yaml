@@ -931,7 +931,7 @@ milestones:
         spec: null
         srs_ref: NFR-06
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: review
         source_ref: "第八輪獨立複審 finding L（CBOM 分支，2026-09-27）"
@@ -948,6 +948,76 @@ milestones:
           `CytraceError::untranslatable_detail` 的覆蓋面時一併掃到；CBOM 自身的路徑已修畢
           （`job_error_of` 與 `ApiError::from_core` 皆走單一出口）。
 
+
+      - id: T910
+        title: "SDS 全文改寫以反映三引擎與 schema v2"
+        type: MODIFICATION
+        priority: 4
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-03
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "v0.3.0 release 準備複審 major #24（2026-09-29）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-01"
+        description: |
+          docs/SDS.md 主體寫於雙引擎時期。v0.3.0 只加了檔頭增補節（行內對齊 §1–§4 並指向
+          ADR-013 / ADR-009 為權威），並明記「全文改寫另開票，不阻擋 v0.3.0」——
+          本票即為該承諾的承接（此前只寫了「另開票」卻沒開，是沒有承接的宣稱）。
+          範圍：§1 架構圖含 theia 分支、§2 六個 crate、§3 theia 子程序編排（專用 HOME、
+          逾時、併發抽乾、fail-closed）、§4 資料模型 crypto 區段、§7 注入契約 v2。
+
+      - id: T911
+        title: "Windows 交付包納入 CBOM 引擎（theia GOOS=windows 交叉編譯資產）"
+        type: NEW_FEATURE
+        priority: 3
+        adr: ADR-013
+        spec: null
+        srs_ref: NFR-05
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "scripts/package.ps1 2b 段註解；CI windows-package 以 -WithoutCbom 豁免"
+        triggered_by: manual
+        sla_hours: 336
+        imported_at: "2026-10-01"
+        description: |
+          ADR-013 決策 1 要求 theia 自源碼建置、不用上游 release binary。Linux 已由
+          Dockerfile theia-builder stage 承接（SHA 釘死、四環境一致）；Windows 尚無對應
+          資產，故 v0.3.0 的 Windows 包不含 CBOM 引擎、`--cbom` 降級為「未盤點」，
+          CI 冒煙以 `-WithoutCbom` 顯式豁免。
+          待辦：CI 以 GOOS=windows 交叉編譯並驗可重現（SHA 釘進 versions.env）、作為釋出
+          資產；package.ps1 改取用之並驗 SHA；移除 CI 的 -WithoutCbom；Windows 實機驗證。
+
+      - id: T912
+        title: "操作員終端訊息 i18n（serve 啟動錯誤、CLI 錯誤、CytraceError Display 前綴）"
+        type: MODIFICATION
+        priority: 3
+        adr: null
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T909 分類 workflow（2026-10-01；53 agents，33 站點 + 反向追蹤，3 項判定經反證翻轉）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-01"
+        description: |
+          T909 的分類把非測試中文字面值按輸出面切開，**operator_terminal 共 25 處**不屬 T909
+          （票面範圍是 API），由本票承接：
+          - serve 啟動：config.rs ×8（含 :129）、tls.rs:16、targets.rs ×2、
+            registry.rs ×5（:21、:60–61、:104、:125）
+          - CLI：main.rs:115（eprintln 印 CytraceError Display）、:243、:415、clap 錯誤
+          - CytraceError 的 `#[error]` Display 中文前綴（error.rs:9/13/17/21）——經 main.rs:115
+            印到終端；`--lang en-US` 下照樣吐中文
+          難點：serve 啟動時尚無請求語系，需決定依環境變數或 `--lang` 渲染。
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

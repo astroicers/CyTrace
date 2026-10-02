@@ -79,6 +79,16 @@ struct TestEnv {
 
 /// 建測試環境：temp data_dir、非空 db 目錄（db_present=true）、掃描白名單 root。
 fn build_env(engine: Arc<dyn ScanEngine>, db_present: bool, max_concurrent: usize) -> TestEnv {
+    build_env_with(engine, db_present, max_concurrent, &[])
+}
+
+/// 同 [`build_env`]，另可覆寫環境變數（如上傳／解壓上限）。
+fn build_env_with(
+    engine: Arc<dyn ScanEngine>,
+    db_present: bool,
+    max_concurrent: usize,
+    extra_env: &[(&str, &str)],
+) -> TestEnv {
     let base = std::env::temp_dir().join(format!(
         "cytrace-jobs-test-{}-{}",
         std::process::id(),
@@ -106,6 +116,9 @@ fn build_env(engine: Arc<dyn ScanEngine>, db_present: bool, max_concurrent: usiz
     );
     if db_present {
         env.insert("GRYPE_DB_CACHE_DIR".into(), db_dir.display().to_string());
+    }
+    for (k, v) in extra_env {
+        env.insert((*k).into(), (*v).into());
     }
     let cfg = ServerConfig::resolve(
         CliFlags {
@@ -713,4 +726,553 @@ async fn cbom_artifact_is_served_when_scan_succeeds() {
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("cryptographic-asset"), "應為 CBOM 內容");
     assert!(!text.contains("PRIVATE KEY"), "NFR-09：不得含金鑰內容");
+}
+
+// ── T909：API 錯誤訊息的雙語契約（經真 router，非 helper）──
+//
+// 第九輪的教訓：把修正寫在有測試的 helper（`ApiError::from_core`），真正在跑的 handler
+// 沒驗到。故本段每條錯誤路徑都經 `build_router_with_state` 的真實 router 觸發，
+// 並以 zh-TW / en-US 各打一次。
+
+/// 送出請求並回 (status, json)。**回應必須是 JSON**——axum extractor 原生 rejection
+/// 回的是英文純文字，`serde_json::from_slice` 在此會直接 panic，那正是要抓的回歸。
+async fn send_json(app: &Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+        panic!(
+            "錯誤回應不是 JSON（繞過了 ApiError 的 {{\"error\":{{…}}}} 格式）：{}",
+            String::from_utf8_lossy(&bytes)
+        )
+    });
+    (status, v)
+}
+
+fn has_cjk(s: &str) -> bool {
+    s.chars()
+        .any(|c| matches!(c as u32, 0x4E00..=0x9FFF | 0x3000..=0x303F | 0xFF00..=0xFFEF))
+}
+
+/// 斷言一個錯誤回應符合雙語契約，回傳 message。
+fn assert_api_error(
+    label: &str,
+    lang: &str,
+    status: StatusCode,
+    v: &serde_json::Value,
+    want_status: StatusCode,
+    want_key: &str,
+) -> String {
+    assert_eq!(status, want_status, "{label}/{lang}: 狀態碼");
+    let e = &v["error"];
+    assert_eq!(
+        e["i18n_key"], want_key,
+        "{label}/{lang}: i18n_key 應為具體鍵"
+    );
+    let msg = e["message"].as_str().expect("message 應為字串").to_string();
+    assert!(!msg.is_empty(), "{label}/{lang}: message 為空");
+    assert!(
+        !msg.contains("{{"),
+        "{label}/{lang}: message 殘留佔位符：{msg}"
+    );
+    assert_ne!(msg, want_key, "{label}/{lang}: message 是裸鍵");
+    // detail 只放資料，任何語系都不得夾本專案的中文散文
+    if let Some(d) = e["detail"].as_str() {
+        assert!(!has_cjk(d), "{label}/{lang}: detail 夾中文散文：{d}");
+    }
+    if lang == "en-US" {
+        assert!(!has_cjk(&msg), "{label}/en-US: message 夾中文：{msg}");
+    } else {
+        // 反向：zh-TW 必須真的有中文——否則「en-US 無中文」可能只是兩邊都英文
+        assert!(has_cjk(&msg), "{label}/zh-TW: message 沒有在地化：{msg}");
+    }
+    msg
+}
+
+const LANGS: [&str; 2] = ["zh-TW", "en-US"];
+
+fn multipart_parts(boundary: &str, parts: &[(&str, Option<&str>, &[u8])]) -> Vec<u8> {
+    let mut b = Vec::new();
+    for (name, filename, data) in parts {
+        b.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        match filename {
+            Some(f) => b.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{f}\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
+            ),
+            None => b.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            ),
+        }
+        b.extend_from_slice(data);
+        b.extend_from_slice(b"\r\n");
+    }
+    b.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    b
+}
+
+fn upload_req(cookie: &str, lang: &str, content_type: &str, body: Vec<u8>) -> Request<Body> {
+    with_csrf_and(Request::post("/api/v1/jobs/upload"))
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::COOKIE, cookie)
+        .header(header::ACCEPT_LANGUAGE, lang)
+        .body(Body::from(body))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn t909_invalid_fail_on_is_localized() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        let body = r#"{"target":{"kind":"mounted","root":"targets","path":"app"},"fail_on":"catastrophic"}"#;
+        let req = with_csrf_and(Request::post("/api/v1/jobs"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie)
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::from(body))
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        let msg = assert_api_error(
+            "fail_on",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.invalid_fail_on",
+        );
+        assert!(
+            msg.contains("catastrophic"),
+            "{lang}: 使用者輸入的值須插值進訊息：{msg}"
+        );
+        // 可用值由 VALID_FAIL_ON 插值，不是文案手抄
+        assert!(
+            msg.contains("critical") && msg.contains("negligible"),
+            "{lang}: 可用值未插值：{msg}"
+        );
+        assert_eq!(
+            v["error"]["detail"], "catastrophic",
+            "{lang}: detail 應為原始值"
+        );
+    }
+}
+
+#[tokio::test]
+async fn t909_invalid_status_filter_is_localized() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        // 以 ?lang= 協商（另一條協商路徑；其餘測試用 Accept-Language）
+        let req = Request::get(format!("/api/v1/jobs?status=bogus&lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        let msg = assert_api_error(
+            "status",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.invalid_status",
+        );
+        assert!(msg.contains("bogus"), "{lang}: {msg}");
+        // detail 精確等於原始值：has_cjk 只擋中文，英文說明句流回 detail 也是同一個 bug
+        // 的鏡像（T909 對抗式複審 v17，3/3 確認）
+        assert_eq!(v["error"]["detail"], "bogus", "{lang}: detail 應為原始值");
+    }
+}
+
+#[tokio::test]
+async fn t909_missing_file_field_is_localized() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        let body = multipart_parts("XB", &[("note", None, b"no file here")]);
+        let req = upload_req(&cookie, lang, "multipart/form-data; boundary=XB", body);
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "missing_file",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.missing_file_field",
+        );
+        assert!(
+            v["error"]["detail"].is_null(),
+            "{lang}: 缺欄位沒有可附的原始值，detail 應為空：{}",
+            v["error"]["detail"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn t909_upload_too_large_is_localized() {
+    let env = build_env_with(
+        Arc::new(FakeEngine),
+        true,
+        2,
+        &[("CYTRACE_MAX_UPLOAD_MB", "1")],
+    );
+    let cookie = login(&env.app).await;
+    let big = vec![0u8; 1024 * 1024 + 4096];
+    for lang in LANGS {
+        let body = multipart_parts("XB", &[("file", Some("big.bin"), &big)]);
+        let req = upload_req(&cookie, lang, "multipart/form-data; boundary=XB", body);
+        let (st, v) = send_json(&env.app, req).await;
+        let msg = assert_api_error(
+            "upload_too_large",
+            lang,
+            st,
+            &v,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "server.err.upload_too_large",
+        );
+        assert!(msg.contains("1048576"), "{lang}: 上限值須插值：{msg}");
+        assert_eq!(
+            v["error"]["detail"], "1048576",
+            "{lang}: detail 應為上限值本身"
+        );
+    }
+}
+
+#[tokio::test]
+async fn t909_extract_too_large_uses_archive_specific_key() {
+    // ArchiveError::i18n_key() 此前在生產碼沒有呼叫者，全被壓成粗粒度 kind 的泛用訊息
+    let env = build_env_with(
+        Arc::new(FakeEngine),
+        true,
+        2,
+        &[
+            ("CYTRACE_MAX_UPLOAD_MB", "8"),
+            ("CYTRACE_MAX_EXTRACT_MB", "1"),
+        ],
+    );
+    let cookie = login(&env.app).await;
+    let mut tarball = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut tarball);
+        let data = vec![0u8; 2 * 1024 * 1024];
+        let mut h = tar::Header::new_gnu();
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "zeros.bin", &data[..]).unwrap();
+        b.finish().unwrap();
+    }
+    for lang in LANGS {
+        let body = multipart_parts("XB", &[("file", Some("t.tar"), &tarball)]);
+        let req = upload_req(&cookie, lang, "multipart/form-data; boundary=XB", body);
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "extract_too_large",
+            lang,
+            st,
+            &v,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "server.err.extract_too_large",
+        );
+        assert_eq!(
+            v["error"]["detail"], "extracted_bytes>1048576",
+            "{lang}: detail 應為鍵值診斷資料"
+        );
+    }
+}
+
+#[tokio::test]
+async fn t909_extractor_rejections_return_json_contract() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        // Json：壞 JSON
+        let req = with_csrf_and(Request::post("/api/v1/jobs"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie)
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::from("{not json"))
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "json",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+
+        // Query：limit 非數字
+        let req = Request::get(format!("/api/v1/jobs?limit=abc&lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "query",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+
+        // Multipart：缺 boundary
+        let req = upload_req(&cookie, lang, "multipart/form-data", b"x".to_vec());
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "multipart",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+
+        // Path：非法 UTF-8 百分比編碼
+        let req = Request::get(format!("/api/v1/jobs/%FF%FE?lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "path",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+    }
+}
+
+#[tokio::test]
+async fn t909_login_malformed_json_returns_json_contract() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    for lang in LANGS {
+        let mut req = with_csrf_and(Request::post("/api/v1/session"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::from("{\"password\":"))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 1, 0, 2], 40001))));
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "login_json",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+    }
+}
+
+/// console 的**每一條** API 請求路徑都必須帶 **UI 語系**（非瀏覽器預設）。
+///
+/// server 依請求語系渲染錯誤 message。三種請求形態、三種帶法：
+/// - `fetch`（client.ts `request`）→ `Accept-Language` header
+/// - 上傳 XHR（upload.ts）→ `Accept-Language` header
+/// - `<a href>` 導覽（`artifactUrl`）→ 無法設 header，走 `?lang=`（`withLang`）
+///
+/// 初版只比對兩個寫死的檔案，第三條路徑完全看不到（T909 對抗式複審 major）。本版掃整個
+/// `frontend/src/console/`：任何 `/api/v1/` 字面值必須落在已知會帶語系的位置，且不得出現
+/// 第四種請求構造（`fetch(`／`XMLHttpRequest` 只准在 client.ts／upload.ts）。
+#[test]
+fn t909_console_requests_send_ui_language() {
+    let root = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../frontend/src/console"
+    ));
+    fn walk(d: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if matches!(p.extension().and_then(|x| x.to_str()), Some("ts" | "tsx")) {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    assert!(
+        files.len() >= 10,
+        "只找到 {} 個前端檔——掃描可能失效",
+        files.len()
+    );
+
+    let client = std::fs::read_to_string(root.join("api/client.ts")).unwrap();
+    let upload = std::fs::read_to_string(root.join("api/upload.ts")).unwrap();
+
+    // 三種帶法各自成立
+    assert!(
+        client.contains("export function uiLanguage()") && client.contains("effectiveLang(i18n)"),
+        "client.ts 須以 effectiveLang(i18n) 提供 uiLanguage()（單一事實源；行為由 \
+         frontend/scripts/console-lang-check.mts 驗）"
+    );
+    assert!(
+        client.contains("'Accept-Language': uiLanguage()"),
+        "fetch 路徑未送 UI 語系"
+    );
+    assert!(
+        upload.contains("setRequestHeader('Accept-Language', uiLanguage())"),
+        "上傳 XHR 路徑未送 UI 語系"
+    );
+    assert!(
+        client.contains("export function withLang(")
+            && client.contains("lang=${encodeURIComponent(uiLanguage())}"),
+        "導覽式請求須經 withLang 以 ?lang= 帶 UI 語系"
+    );
+
+    let mut problems = Vec::new();
+    let mut api_literals = 0usize;
+    for f in &files {
+        let rel = f
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let text = std::fs::read_to_string(f).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("*") || t.starts_with("/*") {
+                continue;
+            }
+            // 不得出現第四種請求構造
+            if (t.contains("fetch(") && rel != "api/client.ts")
+                || (t.contains("XMLHttpRequest") && rel != "api/upload.ts")
+            {
+                problems.push(format!(
+                    "{rel}:{}: 新的請求構造（只准在 client.ts/upload.ts）：{t}",
+                    n + 1
+                ));
+            }
+            if !t.contains("/api/v1/") {
+                continue;
+            }
+            api_literals += 1;
+            // 已知會帶語系的位置：request<…>(…)（經 fetch）、xhr.open（XHR）、withLang(…)（導覽）
+            let ok = t.contains("request<")
+                || t.contains("xhr.open(")
+                || t.contains("withLang(")
+                // request 呼叫跨行時，路徑字面值單獨成行（前一行是 `request<…>(`）
+                || text.lines().nth(n.wrapping_sub(1)).is_some_and(|prev| prev.contains("request<"));
+            if !ok {
+                problems.push(format!(
+                    "{rel}:{}: /api/v1/ 字面值未經會帶語系的路徑：{t}",
+                    n + 1
+                ));
+            }
+        }
+    }
+    assert!(
+        api_literals >= 10,
+        "只看到 {api_literals} 個 /api/v1/ 字面值——掃描可能失效"
+    );
+    assert!(
+        problems.is_empty(),
+        "console 有請求路徑沒帶 UI 語系：\n{}",
+        problems.join("\n")
+    );
+}
+
+/// rejection 原生**不是 400** 的案例：狀態語意須保留（413 不得被壓成 400）。
+///
+/// 初版 `bad_request` 一律回 400/validation，而 t909 測試挑的 rejection 原生都是 400，
+/// 所以驗不出這件事（T909 對抗式複審）。public router 未停用 body limit，axum 預設 2 MiB。
+#[tokio::test]
+async fn t909_oversized_login_body_keeps_413() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let big = format!("{{\"password\":\"{}\"}}", "x".repeat(2 * 1024 * 1024 + 16));
+    for lang in LANGS {
+        let mut req = with_csrf_and(Request::post("/api/v1/session"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::from(big.clone()))
+            .unwrap();
+        req.extensions_mut()
+            .insert(ConnectInfo(SocketAddr::from(([10, 1, 0, 3], 40002))));
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "login_413",
+            lang,
+            st,
+            &v,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "server.err.payload_too_large",
+        );
+        assert_eq!(
+            v["error"]["kind"], "payload_too_large",
+            "{lang}: 成因須是「太大」而非「格式不合法」"
+        );
+    }
+}
+
+/// Path rejection 經**每一條**帶 Path 的路由都走 JSON 契約（初版只驗了 jobs/{id}）。
+#[tokio::test]
+async fn t909_path_rejection_on_every_path_route() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for route in [
+        "/api/v1/jobs/%FF%FE",
+        "/api/v1/jobs/%FF%FE/report",
+        "/api/v1/jobs/%FF%FE/result",
+        "/api/v1/jobs/%FF%FE/artifacts/sbom",
+    ] {
+        for lang in LANGS {
+            let req = Request::get(format!("{route}?lang={lang}"))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap();
+            let (st, v) = send_json(&env.app, req).await;
+            assert_api_error(
+                route,
+                lang,
+                st,
+                &v,
+                StatusCode::BAD_REQUEST,
+                "server.err.bad_request",
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn t909_rejections_on_report_query_and_delete_path() {
+    // e2e 原本只打到 list 的 Query 與 GET 的 Path；report 的 ApiQuery、DELETE 的 ApiPath
+    // 若被改回裸 extractor，只剩靜態閘把關，而當時的靜態閘比不到全限定寫法
+    // （T909 對抗式複審 v18，2/3 確認）。
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    for lang in LANGS {
+        // download 是 Option<u8>：xyz 解析失敗發生在 handler 本體之前，job 存不存在都一樣
+        let req = Request::get(format!("/api/v1/jobs/any/report?download=xyz&lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "report?download",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+
+        let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/%FF%FE?lang={lang}")))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (st, v) = send_json(&env.app, req).await;
+        assert_api_error(
+            "DELETE path",
+            lang,
+            st,
+            &v,
+            StatusCode::BAD_REQUEST,
+            "server.err.bad_request",
+        );
+    }
 }

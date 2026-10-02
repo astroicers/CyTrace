@@ -1,4 +1,5 @@
 // 上傳用 XMLHttpRequest（fetch 無可靠 upload progress）。回傳可取消的 promise。
+import { uiLanguage } from './client'
 import { ApiError } from './types'
 import type { JobRecord } from './types'
 
@@ -24,6 +25,7 @@ export function uploadScan(
     xhr.open('POST', '/api/v1/jobs/upload')
     xhr.withCredentials = true
     xhr.setRequestHeader('X-CyTrace-Request', '1')
+    xhr.setRequestHeader('Accept-Language', uiLanguage())
 
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))

@@ -2,6 +2,7 @@
 
 use crate::auth;
 use crate::error::{ApiError, ErrorKind, Lang};
+use crate::extract::ApiJson;
 use crate::session::{login_cookie, logout_cookie, token_from_cookie_header};
 use crate::state::AppState;
 use axum::extract::{ConnectInfo, State};
@@ -32,7 +33,7 @@ pub async fn login(
     State(app): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     lang: Lang,
-    Json(body): Json<LoginBody>,
+    ApiJson(body): ApiJson<LoginBody>,
 ) -> Result<Response, ApiError> {
     let ip = peer.ip();
     if let Err(retry) = app.throttle.check(ip) {
