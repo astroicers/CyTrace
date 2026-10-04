@@ -37,5 +37,6 @@ deny = [
 ]
 
 [advisories]
-# 離線環境不強制 advisory DB（有網 CI 跑 report-only；正式弱點掃描走 grype dogfooding）
+# CI（有網）每次抓最新 RustSec DB 並強制檢查（T913；先前只寫 report-only 卻從未執行）。
+# 離線交付環境不跑 advisories——沒有 DB；正式弱點掃描走 grype dogfooding。
 db-path = "~/.cargo/advisory-db"

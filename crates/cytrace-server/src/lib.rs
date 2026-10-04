@@ -35,7 +35,7 @@ pub fn serve(cfg: ServerConfig, lang: &str) -> anyhow::Result<()> {
     rt.block_on(async {
         let app =
             router::build_router(cfg.clone())?.into_make_service_with_connect_info::<SocketAddr>();
-        let handle = axum_server::Handle::new();
+        let handle = axum_server::Handle::<SocketAddr>::new();
 
         // ctrl_c → graceful shutdown（10s 寬限）
         tokio::spawn({
