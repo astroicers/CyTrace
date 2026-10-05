@@ -40,7 +40,7 @@ Grype（比對 CVE）與 CBOMkit-theia（密碼學資產盤點），對指定目
 
 | ID | 需求 | 對應 ADR | 里程碑 | 狀態 |
 |----|------|---------|--------|------|
-| **FR-001** | 對目標（目錄/容器映像/檔案系統）以 Syft 產生 SBOM，輸出 CycloneDX（主）與 SPDX（備）。 | ADR-001/002 | M1 | CycloneDX 已實作；**SPDX 輸出未實作** |
+| **FR-001** | 對目標（目錄/容器映像/檔案系統）以 Syft 產生 SBOM，輸出 CycloneDX（主）與 SPDX（備）。 | ADR-001/002 | M1 | 已實作：CycloneDX 1.6；SPDX 2.3 於 `scan --spdx` 與 Web 服務模式產出（T919） |
 | **FR-002** | 以 Grype 對 SBOM 進行 CVE 比對，使用**離線**漏洞 DB 快照，輸出 grype JSON。 | ADR-002/003 | M1 | 已實作 |
 | **FR-003** | 解析 grype 結果與 CycloneDX 元件清單，彙整為統一資料模型（版本化 ScanResult）。 | ADR-001/009 | M2 | 已實作（schema v2） |
 | **FR-004** | 將嚴重度對映為雙語六級（極高/高/中/低/極低/未知）並計算風險總評。 | ADR-006 | M2 | 已實作 |
@@ -62,7 +62,7 @@ Grype（比對 CVE）與 CBOMkit-theia（密碼學資產盤點），對指定目
 |--------|------|
 | `cytrace run <目標>` | 一鍵：產 SBOM → 比對 → 出報表（`--fail-on`、`--cbom`、`--fail-on-quantum-vulnerable`）。 |
 | `cytrace batch <目標…>` | 多目標批次掃描，逐一出報表；退出碼取各目標最嚴重者（1 優先於 2）。 |
-| `cytrace scan <目標>` | 只產 `sbom.cdx.json` 與 `grype.json`（`--cbom` 另產 `cbom.cdx.json`）。 |
+| `cytrace scan <目標>` | 只產 `sbom.cdx.json` 與 `grype.json`（`--spdx` 另產 `sbom.spdx.json`、`--cbom` 另產 `cbom.cdx.json`）。 |
 | `cytrace report <json>` | 由既有 JSON 離線重現報表（稽核複核用）。 |
 | `cytrace serve` | Web 服務模式（FR-013）。 |
 | `cytrace hash-password` | 離線產生管理密碼的 argon2id PHC 字串。 |
@@ -80,7 +80,7 @@ Grype（比對 CVE）與 CBOMkit-theia（密碼學資產盤點），對指定目
 | **NFR-04** | 可攜性 | 報表為單檔；產品為單一靜態 binary；交付為單包。 |
 | **NFR-05** | 供應鏈純淨 | 第三方工具本體皆 Apache-2.0（Syft/Grype/CBOMkit-theia）；theia 相依含 gitleaks MIT 與 MPL-2.0 三項，須列 NOTICE。**禁中國來源依賴**（規範對象為專案／組織，不及於個別貢獻者國籍；ADR-013）；附 NOTICE 與自產 SBOM。 |
 | **NFR-06** | i18n | 雙語鍵集合一致、無缺鍵；新增使用者可見字串必走鍵。 |
-| **NFR-07** | 測試覆蓋 | 目標 ≥ 80%；核心分級/閘門邏輯需單元 + 整合測試。 |
+| **NFR-07** | 測試覆蓋 | 目標 ≥ 80%；核心分級/閘門邏輯需單元 + 整合測試。2026-10-05 實測（`make coverage`，cargo-llvm-cov）：行覆蓋 89.45%。 |
 | **NFR-08** | 可及性 | 報表符合 WCAG-2.1-AA（對比、鍵盤、語意）。 |
 | **NFR-09** | 信任邊界 | 掃描目標與原始碼**不離開目標場域**。單機模式維持「不離開目標機」；Web 服務模式（`serve`，ADR-011）允許操作者將目標**上傳至同場域內**的 CyTrace 掃描伺服器（傳輸建議啟用 TLS），上傳內容僅落於伺服器受控資料目錄、掃描完成後預設刪除（`CYTRACE_KEEP_INPUT=false`）；報表僅含依賴與弱點元資料。任何資料不出場域。支援含機密等級目標。SaaS 只收 SBOM 且延後（範圍外）。 |
 | **NFR-10** | 法遵免責定位 | 報表須自我定位為「**產出/核發依賴風險報表，非滲透測試/資安檢測**」，避免責任誤解（雙語）。 |

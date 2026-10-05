@@ -121,4 +121,6 @@ export const artifactUrl = {
   report: (id: string, download = false) =>
     withLang(`/api/v1/jobs/${id}/report${download ? '?download=1' : ''}`),
   result: (id: string) => withLang(`/api/v1/jobs/${id}/result`),
+  /** 掃描產物（SBOM 兩種格式、grype、CBOM；server 以附件回應）。 */
+  artifact: (id: string, kind: string) => withLang(`/api/v1/jobs/${id}/artifacts/${kind}`),
 }

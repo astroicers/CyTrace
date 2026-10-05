@@ -299,7 +299,16 @@ pub async fn get(
         .jobs
         .get(&id)
         .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
-    job_view(&rec, lang).map(JsonOut)
+    let mut v = job_view(&rec, lang)?;
+    // 實際存在的產物（console 據此只列出能下載的；升級前的 job 沒有 SPDX）。
+    // 只在單筆查詢附上：列表不需要，也不該為每一筆去碰檔案系統
+    let dir = app.jobs.job_dir(&rec.id);
+    v["artifacts"] = json!(crate::api::reports::ARTIFACTS
+        .iter()
+        .filter(|(_, file)| dir.join(file).is_file())
+        .map(|(kind, _)| *kind)
+        .collect::<Vec<_>>());
+    Ok(JsonOut(v))
 }
 
 /// job 記錄的查詢回應形：`error` 另附依**本次請求語系**渲染的 `message`。

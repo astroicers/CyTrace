@@ -32,6 +32,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
         ▼                               ▼
  ┌──────────────── cytrace-core：掃描管線 ─────────────────┐
  │  engine::sbom   → syft  ──→ CycloneDX JSON（sbom.cdx.json）│
+ │                         └─→ SPDX 2.3（sbom.spdx.json，選用）│
  │  engine::vuln   → grype ──→ grype JSON（離線 DB）          │
  │  engine::cbom   → cbomkit-theia ──→ CBOM（僅 --cbom 時）   │
  │        │                                                  │
@@ -84,6 +85,9 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 ### 3.2 Syft／Grype
 
 - `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。
+- 需要 SPDX 時（CLI `scan --spdx`；Web 服務模式一律）改為同一次執行多重輸出：
+  `-o cyclonedx-json -o spdx-json=<暫存檔>`，兩種格式出自同一次編目（T919）。暫存檔名行程內唯一、
+  用完即刪；SPDX 缺檔、不是 JSON 或缺 `spdxVersion` 時整次掃描失敗（fail-closed，取捨見 ADR-002 修訂節）。
 - Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
   DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
   不走 stdin。
@@ -299,6 +303,8 @@ ScanResult {
   - 掛載目錄白名單：先做語彙檢查，再以 canonicalize 加前綴驗證擋 symlink 逃逸。
 - **API**：
   - 路徑：`/api/v1` 下的 session、targets、jobs、upload、report、result、artifacts、version，加上 `/healthz`；
+  - 產物 `GET /jobs/{id}/artifacts/{kind}`：`sbom`（CycloneDX）、`spdx`、`grype`、`cbom`，以附件回應
+    （`Content-Disposition` 帶檔名）；單筆 `GET /jobs/{id}` 另附 `artifacts`，列出實際存在的產物，console 據此顯示下載連結；
   - 錯誤格式為 `{error:{kind,i18n_key,message,detail}}`。`message` 依請求語系渲染，`detail` 是不翻譯的原始資訊；
     job 失敗的 `message` 走與 console 共用 fixture 的退回鏈。
   - 路徑違規回 403，原因碼與請求的 root、path 附在 `detail`；伺服器端不另記稽核 log（ADR-011 修訂節，T916）。

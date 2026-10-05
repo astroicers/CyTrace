@@ -170,7 +170,7 @@ for (const raw of RAW) {
 // 反空轉：案例必須真的走到「要求≠送出」、fallback 分支、變更型與帶 body 的請求
 if (diverged < 6) fail(`只有 ${diverged} 個案例的 i18n.language 與送出值不同——案例失去鑑別力`)
 if (fallbackHit < 2) fail(`只有 ${fallbackHit} 個案例走到 effectiveLang 的 fallback 分支（dev / cimode）`)
-if (API.length < 8 || NAV.length < 2) fail(`只枚舉到 ${API.length} 個 api 方法、${NAV.length} 個導覽成員——枚舉可能失效`)
+if (API.length < 8 || NAV.length < 3) fail(`只枚舉到 ${API.length} 個 api 方法、${NAV.length} 個導覽成員——枚舉可能失效`)
 if (![...seenMethods].some((m) => m !== 'GET')) fail('沒有任何變更型請求被驗到（只有 GET）')
 if (!seenBody) fail('沒有任何帶 body 的請求被驗到')
 if (new Set(CODES.map((c) => new Date(ISO).toLocaleString(c))).size !== CODES.length) {

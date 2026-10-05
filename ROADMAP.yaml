@@ -1222,6 +1222,72 @@ milestones:
           `lng: DEFAULT_LANG`、或拿掉 `initialLang` 的白名單，對應測試各自轉紅（實測）。
           獨立複審一輪（NEEDS_WORK：ADR-009 未記修訂、三處測試缺口、SDS §6）後修正。
 
+      - id: T919
+        title: "SBOM 另輸出 SPDX 2.3（FR-001 備用格式）；控制台提供產物下載"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-002
+        spec: null
+        srs_ref: FR-001
+        depends_on: [T918]
+        status: completed
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "v0.4.0 文件對齊時 SRS 標註「SPDX 輸出未實作」（2026-10-05）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-05"
+        description: |
+          FR-001 要求 CycloneDX（主）與 SPDX（備），ADR-002 的成功指標寫「CycloneDX + SPDX 可輸出、以標準
+          驗證器檢查」，但只實作了 CycloneDX。另外控制台只提供報表與 ScanResult 下載，SBOM 檔本身（交件主物）
+          只能經 API 取得。
+
+          **結案（2026-10-05）**：同一次 syft 執行以 `-o cyclonedx-json -o spdx-json=<檔>` 產出兩種格式
+          （`engine::sbom_with_spdx`），SPDX 不是 JSON 或缺 `spdxVersion` 即 fail-closed（取捨見 ADR-002 修訂節：
+          與 CBOM 的降級不同）。CLI `scan --spdx` 另寫 `sbom.spdx.json`（預設關閉，既有產物不變；SPDX 最先寫入，
+          寫不進去時不留半套；目錄裡有上一輪的 SPDX 而本次未加 `--spdx` 時警告）；web 模式一律附上，產物端點
+          新增 `spdx` 並以附件下載（帶檔名），單筆 job 查詢回報實際存在的產物（`artifacts`），控制台據此列出
+          下載連結（CycloneDX、SPDX、Grype、CBOM），刪除按鈕改為獨立一列。釘選版 syft 1.45.1 實測輸出
+          SPDX-2.3，以官方 2.3 JSON schema 一次性驗證零違規（查證紀錄在本機 .asp-fact-check.md，未入版控）。
+          真引擎 CI job 自 Dockerfile engines stage 取出釘選 syft 並比對版本，經 `&dyn ScanEngine = &RealEngine`
+          驗 SPDX-2.3 且兩種格式的套件（名稱與版本）一致；`make test-real-engine` 同樣比對 syft 版本。
+          測試：validate_spdx 與暫存路徑唯一性單元；CLI 端到端（成功、預設不產、syft 只呼叫一次、暫存檔
+          收乾淨、舊 SPDX 警告、SPDX 寫不進去與 syft 未寫檔／寫錯格式時 fail-closed 且不留半套，兩語）；
+          server（清單、附件、引擎不產 SPDX 時清單不列且 404、產物種類與 console 型別一致）；真引擎。
+          反向實測：拿掉刪暫存檔、改成跑兩次 syft、改回先寫 CycloneDX、拿掉 RealEngine 的覆寫，各自有測試轉紅。
+          實跑 server + Playwright：控制台列出三個下載連結，SPDX 下載檔名正確。
+          獨立複審一輪（NEEDS_WORK：四項拿掉功能仍綠、scan 子命令說明未更新、一條恆真斷言等）後修正。
+
+      - id: T921
+        title: "#31（v0.4.0 文件對齊）合併後，依 T918／T919 更正文件"
+        type: MODIFICATION
+        priority: 2
+        adr: null
+        spec: null
+        srs_ref: null
+        depends_on: [T918, T919]
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T918／T919 複審：#31 正在改寫的文件會帶入已過時的說法"
+        triggered_by: review
+        sla_hours: 72
+        imported_at: "2026-10-05"
+        description: |
+          #31 與 T918／T919 平行進行，#31 的文件寫於兩者之前。#31 合併後必須更正：
+          - UIUX_SPEC §語言切換、DELIVERY_SOP §4：「報表一律以 zh-TW 開啟」→ 以產生語言開啟（T918）。
+          - SRS：FR-001 狀態（刪除「SPDX 輸出未實作」）；CLI 表 scan 列補 `--spdx`。
+          - SDS：流程圖與 §3 的 syft 指令（CLI 僅 `--spdx` 時多重輸出、web 一律）、暫存檔與 fail-closed；
+            API 的 artifacts 種類加 `spdx`、單筆 GET 的 `artifacts` 欄位、產物端點的 Content-Disposition。
+          - README：scan 列補 `--spdx`；控制台可下載 SBOM 兩種格式。
+          - ADR-011：job 目錄檔案清單（另補原本就漏的 `cbom.cdx.json`）——以修訂節記錄。
+          - DOCKER.md（選擇性）：`/tmp` tmpfs 另需容納 SPDX 暫存檔。
+
+          **結案（2026-10-05）**：T918 兩處於 #33 合併 #32 時更正；其餘於 #34 合併 #33 後更正（SRS FR-001
+          狀態與 CLI 表、NFR-07 另記實測覆蓋率 89.45%；SDS 流程圖、§3.2 多重輸出與 fail-closed、API 產物種類
+          與 `artifacts` 欄位；README scan 列；ADR-011 修訂節補 job 目錄產物與端點種類）。DOCKER.md 不改：
+          SPDX 暫存檔與 SBOM 同量級且用完即刪，1 GB tmpfs 足夠。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

@@ -75,7 +75,7 @@ cytrace ＋ 釘選引擎（含 CBOM 引擎）＋ grype DB 快照 ＋ 自產 SBOM
 |------|------|
 | `cytrace run <目標> [--fail-on 等級] [-o 檔] [--cbom] [--fail-on-quantum-vulnerable]` | 一鍵：產 SBOM → 比對弱點 → 出報表 |
 | `cytrace batch <目標…> [--fail-on 等級] [-o 目錄] [--cbom] [--fail-on-quantum-vulnerable]` | 多目標批次掃描，逐一出報表 |
-| `cytrace scan <目標> [-o 目錄] [--cbom]` | 只產 `sbom.cdx.json` 與 `grype.json`（`--cbom` 另產 `cbom.cdx.json`） |
+| `cytrace scan <目標> [-o 目錄] [--cbom] [--spdx]` | 只產 `sbom.cdx.json` 與 `grype.json`（`--spdx` 另產 SPDX 2.3 的 `sbom.spdx.json`、`--cbom` 另產 `cbom.cdx.json`） |
 | `cytrace report <json> [-o 檔]` | 由既有 ScanResult JSON 離線重建報表（稽核複核） |
 | `cytrace serve [--bind] [--data-dir] [--tls-cert --tls-key]` | Web 服務模式：登入控制台 + 掃描／報表 API（ADR-011） |
 | `cytrace hash-password` | 離線產生管理密碼的 argon2id hash（需互動式終端機） |

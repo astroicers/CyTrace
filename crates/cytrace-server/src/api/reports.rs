@@ -76,19 +76,31 @@ pub struct ArtifactKind {
     kind: String,
 }
 
-/// `GET /api/v1/jobs/{id}/artifacts/{kind}`：sbom | grype | cbom（ADR-013）。
+/// 產物種類 → 落盤檔名。`api::jobs::get` 據此回報哪些產物存在，兩邊用同一份對照。
+pub const ARTIFACTS: [(&str, &str); 4] = [
+    ("sbom", "sbom.cdx.json"),
+    ("spdx", "sbom.spdx.json"),
+    ("grype", "grype.json"),
+    ("cbom", "cbom.cdx.json"),
+];
+
+/// `GET /api/v1/jobs/{id}/artifacts/{kind}`：sbom | spdx（T919）| grype | cbom（ADR-013）。
+/// 以附件回應（帶檔名），瀏覽器直接下載。
 pub async fn artifact(
     State(app): State<AppState>,
     lang: Lang,
     ApiPath(p): ApiPath<ArtifactKind>,
 ) -> Result<Response, ApiError> {
-    let file = match p.kind.as_str() {
-        "sbom" => "sbom.cdx.json",
-        "grype" => "grype.json",
-        "cbom" => "cbom.cdx.json",
-        _ => return Err(ApiError::new(lang, ErrorKind::NotFound)),
+    let Some((_, file)) = ARTIFACTS.iter().find(|(k, _)| *k == p.kind) else {
+        return Err(ApiError::new(lang, ErrorKind::NotFound));
     };
-    artifact_json(&app, lang, &p.id, file)
+    let mut resp = artifact_json(&app, lang, &p.id, file)?;
+    if let Ok(v) =
+        header::HeaderValue::from_str(&format!("attachment; filename=\"cytrace-{}.{file}\"", p.id))
+    {
+        resp.headers_mut().insert(header::CONTENT_DISPOSITION, v);
+    }
+    Ok(resp)
 }
 
 fn artifact_json(app: &AppState, lang: Lang, id: &str, file: &str) -> Result<Response, ApiError> {
