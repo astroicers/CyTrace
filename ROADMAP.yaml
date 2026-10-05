@@ -705,7 +705,7 @@ milestones:
   - id: M9
     title: "CBOM 密碼學資產盤點（CycloneDX CBOM + 量子脆弱判定）"
     target_date: 2027-03-31
-    status: in_progress
+    status: completed
     tasks:
       - id: T901
         title: "ADR-013 落稿 + 外部事實查證快照（純文件）"
