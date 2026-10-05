@@ -8,6 +8,10 @@
 
 ### 新增
 
+- Windows 交付包內含 CBOM 引擎 `cbomkit-theia.exe`（T911），`--cbom` 在 Windows 上也能盤點密碼學資產。
+  引擎同樣自源碼建置：與 Linux 版同一份釘選源碼、同一組參數交叉編譯，產物 SHA256 釘在
+  `versions.env`；打包腳本取用前比對，不符即中止。GitHub Release 另附 `cbomkit-theia-windows-amd64.exe`
+  供打包取用，取得方式見交付 SOP §2。
 - `--help` 與參數用法錯誤依指定語言輸出（T914）：說明文字、區段標題、錯誤訊息都跟著 `--lang`／
   `CYTRACE_LANG`；錯誤訊息第二行提示該子命令的 `--help`。usage 行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符維持原樣。
 - Web 控制台 API：掃描任務失敗時，`GET /api/v1/jobs/{id}` 與任務列表回應的 `error`
@@ -33,6 +37,8 @@
 
 ### 修正
 
+- 容器 `docker stop` 時優雅關閉（T915）。先前服務只處理 Ctrl-C；容器裡它是 PID 1，`docker stop` 送的
+  SIGTERM 被直接忽略，要等逾時（預設 10 秒）後被強制終止。現在收到 SIGTERM 即停止接受新連線並正常結束。
 - Web 控制台 API 的錯誤訊息一律依請求語系渲染（T909）。先前部分錯誤說明是硬編碼中文；
   請求格式錯誤（壞 JSON、查詢參數、路徑）回英文純文字，不符 `{"error":{…}}` 格式。
   現一律回 JSON 錯誤格式；超過大小上限仍回 413，伺服器自身錯誤回 500。

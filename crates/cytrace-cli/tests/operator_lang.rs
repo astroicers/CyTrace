@@ -730,19 +730,24 @@ mod serve {
         use std::sync::mpsc;
         use std::time::{Duration, Instant};
 
-        for (env_lang, want) in [
+        let en = [
+            "serving plaintext HTTP",
+            "listening on",
+            "Shutdown signal received",
+        ];
+        // SIGTERM：`docker stop` 送的訊號（T915）。容器裡 cytrace 是 PID 1，沒有 handler 時
+        // 核心直接忽略它——修正前這一組會等到 30 秒逾時
+        for (env_lang, sig, want) in [
+            (Some("en-US"), "-INT", en),
             (
-                Some("en-US"),
-                [
-                    "serving plaintext HTTP",
-                    "listening on",
-                    "Shutdown signal received",
-                ],
+                None,
+                "-INT",
+                ["以 HTTP 明文提供服務", "服務已啟動", "收到中止訊號"],
             ),
-            (None, ["以 HTTP 明文提供服務", "服務已啟動", "收到中止訊號"]),
+            (Some("en-US"), "-TERM", en),
         ] {
             let lang = env_lang.unwrap_or("zh-TW");
-            let sb = Sandbox::new(&format!("up-{lang}"));
+            let sb = Sandbox::new(&format!("up-{lang}{sig}"));
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_cytrace"));
             cmd.args([
                 "serve",
@@ -795,7 +800,7 @@ mod serve {
             let pid = child.id().to_string();
             let killed = {
                 let _g = spawning();
-                Command::new("kill").args(["-INT", &pid]).status().unwrap()
+                Command::new("kill").args([sig, &pid]).status().unwrap()
             };
             assert!(killed.success());
             let deadline = Instant::now() + Duration::from_secs(30);
@@ -805,7 +810,7 @@ mod serve {
                 }
                 if Instant::now() > deadline {
                     let _ = child.kill();
-                    panic!("{lang}：SIGINT 後 30 秒未結束");
+                    panic!("{lang}：{sig} 後 30 秒未結束");
                 }
                 std::thread::sleep(Duration::from_millis(50));
             };

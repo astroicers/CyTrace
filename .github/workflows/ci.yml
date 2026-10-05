@@ -151,22 +151,51 @@ jobs:
       - name: console 零外連自檢
         run: bash scripts/console-egress-check.sh frontend/dist-console
 
+  # Windows 版 CBOM 引擎（T911）：在 Linux 上以 Dockerfile 的 theia-builder-windows stage
+  # 交叉編譯——與 Linux 版同一份釘選源碼、同一個 Go image、同一組參數，產物比對 versions.env 的 SHA。
+  theia-windows:
+    name: cbomkit-theia Windows 版（交叉編譯，驗 SHA256）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 讀引擎釘選版本
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+      - name: 建置並驗 SHA256
+        run: |
+          docker build --target theia-builder-windows -t theia-builder-windows \
+            --build-arg THEIA_COMMIT="$THEIA_COMMIT" \
+            --build-arg THEIA_LINUX_AMD64_SHA256="$THEIA_LINUX_AMD64_SHA256" \
+            --build-arg THEIA_WINDOWS_AMD64_SHA256="$THEIA_WINDOWS_AMD64_SHA256" .
+          cid=$(docker create theia-builder-windows)
+          mkdir -p dist
+          docker cp "$cid:/out/cbomkit-theia.exe" dist/cbomkit-theia.exe
+          docker rm "$cid"
+          echo "${THEIA_WINDOWS_AMD64_SHA256}  dist/cbomkit-theia.exe" | sha256sum -c -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cbomkit-theia-windows
+          path: dist/cbomkit-theia.exe
+          if-no-files-found: error
+
   windows-package:
     name: Windows 安裝包冒煙（package.ps1 -SkipDb）
     runs-on: windows-latest
+    needs: theia-windows
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: cbomkit-theia-windows
+          path: dist
+      # T911 起包內必含 CBOM 引擎：不再帶 -WithoutCbom；package.ps1 取用前比對 SHA256
       - name: 組裝安裝包（跳過 1.7G DB）
         shell: pwsh
-        run: # -WithoutCbom：Windows theia 資產（我方 CI 交叉編譯）就緒前，冒煙包刻意不含
-          # CBOM 引擎。fail-hard 改版後這必須**顯式說出**，不能再靜默——第一次跑就攔下了
-          # 沒帶參數的本呼叫，證明新閘有效。
-          pwsh scripts/package.ps1 -SkipDb -WithoutCbom
+        run: pwsh scripts/package.ps1 -SkipDb
       - name: 驗證產物結構 + cytrace.exe 可跑
         shell: pwsh
         run: |
           $b = Get-ChildItem -Directory delivery | Select-Object -First 1
-          $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json","CHANGELOG.md")
+          $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","bin\cbomkit-theia.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json","CHANGELOG.md")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
           & (Join-Path $b.FullName "bin\cytrace.exe") --version
       # NOTICE 與包內實際內容必須一致——否則會出一個授權聲明不實的交付包（ADR-013）
@@ -196,3 +225,12 @@ jobs:
           }
           Write-Host "NOTICE 與包內引擎一致"
           Write-Host "OK package: $($b.Name)"
+      # 「編得出來」不等於「在 Windows 上跑得起來」：以真引擎跑憑證與空目錄兩個情境（T911）。
+      # 用的是包內那一支（與交付相同），不是另外建的。
+      - name: 真引擎在 Windows 上可用（CBOM 煙霧）
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $env:PATH = (Join-Path $b.FullName "bin") + ";" + $env:PATH
+          cargo test -p cytrace-core --test real_engine_windows -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "real_engine_windows failed (exit $LASTEXITCODE)" }

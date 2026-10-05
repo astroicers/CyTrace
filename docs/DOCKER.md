@@ -86,6 +86,11 @@ healthcheck:
   test: ["CMD", "cytrace", "health"]
 ```
 
+## 停止（`docker stop`）
+
+`docker stop` 送 SIGTERM：服務停止接受新連線，給進行中的請求最多 10 秒完成，之後以退出碼 0 結束。
+執行中的掃描不會等它跑完；它在 `/data` 的記錄於下次啟動時標為 `interrupted`，可再送一次。
+
 ## 安全基線
 
 - non-root（UID/GID 65532）；建議 `--read-only`（唯二可寫：`/data` volume 與 `/tmp` tmpfs）

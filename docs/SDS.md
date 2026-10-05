@@ -271,7 +271,8 @@ ScanResult {
   - `serve` 自建 tokio runtime，`main()` 保持同步；
   - 掃描管線是同步的，經 `spawn_blocking` 隔離，以 `Semaphore` 限制併發；
   - 請求路徑禁止 panic（`panic=abort` 的 crash-only 設計，clippy 對 `unwrap_used` 設 deny）；
-  - Ctrl-C 的處理在綁定位址之前就同步註冊。SIGTERM 的優雅關閉尚未處理（T915）。
+  - 停止訊號（Ctrl-C；unix 上另加 SIGTERM，即 `docker stop` 送的訊號，T915）在綁定位址之前就同步註冊，
+    收到後優雅關閉（10 秒寬限）。容器裡 cytrace 是 PID 1，沒有 handler 時核心會忽略 SIGTERM。
 - **設定**（`ServerConfig::resolve`）：
   - 優先序為旗標 > 環境變數 > 預設，函式本身是純函式；
   - 環境變數經 `Env` 收集：值不是 UTF-8 的變數只記名字，`resolve` **讀到它時**才回傳指名該變數的錯誤；

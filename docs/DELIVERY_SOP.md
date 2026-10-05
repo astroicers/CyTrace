@@ -34,12 +34,18 @@ build 機的 syft/grype **版本必須等於 versions.env 釘選版**，否則�
 make package            # 或 scripts/package.sh <輸出目錄>
 ```
 **Windows 版**（在 Windows build 機，先 `grype db update`）：
+
+CBOM 引擎的 Windows 版同樣自源碼建置（T911），二擇一取得後放到 `dist\cbomkit-theia.exe`：
+- 取我方 GitHub Release 的資產 `cbomkit-theia-windows-amd64.exe`（release workflow 交叉編譯並驗 SHA256），
+  改名為 `cbomkit-theia.exe`；
+- 或在有 Docker 的 Linux 機：`scripts/build-theia.sh dist windows`，再把 `dist/cbomkit-theia.exe` 帶過來。
+
 ```powershell
-pwsh scripts/package.ps1 -WithoutCbom   # 產 delivery\cytrace-<版本>-windows\
+pwsh scripts/package.ps1   # 產 delivery\cytrace-<版本>-windows\
 ```
-Windows 版 CBOM 引擎資產尚未就緒（T911），不加 `-WithoutCbom` 腳本會 fail-hard——
-這是刻意的：包裡少了引擎必須由人顯式說出來。此包的 `--cbom` 降級為「未盤點」，
-不影響 SBOM 與弱點比對。
+腳本取用前比對 `versions.env` 的 `THEIA_WINDOWS_AMD64_SHA256`，不符即中止。缺檔時腳本 fail-hard；
+刻意不含 CBOM 引擎時以 `-WithoutCbom` 顯式說出來（此包的 `--cbom` 降級為「未盤點」，
+不影響 SBOM 與弱點比對）。
 腳本會：build musl 靜態 binary → 收集釘選引擎與 grype DB 快照 → 產自產 SBOM →
 寫 NOTICE → 算 SHA256SUMS →（若有金鑰）minisign 簽章。
 
