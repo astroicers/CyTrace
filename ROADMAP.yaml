@@ -1118,7 +1118,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: review
         source_ref: "T912 理解 workflow（2026-10-02）"
@@ -1129,6 +1129,11 @@ milestones:
           ADR-011 寫「違規一律 403 並記稽核 log」，但 server 沒有任何稽核日誌輸出（未依賴 tracing／log），
           違規資訊只出現在 API 回應。二擇一並由人裁定：實作稽核日誌（格式、落點、保存期限、是否含路徑），
           或修訂 ADR-011 的這句宣稱。修訂 ADR 需走人類核准流程。
+
+          **結案（2026-10-05）**：使用者選擇「修訂 ADR-011」。決策 6 的「並記稽核 log」劃除，文末加修訂節記錄
+          實際行為（403 + `detail` 附原因碼與 root、path）、不補實作的理由（單一管理帳號，違規內容已回給唯一的
+          請求者；補實作需另裁格式與 NFR-09 信任邊界）與裁定來源。同步更正 targets.rs 註解與 SDS §10。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01
