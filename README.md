@@ -45,6 +45,14 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 
 掃描另需 Syft／Grype 引擎與 grype DB 快照；`--cbom` 另需 CBOMkit-theia。場域交付請用離線安裝包或容器（見下方）。
 
+離線安裝包的 `SHA256SUMS` 以 minisign 簽章（`SHA256SUMS.minisig`）。交付公鑰（金鑰 ID `055ACC6F1822B10E`，即 `keys/cytrace.pub`）：
+
+```
+RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX
+```
+
+驗章：`minisign -Vm SHA256SUMS -P <公鑰字串>`。場域請以交付驗收單上帶外抄錄的字串驗章（DELIVERY_SOP §3）。
+
 ## 快速開始（開發機）
 
 ```bash
@@ -181,7 +189,7 @@ make frontend frontend-console   # 重建內嵌的報表樣板與控制台（改
 ## 狀態
 
 - ✅ M0–M3、M5、M7–M9 完成：掃描管線、雙語離線報表、批次與 CI、雙平台發布、Web 控制台與容器交付、CBOM 盤點。
-- 🟡 M4 剩 T402：交付包的 minisign 簽章執行（需操作端受管金鑰）。
+- 🟡 M4 剩 T402：交付公鑰已發布、簽章流程已在 CI 實測；待以受管金鑰正式簽第一個交付包。
 - ⏸ M6 SaaS 監管：範圍外、延後。
 - ⚠ 已知限制見 CHANGELOG 各版「已知限制」段。
 

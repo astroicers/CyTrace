@@ -56,13 +56,25 @@ CBOM 引擎比對 SHA256）與 grype DB 快照 → 產自產 SBOM → 寫 NOTICE
 ## 3. 簽章與離線信任錨（ADR-007 / NEW-3）
 
 - 簽章工具：**minisign**（detached，SHA-256）。
-- build 機產生金鑰一次：`minisign -G`（妥善保管私鑰；公鑰隨交付流程帶外發布）。
-- 簽章：`minisign -Sm SHA256SUMS`（產 `SHA256SUMS.minisig`）。
-- **離線信任錨**：目標機驗收前，**以帶外方式**（紙本/光碟/獨立通道）預先匯入 `minisign` 公鑰並建立信任。
+- **交付公鑰**（金鑰 ID `055ACC6F1822B10E`；檔案為 repo 的 `keys/cytrace.pub`）：
+
+  ```
+  RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX
+  ```
+
+  > 本字串與 `keys/cytrace.pub` 由 `scripts/pubkey-check.py` 在 CI 對帳，抄錯一個字元即紅。
+- **私鑰**：只在交付工作站的 `~/.minisign/cytrace.key`，以密碼保護（scrypt），不進 repo、不進 CI。
+  私鑰與密碼另行備份；遺失時改用新金鑰簽章，並須重新以帶外方式交付新公鑰。
+- **簽章**（打包時自動，簽章時會詢問私鑰密碼）：
+  `CYTRACE_MINISIGN_SECKEY=~/.minisign/cytrace.key scripts/package.sh`
+  （Windows：`$env:CYTRACE_MINISIGN_SECKEY=...` 後跑 `package.ps1`）。產出 `SHA256SUMS.minisig`。
+  已有的檔案也可手動簽：`minisign -Sm SHA256SUMS -s ~/.minisign/cytrace.key`。
+- **離線信任錨**：把上方公鑰字串與金鑰 ID **抄在交付驗收單上**（紙本即帶外管道），與交付媒體分開遞交；
+  目標機驗收者以驗收單上的字串驗章，不使用交付媒體內附的任何公鑰。
 - 目標機驗證：
   ```bash
-  minisign -Vm SHA256SUMS -P <已帶外匯入的公鑰>   # 驗真實性
-  sha256sum -c SHA256SUMS                          # 驗完整性
+  minisign -Vm SHA256SUMS -P <驗收單上的公鑰字串>   # 驗真實性
+  sha256sum -c SHA256SUMS                            # 驗完整性
   ```
 
 ## 4. 目標機安裝與執行（無網路）
@@ -124,11 +136,11 @@ syft／grype／theia，並重檢 musl 價值主張（musl 限 Linux）。
 3. 取 Release 附的 `cytrace-vX.Y.Z-image.tar`（CI 產物即權威）或本機 `docker save`。
 4. `sha256sum -c SHA256SUMS-image`（binaries 的校驗檔是另一份 `SHA256SUMS`——
    兩個 workflow 各附各的，檔名刻意錯開）。
-5. **minisign 簽 tar**（交付工作站私鑰，同 ADR-007 信任錨；私鑰不進 CI）：
-   `minisign -Sm cytrace-vX.Y.Z-image.tar`。
+5. **minisign 簽 tar**（交付工作站私鑰，同 §3 信任錨；私鑰不進 CI）：
+   `minisign -Sm cytrace-vX.Y.Z-image.tar -s ~/.minisign/cytrace.key`。
 
 ### 7.2 攜入與載入（場域）
-1. 光碟 / 單向匣攜入 → `minisign -Vm cytrace-vX.Y.Z-image.tar`（帶外預置公鑰）＋ `sha256sum -c`。
+1. 光碟 / 單向匣攜入 → `minisign -Vm cytrace-vX.Y.Z-image.tar -P <驗收單上的公鑰字串>`（§3）＋ `sha256sum -c`。
 2. `docker load -i cytrace-vX.Y.Z-image.tar`。
 3. 補打 `latest` 標籤（離線 tar 只封 semver tag，而 DOCKER.md / docker-compose.yml
    範例用 `:latest`——不補打則照範例起站會 image not found）：

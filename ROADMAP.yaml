@@ -382,6 +382,12 @@ milestones:
         description: |
           產生 SHA256SUMS 與簽章；組成可離線安裝、可驗證完整性的安裝包。走離線安裝包路線，
           不走第三方資安檢測（隨裝軟體標）。
+
+          **進度（2026-10-05）**：使用者裁定「從簡優先」——金鑰在交付工作站產生，私鑰以密碼保護（scrypt）
+          存於 `~/.minisign/cytrace.key`，不進 repo 與 CI；公鑰提交為 `keys/cytrace.pub`（金鑰 ID
+          055ACC6F1822B10E），SOP §3 與 README 抄錄公鑰字串，帶外管道為交付驗收單（紙本）。
+          `scripts/pubkey-check.py` 在 lint／CI 對帳公鑰檔格式與文件抄錄（含 7 例自測）。簽章路徑已由 T920
+          在 CI 以拋棄式金鑰實測。**剩餘**：以受管金鑰正式簽第一個交付包（需人輸入私鑰密碼）。
       - id: T403
         title: "dogfooding 自產 SBOM 隨附 + 離線 DB 更新 SOP"
         type: NEW_FEATURE
