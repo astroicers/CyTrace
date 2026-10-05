@@ -318,7 +318,25 @@
       "unscanned_oversize": "有 {{count}} 個檔案超過引擎 1 MiB 上限而未掃描，本清單並不完整（此限制無法以權限或參數解除）",
       "unscanned_undetermined": "引擎自承偵測到 {{count}} 項資產但未能建模輸出，本清單並不完整（引擎覆蓋率限制）"
     },
-    "scan_identity": "掃描身分"
+    "scan_identity": "掃描身分",
+    "meta": {
+      "target": "掃描目標",
+      "db": "弱點資料庫",
+      "generated_at": "產生時間"
+    },
+    "counts": "元件 {{components}} 個 · 弱點 {{findings}} 項",
+    "col": {
+      "severity": "嚴重度",
+      "cve": "CVE",
+      "cvss": "CVSS",
+      "component": "元件",
+      "fixed": "修補版本",
+      "source": "來源",
+      "name": "名稱",
+      "version": "版本",
+      "type": "類型",
+      "licenses": "授權"
+    }
   },
   "crypto": {
     "quantum": {
@@ -340,5 +358,11 @@
       "not_cyclonedx": "引擎輸出不是 CycloneDX BOM",
       "engine": "引擎錯誤"
     }
+  },
+  "ui": {
+    "language": "介面語言",
+    "theme_toggle": "切換亮暗主題",
+    "theme_dark": "深色",
+    "theme_light": "淺色"
   }
 }

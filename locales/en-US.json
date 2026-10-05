@@ -314,11 +314,29 @@
         "expired": "Expired certificates"
       },
       "draft_note": "The 2030/2035 dates in NIST IR 8547 are still a draft",
-      "unscanned_unreadable": "{{count}} items were not scanned due to insufficient permissions; this list is incomplete (rerun with sufficient privileges)",
-      "unscanned_oversize": "{{count}} files exceed the engine's 1 MiB limit and were not scanned; this list is incomplete (the limit cannot be lifted by permissions or flags)",
-      "unscanned_undetermined": "The engine reported detecting {{count}} assets but could not model them; this list is incomplete (engine coverage limit)"
+      "unscanned_unreadable": "Not scanned due to insufficient permissions: {{count}}. This list is incomplete (rerun with sufficient privileges)",
+      "unscanned_oversize": "Files over the engine's 1 MiB limit, not scanned: {{count}}. This list is incomplete (the limit cannot be lifted by permissions or flags)",
+      "unscanned_undetermined": "Assets the engine detected but could not model: {{count}}. This list is incomplete (engine coverage limit)"
     },
-    "scan_identity": "Scanned as"
+    "scan_identity": "Scanned as",
+    "meta": {
+      "target": "Scan target",
+      "db": "Vulnerability DB",
+      "generated_at": "Generated at"
+    },
+    "counts": "Components: {{components}} · Findings: {{findings}}",
+    "col": {
+      "severity": "Severity",
+      "cve": "CVE",
+      "cvss": "CVSS",
+      "component": "Component",
+      "fixed": "Fixed in",
+      "source": "Source",
+      "name": "Name",
+      "version": "Version",
+      "type": "Type",
+      "licenses": "Licenses"
+    }
   },
   "crypto": {
     "quantum": {
@@ -340,5 +358,11 @@
       "not_cyclonedx": "Engine output is not a CycloneDX BOM",
       "engine": "Engine error"
     }
+  },
+  "ui": {
+    "language": "Language",
+    "theme_toggle": "Toggle light/dark theme",
+    "theme_dark": "Dark",
+    "theme_light": "Light"
   }
 }
