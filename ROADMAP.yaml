@@ -1105,7 +1105,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: review
         source_ref: "T912 實作時讀 serve()（2026-10-02）"
@@ -1116,6 +1116,11 @@ milestones:
           `serve()` 只監聽 `ctrl_c`（SIGINT）。`docker stop` 送的是 SIGTERM，服務不會進入 10 秒寬限的
           graceful shutdown，而是等容器執行環境逾時後被 SIGKILL；執行中的 job 在下次啟動才被標為 interrupted。
           待辦：unix 上同時監聽 SIGTERM；以容器實測 `docker stop` 的退出碼與 job 狀態。
+
+          **結案（2026-10-05）**：serve 的停止訊號改為 `StopSignals`——unix 上同時接 SIGINT 與 SIGTERM（`select!`），
+          Windows 維持 Ctrl-C；與 T912 一樣在綁定位址之前同步註冊。端到端測試加 SIGTERM 一組（退出碼 0、印出關閉
+          訊息）；拿掉 SIGTERM 的突變會讓該組轉紅。容器實測見 PR。執行中的掃描不在優雅關閉的等待範圍內，
+          重啟時由既有的恢復流程標為 interrupted。
 
       - id: T916
         title: "ADR-011「路徑違規記稽核 log」與實作不符"
