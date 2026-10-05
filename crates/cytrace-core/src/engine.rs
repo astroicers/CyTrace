@@ -72,7 +72,7 @@ pub fn sbom(target: &str) -> Result<String> {
 /// 不必為 SPDX 再掃一次。SPDX 輸出若缺檔、不是 JSON、或沒有 `spdxVersion`，一律視為
 /// 引擎錯誤（fail-closed）——交件的 SBOM 不能是半成品。
 pub fn sbom_with_spdx(target: &str) -> Result<(String, String)> {
-    let spdx_path = unique_temp_path("cytrace-spdx").with_extension("spdx.json");
+    let spdx_path = spdx_temp_path();
     let out = Command::new("syft")
         .args(["scan", target, "-o", "cyclonedx-json", "-o"])
         .arg(format!("spdx-json={}", spdx_path.display()))
@@ -180,6 +180,12 @@ impl Drop for TempDir {
 /// 而 grype 退出碼 0、輸出合法 JSON，`check()` 完全攔不到，報表安靜地描述錯的目標。
 pub fn sbom_temp_path() -> std::path::PathBuf {
     unique_temp_path("cytrace-sbom").with_extension("cdx.json")
+}
+
+/// syft 寫 SPDX 的暫存檔（[`sbom_with_spdx`] 用完即刪）。行程內每次呼叫皆不同：
+/// web 模式可並發多個 job，共用路徑會讓兩個 job 讀到對方的 SPDX。
+pub fn spdx_temp_path() -> std::path::PathBuf {
+    unique_temp_path("cytrace-spdx").with_extension("spdx.json")
 }
 
 /// 行程內唯一的暫存路徑（`<prefix>-<pid>-<seq>`）。
@@ -791,6 +797,20 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spdx_temp_paths_are_unique_per_call() {
+        let a = spdx_temp_path();
+        let b = spdx_temp_path();
+        assert_ne!(a, b, "並發 job 不得共用 SPDX 暫存檔");
+        for p in [&a, &b] {
+            let name = p.file_name().unwrap().to_string_lossy();
+            assert!(
+                name.starts_with("cytrace-spdx-") && name.ends_with(".spdx.json"),
+                "{name}"
+            );
+        }
+    }
 
     #[test]
     fn validate_spdx_accepts_spdx_documents_only() {

@@ -63,3 +63,19 @@ CyTrace 需要兩種能力：（1）掃描目標（原始碼/容器映像/目錄
 
 - **Trivy 候補目前無 ROADMAP 任務/spike 佔位**：本 ADR 將 Trivy 列為候補（交叉驗證/設定錯誤/secrets/IaC），但 M0–M5 未排任何任務。
   若未來要落地「交叉驗證」能力，須另開 spike 與 ADR；現階段刻意不納入（穩定優先、不加非必要功能）。
+
+## 修訂：SPDX 輸出落地（2026-10-05，T919）
+
+**裁定來源**：本 ADR 原已決定「CycloneDX 主、SPDX 備」，本節記錄實作與一項取捨，不改變決策。使用者 2026-10-05
+授權依建議推進至專案完整。
+
+- **產出方式**：同一次 syft 執行以 `-o cyclonedx-json -o spdx-json=<暫存檔>` 產出兩種格式，元件出自同一次編目，
+  不為 SPDX 再掃一次。釘選版 syft 1.45.1 輸出 SPDX 2.3。
+- **何時產出**：CLI `scan --spdx` 才產（預設關閉，既有產物不變）；web 模式一律產，由使用者在控制台選擇下載格式。
+- **成功指標「以標準驗證器檢查輸出」的實際作法**：以 spdx-spec 官方 2.3 JSON schema 一次性實測零違規
+  （schema 未 vendored，查證紀錄在本機 `.asp-fact-check.md`）。持續性的檢查是 CI 真引擎 job：以釘選 syft
+  驗 `spdxVersion` 為 SPDX-2.3，且兩種格式的套件（名稱與版本）一致。
+- **失敗處置採 fail-closed（與 CBOM 不同）**：SPDX 缺檔、不是 JSON、或缺 `spdxVersion` 時，整次掃描失敗
+  （CLI 退出碼 1；web 模式 job 失敗）。CBOM 失敗只降級該區段（ADR-013 決策 4），SPDX 不比照，理由：
+  SPDX 與 CycloneDX 出自同一次 syft 執行，SPDX 壞掉代表 syft 本身的輸出不可信，CycloneDX 也不宜單獨交件；
+  而 CBOM 是另一支獨立引擎，壞掉不影響 SBOM 的可信度。

@@ -12,7 +12,7 @@
 
 #![cfg(unix)]
 
-use cytrace_core::engine::{cbom_with_timeout, CbomTarget};
+use cytrace_core::engine::{cbom_with_timeout, CbomTarget, RealEngine, ScanEngine};
 use cytrace_core::failon::{quantum_gate, QuantumGate};
 use cytrace_core::{collect_cbom, engine};
 use cytrace_types::{CbomStatus, CryptoInventory};
@@ -745,32 +745,38 @@ fn spdx_and_cyclonedx_describe_the_same_packages() {
     )
     .unwrap();
 
-    let (cdx, spdx) = engine::sbom_with_spdx(&format!("dir:{}", dir.display()))
+    // 經 trait 物件呼叫：server 走的是這條。RealEngine 若沒覆寫 sbom_with_spdx，會退回預設實作
+    // 回 None——web 模式靜默不再產 SPDX，而 fake engine 的測試全都看不出來（T919 複審 M1）
+    let engine: &dyn ScanEngine = &RealEngine;
+    let (cdx, spdx) = engine
+        .sbom_with_spdx(&format!("dir:{}", dir.display()))
         .expect("syft 應同時產出 CycloneDX 與 SPDX");
+    let spdx = spdx.expect("RealEngine 必須產出 SPDX（不得退回 trait 預設實作）");
     let spdx: serde_json::Value = serde_json::from_str(&spdx).unwrap();
     let cdx: serde_json::Value = serde_json::from_str(&cdx).unwrap();
     assert_eq!(spdx["spdxVersion"], "SPDX-2.3", "{spdx}");
 
-    let names = |v: &serde_json::Value, key: &str| -> std::collections::BTreeSet<String> {
-        v[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|p| key == "packages" || p["type"] == "library")
-            .filter_map(|p| p["name"].as_str().map(String::from))
-            .collect()
-    };
-    let libs = names(&cdx, "components");
-    let pkgs = names(&spdx, "packages");
-    // 非空：沒抓到套件時「子集合」恆真，不含資訊
+    // （名稱, 版本）雙向一致。SPDX 另有一個描述掃描目錄本身的 DocumentRoot 套件，不算元件。
+    let field = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    let libs: std::collections::BTreeSet<(String, String)> = cdx["components"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["type"] == "library")
+        .map(|c| (field(c, "name"), field(c, "version")))
+        .collect();
+    let pkgs: std::collections::BTreeSet<(String, String)> = spdx["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| !field(p, "SPDXID").starts_with("SPDXRef-DocumentRoot"))
+        .map(|p| (field(p, "name"), field(p, "versionInfo")))
+        .collect();
+    // 非空：兩邊都沒抓到套件時「相等」恆真，不含資訊
     assert!(
-        libs.contains("requests") && libs.contains("urllib3"),
+        libs.contains(&("requests".to_string(), "2.31.0".to_string())),
         "{libs:?}"
     );
-    assert!(
-        libs.is_subset(&pkgs),
-        "CycloneDX 有、SPDX 沒有：{:?}",
-        libs.difference(&pkgs)
-    );
+    assert_eq!(libs, pkgs, "兩種格式的套件（名稱與版本）應一致");
     let _ = fs::remove_dir_all(&dir);
 }

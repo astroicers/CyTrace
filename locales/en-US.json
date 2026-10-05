@@ -96,7 +96,7 @@
       "cmd": {
         "run": "One shot: generate SBOM → match vulnerabilities → write report (optionally --fail-on)",
         "batch": "Scan several targets, one report each; exits 2 if any target reaches --fail-on",
-        "scan": "Only write sbom.cdx.json and grype.json (plus cbom.cdx.json with --cbom)",
+        "scan": "Only write sbom.cdx.json and grype.json (plus sbom.spdx.json with --spdx, cbom.cdx.json with --cbom)",
         "report": "Rebuild a report offline from an existing ScanResult JSON (audit review)",
         "serve": "Start the web service: sign-in console plus scan and report API",
         "hash_password": "Generate the admin password's argon2id PHC string offline (for CYTRACE_ADMIN_PASSWORD_HASH)",
@@ -114,7 +114,8 @@
       "conflict": "{{arg}} cannot be used with {{other}}",
       "other": "invalid usage ({{detail}})",
       "hint": "Run `{{command}} --help` for usage"
-    }
+    },
+    "spdx_stale": "Note: {{path}} is an SPDX file from an earlier scan and does not match this sbom.cdx.json (--spdx was not given this time)"
   },
   "server": {
     "listening": "CyTrace server listening on {{addr}}",

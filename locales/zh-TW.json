@@ -96,7 +96,7 @@
       "cmd": {
         "run": "一鍵：產 SBOM → 比對弱點 → 出報表（可加 --fail-on）",
         "batch": "多目標批次掃描：逐一出報表；任一目標達 --fail-on 即整體以 2 結束",
-        "scan": "只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）",
+        "scan": "只產 sbom.cdx.json 與 grype.json（加 --spdx 時另產 sbom.spdx.json、加 --cbom 時另產 cbom.cdx.json）",
         "report": "由既有的 ScanResult JSON 離線重建報表（稽核複核）",
         "serve": "啟動 Web 服務：登入控制台與掃描、報表 API",
         "hash_password": "離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）",
@@ -114,7 +114,8 @@
       "conflict": "{{arg}} 不能與 {{other}} 一起使用",
       "other": "參數用法錯誤（{{detail}}）",
       "hint": "執行 `{{command}} --help` 查看用法"
-    }
+    },
+    "spdx_stale": "注意：{{path}} 是先前掃描留下的 SPDX，與本次的 sbom.cdx.json 不是同一次掃描（本次未加 --spdx）"
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",

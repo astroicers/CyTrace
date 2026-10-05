@@ -1102,64 +1102,126 @@ fn report_opens_in_generation_language() {
 }
 
 /// `scan --spdx`：SPDX（備）與 CycloneDX 出自同一次 syft 執行，寫成 `sbom.spdx.json`（FR-001；T919）。
-/// syft shim 模擬真實行為：stdout 給 CycloneDX，`-o spdx-json=<檔>` 寫檔。
+/// syft shim 模擬真實行為：stdout 給 CycloneDX，`-o spdx-json=<檔>` 寫檔，並把每次呼叫記到計數檔。
+/// `TMPDIR` 指到沙盒內，才數得到 cytrace 自己的暫存檔有沒有收乾淨。
 /// 失敗必須 fail-closed：SPDX 缺檔或內容不是 SPDX 時整個 scan 失敗，且不留下半套產物。
 #[test]
 fn scan_spdx_writes_both_formats_or_fails_closed() {
     let sb = Sandbox::new("spdx");
     sb.shim("grype", "grype.json");
     let target = sb.path("target");
+    let tmp = sb.path("tmp");
+    fs::create_dir_all(&tmp).unwrap();
+    let env: &[(&str, &str)] = &[("TMPDIR", &tmp)];
+    let calls = sb.path("syft.calls");
     let spdx_from = |src: &str| {
         format!(
-            "for a in \"$@\"; do case \"$a\" in spdx-json=*) cp {src} \"${{a#spdx-json=}}\";; esac; done\n\
+            "echo x >> {calls}\n\
+             for a in \"$@\"; do case \"$a\" in spdx-json=*) cp {src} \"${{a#spdx-json=}}\";; esac; done\n\
              cat {FIXTURES}/cyclonedx.json\n"
         )
     };
+    let syft_calls = || {
+        let n = fs::read_to_string(&calls)
+            .map(|c| c.lines().count())
+            .unwrap_or(0);
+        let _ = fs::remove_file(&calls);
+        n
+    };
+    // cytrace 留在 TMPDIR 的 SPDX 暫存檔（成功與失敗都必須收乾淨）
+    let leftovers = || {
+        fs::read_dir(&tmp)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("cytrace-spdx-"))
+            .collect::<Vec<_>>()
+    };
 
-    // 正常：兩份 SBOM 都在，SPDX 原樣落地
+    // 正常：兩份 SBOM 都在，SPDX 原樣落地；syft 只跑一次
     sb.shim_script("syft", &spdx_from(&format!("{FIXTURES}/spdx.json")));
     let out = sb.path("ok");
     fs::create_dir_all(&out).unwrap();
-    let o = sb.run(&["scan", &target, "--spdx", "-o", &out], &[]);
+    let o = sb.run(&["scan", &target, "--spdx", "-o", &out], env);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         fs::read_to_string(format!("{out}/sbom.spdx.json")).unwrap(),
         fs::read_to_string(format!("{FIXTURES}/spdx.json")).unwrap()
     );
     assert!(fs::metadata(format!("{out}/sbom.cdx.json")).is_ok());
+    assert_eq!(syft_calls(), 1, "SPDX 不得為此再跑一次 syft");
+    assert_eq!(leftovers(), Vec::<String>::new(), "暫存檔未刪");
 
     // 未要求：不產 SPDX（預設行為不變）
     let out = sb.path("default");
     fs::create_dir_all(&out).unwrap();
-    let o = sb.run(&["scan", &target, "-o", &out], &[]);
+    let o = sb.run(&["scan", &target, "-o", &out], env);
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(fs::metadata(format!("{out}/sbom.spdx.json")).is_err());
     assert!(fs::metadata(format!("{out}/sbom.cdx.json")).is_ok());
+    assert_eq!(syft_calls(), 1);
+
+    // 同一目錄重跑但沒加 --spdx：上一輪的 SPDX 留著（不刪使用者的檔），但要警告兩份不是同一次掃描
+    let out = sb.path("ok");
+    let (en, zh) = both_langs(
+        &sb,
+        &["scan", &target, "-o", &out],
+        env,
+        0,
+        "earlier scan",
+        "先前掃描",
+    );
+    for o in [&en, &zh] {
+        assert!(
+            o.stderr.contains("sbom.spdx.json"),
+            "應指名舊檔：{}",
+            o.stderr
+        );
+    }
+    syft_calls();
+
+    // SPDX 寫不進去（同名目錄擋住）：主產物還沒落地，不留半套
+    let out = sb.path("unwritable");
+    fs::create_dir_all(format!("{out}/sbom.spdx.json")).unwrap();
+    let o = sb.run(&["scan", &target, "--spdx", "-o", &out], env);
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    for f in ["sbom.cdx.json", "grype.json"] {
+        assert!(fs::metadata(format!("{out}/{f}")).is_err(), "不得留下 {f}");
+    }
+    syft_calls();
+    assert_eq!(leftovers(), Vec::<String>::new(), "暫存檔未刪");
 
     // fail-closed：syft 沒寫 SPDX 檔／寫的不是 SPDX
     for (case, script) in [
-        ("missing", format!("cat {FIXTURES}/cyclonedx.json\n")),
+        (
+            "missing",
+            format!("echo x >> {calls}\ncat {FIXTURES}/cyclonedx.json\n"),
+        ),
         ("not-spdx", spdx_from(&format!("{FIXTURES}/cyclonedx.json"))),
     ] {
         sb.shim_script("syft", &script);
         let out = sb.path(case);
         fs::create_dir_all(&out).unwrap();
-        let (en, zh) = both_langs(
+        // 「spdx-json」只會出現在錯誤成因裡（沙盒路徑含 spdx，不能拿 spdx 當判準）
+        both_langs(
             &sb,
             &["scan", &target, "--spdx", "-o", &out],
-            &[],
+            env,
             1,
-            "spdx",
-            "spdx",
+            "spdx-json",
+            "spdx-json",
         );
-        for o in [&en, &zh] {
-            assert!(o.stderr.contains("spdx-json"), "{case}：{}", o.stderr);
-        }
         for f in ["sbom.cdx.json", "sbom.spdx.json", "grype.json"] {
             assert!(
                 fs::metadata(format!("{out}/{f}")).is_err(),
                 "{case}：失敗時不得留下 {f}"
             );
         }
+        assert_eq!(
+            syft_calls(),
+            2,
+            "{case}：兩種語言各跑一次，每次只呼叫 syft 一次"
+        );
+        assert_eq!(leftovers(), Vec::<String>::new(), "{case}：暫存檔未刪");
     }
 }

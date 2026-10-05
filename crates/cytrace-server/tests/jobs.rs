@@ -1632,6 +1632,7 @@ async fn t919_spdx_artifact_is_listed_and_downloadable() {
     // 列表不附 artifacts（不為每一筆碰檔案系統）
     let resp = fetch(&env.app, &cookie, "/api/v1/jobs").await;
     let list = json_of(resp).await;
+    assert_eq!(list["total"], 1, "{list}");
     assert!(list["jobs"][0].get("artifacts").is_none(), "{list}");
 
     // 引擎不產 SPDX：job 照常完成，清單不列、端點 404
@@ -1653,4 +1654,24 @@ async fn t919_spdx_artifact_is_listed_and_downloadable() {
     )
     .await;
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// 產物種類的兩份宣告必須一致：server 的 `ARTIFACTS` 與 console 的 `ArtifactKind`。
+/// server 多一種而 console 沒跟上時，下載連結的文字會變成 `t(undefined)`（T919 複審 Info）。
+#[test]
+fn artifact_kinds_match_the_console_type() {
+    let ts = include_str!("../../../frontend/src/console/api/types.ts");
+    let line = ts
+        .lines()
+        .find(|l| l.starts_with("export type ArtifactKind"))
+        .expect("types.ts 應宣告 ArtifactKind");
+    let mut console: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+    let mut server: Vec<&str> = cytrace_server::api::reports::ARTIFACTS
+        .iter()
+        .map(|(k, _)| *k)
+        .collect();
+    console.sort_unstable();
+    server.sort_unstable();
+    assert!(!server.is_empty());
+    assert_eq!(server, console, "{line}");
 }

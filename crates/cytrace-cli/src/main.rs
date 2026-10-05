@@ -266,10 +266,21 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                 (engine::sbom(target)?, None)
             };
             let grype = engine::vuln(&sbom)?;
-            write_file(&dir.join("sbom.cdx.json"), &sbom)?;
-            if let Some(s) = &spdx_json {
-                write_file(&dir.join("sbom.spdx.json"), s)?;
+            // SPDX 先寫：它寫不進去時，主產物還沒落地，不留半套
+            let spdx_path = dir.join("sbom.spdx.json");
+            match &spdx_json {
+                Some(s) => write_file(&spdx_path, s)?,
+                // 不刪使用者目錄裡的檔案，但要講清楚它和本次的 CycloneDX 不是同一次掃描
+                None if spdx_path.exists() => eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.spdx_stale",
+                        &[("path", &spdx_path.display().to_string())]
+                    )
+                ),
+                None => {}
             }
+            write_file(&dir.join("sbom.cdx.json"), &sbom)?;
             write_file(&dir.join("grype.json"), &grype)?;
             if *cbom {
                 // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物
