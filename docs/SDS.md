@@ -1,140 +1,293 @@
 # SDS — CyTrace 軟體設計規格書
 
-> **v0.3.0 增補（2026-09-29）**：本文主體寫於雙引擎時期，尚未全文改寫。
-> CBOM（第三引擎 CBOMkit-theia）的設計權威是 **ADR-013**（含決策 1–10 與成功指標），
-> `ScanResult` schema v2 的稽核契約見 **ADR-009 修訂節**。以下各節先以行內註記對齊：
-> §1 管線多一條 `--cbom → cbomkit-theia` 分支；§2 crates 為 6（另有 `-i18n`／`-server`）；
-> §3 子程序編排同樣涵蓋 theia（專用可寫 HOME、逾時、管線併發抽乾、fail-closed，
-> 細節見 `crates/cytrace-core/src/engine.rs` 的文件註解）；§4 資料模型加 `crypto` 區段。
-> 全文改寫見 **ROADMAP T910**（不阻擋 v0.3.0；release 準備複審 major #24 的處置記錄）。
-
 | 欄位 | 內容 |
 |------|------|
 | **文件** | Software Design Specification |
 | **專案** | CyTrace |
-| **版本** | 0.1（草案） |
-| **日期** | 2026-06-24 |
-| **狀態** | Draft |
-| **對應** | SRS（FR-001…010）、ADR-001~007 |
+| **版本** | 0.4 |
+| **日期** | 2026-10-05 |
+| **狀態** | 現行，與 v0.3.x 程式碼對齊 |
+| **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
+
+> **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
+> 現已對齊三引擎（加入 CBOM 引擎 cbomkit-theia，ADR-013）、`ScanResult` schema v2（ADR-009 修訂節）、
+> Web 服務模式（ADR-011／012）與操作者終端 i18n（T912）。
+> 本文描述**設計與契約**；細部行為以程式碼的文件註解為準，各節會指出位置。
 
 ---
 
 ## 1. 架構總覽
 
-CyTrace 為 **Rust Cargo workspace 單體（monolith）CLI**，以子程序呼叫外部引擎，前端報表 build 後內嵌。
+CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引擎，前端在建置期打包成單檔、
+內嵌進 binary。入口有兩個：CLI 子命令，以及 `serve` 的 Web 服務模式。兩者共用同一條掃描管線。
 
 ```
-目標(目錄/映像/FS)
+ 目標（目錄／docker-save tar／OCI layout／檔案系統）
         │
         ▼
-  cytrace-cli (clap: run|scan|report)
-        │  spawn 子程序
-   ┌────┴─────────────┐
-   ▼                  ▼
- Syft            Grype(離線 DB)
- (SBOM)          (CVE 比對)
-   │                  │
- sbom.cdx.json     grype.json
-   └────────┬─────────┘
-            ▼
-   cytrace-core (parser → 統一模型 → severity/風險總評 → --fail-on)
-            ▼
-   cytrace-report (rust-embed 內嵌前端單檔 → 注入資料 → *.report.html)
+ cytrace-cli ── run｜batch｜scan｜report｜serve｜hash-password｜health
+        │                               │
+        │ CLI 直接呼叫                   │ serve → cytrace-server（axum）
+        │                               │   job 佇列 → spawn_blocking
+        ▼                               ▼
+ ┌──────────────── cytrace-core：掃描管線 ─────────────────┐
+ │  engine::sbom   → syft  ──→ CycloneDX JSON（sbom.cdx.json）│
+ │  engine::vuln   → grype ──→ grype JSON（離線 DB）          │
+ │  engine::cbom   → cbomkit-theia ──→ CBOM（僅 --cbom 時）   │
+ │        │                                                  │
+ │  parse → 統一模型 → severity／風險總評 → quantum 判定       │
+ │        → fail-on／量子閘門                                 │
+ └───────────────────────────┬─────────────────────────────┘
+                             ▼
+                 ScanResult（schema v2，ADR-009）
+                             ▼
+ cytrace-report（內嵌單檔樣板 → 注入資料 → *.report.html）
 ```
+
+- CBOM 分支**預設關閉**（ADR-013 決策 4）。開啟後若引擎缺席或失敗，只影響 `crypto` 區段，
+  SBOM 與漏洞結果照常產出。
+- 終端訊息與 API 回應的語言分屬兩套規則（§6、§10）。
 
 ## 2. Workspace crate 切分
 
-| crate | 職責 | 主要依賴（候選） |
-|-------|------|-----------------|
-| `cytrace-types` | 共用領域型別（零依賴）：Component、Vulnerability、Severity、ScanResult、ReportModel。 | serde |
-| `cytrace-core` | 子程序編排、解析（CycloneDX + grype JSON）、嚴重度對映、風險總評、`--fail-on` 判定。 | serde_json, anyhow, thiserror |
-| `cytrace-report` | 內嵌前端單檔樣板、注入資料、輸出 `*.report.html`。 | rust-embed |
-| `cytrace-cli` | `clap` 子命令 `run`/`scan`/`report`、i18n catalog、退出碼。 | clap, anyhow |
+| crate | 職責 | 主要依賴 |
+|-------|------|---------|
+| `cytrace-types` | 共用領域型別，零業務邏輯：`Severity`、`Component`、`Vulnerability`、`Meta`、`ScanResult`、`CryptoInventory`、`CbomStatus`、`QuantumStatus` | serde |
+| `cytrace-core` | 子程序編排（`engine`）、解析（`parse`）、嚴重度與風險總評（`severity`）、量子判定（`quantum`）、閘門（`failon`）、時間格式（`timefmt`）、錯誤分類（`error`） | cytrace-types、serde_json、thiserror |
+| `cytrace-i18n` | 輕量 catalog（`Catalog`、`Localized`、`lang_code`），CLI 與 server 共用；locale 以 `include_str!` 內嵌 | serde_json |
+| `cytrace-report` | 內嵌報表樣板、依注入契約產出單檔 HTML（§7） | cytrace-types、cytrace-core |
+| `cytrace-server` | Web 服務模式：axum 路由、認證、session、job 佇列與落盤、上傳解壓、掛載白名單、TLS、console 靜態檔（§10） | axum、axum-server、tokio、rustls（ring）、argon2、zip／tar／flate2、rust-embed |
+| `cytrace-cli` | clap 子命令、語言解析、終端錯誤渲染、退出碼；feature `server`（預設開啟）納入 `serve`／`hash-password`／`health` | clap、anyhow、cytrace-server（optional） |
 
-> 模組邊界鐵律：解析與評級邏輯只在 `cytrace-core`；型別只在 `cytrace-types`；CLI 不含業務規則。
+模組邊界：
+- 解析、評級與閘門邏輯只住在 `cytrace-core`；型別只住在 `cytrace-types`；CLI 與 server 不含業務規則。
+- 渲染 CBOM 錯誤的邏輯只住在 `cytrace-i18n` 的 `Catalog::render_cbom`，CLI 與 server 共用。
+- `cargo build --no-default-features` 可建出不含 tokio 的純 CLI；CI 驗證這個組合。
 
-## 3. 子程序編排（Syft / Grype）
+## 3. 子程序編排
 
-- 以釘選版本的 Syft/Grype binary 路徑（安裝包內）呼叫；不依賴 PATH 上的任意版本。
-- Grype 強制離線（ADR-003 完整變數集合）：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`（否則 DB 過舊會中止掃描）、`GRYPE_DB_CACHE_DIR`/`--db` 指向安裝包內快照路徑。
-- 子程序失敗（非零退出、找不到 binary、DB 缺失）→ 以 `thiserror` 定義領域錯誤、`anyhow` 串接上下文，CLI 回非 0、非 2 的錯誤碼（與 `--fail-on` 的 2 區隔）。
+三個引擎都經 `cytrace-core::engine` 呼叫。`ScanEngine` trait 讓 server 的整合測試能注入 `FakeEngine`，
+不需要引擎 binary。
 
-## 4. 資料模型（統一）
+### 3.1 版本釘選與取得
+
+- 版本與 SHA256 釘在 `scripts/versions.env`：Syft、Grype、cbomkit-theia。theia 另釘 commit 與建置用的
+  Go image digest。
+- 子程序以名稱呼叫，經 `PATH` 尋找。交付包以 wrapper 把 `PATH` 指向包內 `bin/`，
+  `make package` 對引擎版本設有 fail-hard 閘。容器映像內 PATH 已固定指向釘選版本。
+  **不要假設任意 PATH 上的版本相容**：實測 syft 1.51 預設輸出 CycloneDX 1.7，
+  會讓 grype 0.114 無法解讀（`.asp-fact-check.md` 2026-09-29）。
+- theia 自源碼建置，不採用上游的 release binary（ADR-013 決策 1）。Linux 由 Dockerfile 的
+  theia-builder stage 承接；Windows 版尚未就緒（T911），Windows 包以 `-WithoutCbom` 明示不含 theia。
+
+### 3.2 Syft／Grype
+
+- `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。
+- Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
+  DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
+  不走 stdin。
+- DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，
+  不填假值（ADR-009 修訂節）。
+
+### 3.3 cbomkit-theia（ADR-013 決策 2、10）
+
+- **輸入只接受本地路徑**（`engine::cbom_target`）：
+  - 目錄 → `theia dir <path>`；docker-save tar 或 OCI layout → `theia image <path>`；
+  - 一律先 `canonicalize` 成絕對路徑，並**實際開檔**驗證可讀。理由：theia 解析輸入失敗時，會把字串當成
+    映像參照，回退去找 docker daemon 或 registry——實測會外連，或把本機同名映像當成目標；
+  - 無法在本地判定的形態一律拒絕，不猜測。
+- **環境隔離**：
+  - `env_clear` 後只加回 `HOME`、`TMPDIR`、`PATH`；
+  - 每次呼叫配一個**專用、可寫的 HOME**，在所有離開路徑上都會清理。HOME 不可寫時，theia 會把警告印進
+    stdout、汙染 JSON；併發 job 共用 HOME 會互相干擾。
+- **逾時與抽乾**：
+  - 預設逾時 600 秒，可用 `CYTRACE_CBOM_TIMEOUT_SECS` 覆寫，上限 86,400 秒；這個變數只供除錯，
+    值不合法時退回預設；
+  - stdout 與 stderr 以執行緒**併發抽乾**，避免 pipe 滿載造成死結；
+  - 逾時即終止並收割子程序，不留 zombie；收尾抽乾另有寬限時間，抽不完視為失敗（`cbom.err.drain_timeout`）。
+- **fail-closed**：
+  - stdout 必須通過 `ensure_cbom_json`，空白、非 JSON 或不是 CycloneDX BOM 一律算失敗；
+    **空輸出絕不等於「零資產」**；
+  - `Ok(None)` 只代表引擎缺席（降級）。
+- **未掃描計數**，三者分開記錄，因為處置方式不同：
+  - `unscanned_unreadable`：權限不足，掃描前由 `unreadable_count` 自行清點；
+  - `unscanned_oversize`：theia 自身略過大於 1 MiB 的檔案；
+  - `unscanned_undetermined`：引擎自承偵測到、輸出卻沒有的資產；由 stderr 的計數與輸出比對而得。
+
+### 3.4 錯誤
+
+子程序找不到、非零退出、輸出不合法，一律回 `CytraceError`（§5）。CLI 對應退出碼 1，與門檻觸發的 2 區隔。
+
+## 4. 資料模型（`ScanResult` schema v2）
 
 ```
 ScanResult {
-  schema_version: u32                                              // 稽核產物版本（ADR-009 相容政策）
-  meta: { target, tool_versions{syft,grype}, db_snapshot{version,date}, generated_at }
-  components: [ Component{ name, version, type, licenses[] } ]      // → 軟體產品文件表
-  findings:   [ Vulnerability{ id(CVE), severity, cvss?, component, fixed_version?, source } ]
-  summary:    { counts_by_severity, overall_risk }                  // overall_risk = 最高等級
+  schema_version: u32                       // 目前為 2（cytrace_types::SCHEMA_VERSION）
+  meta: {
+    target, generated_at,
+    tool_versions { syft, grype, theia? },  // theia 僅在 CBOM 完成時填
+    db_snapshot { version, built },         // grype db status 真值；取不到為 "unavailable"
+    scan_identity?                          // 執行掃描的身分（ADR-013 決策 10）
+  }
+  components: [ Component { name, version, type, licenses[] } ]   // → 軟體產品文件表
+  findings:   [ Vulnerability { id, severity, cvss?, component, fixed_version?, source } ]
+  summary:    { counts_by_severity, overall_risk }                // overall_risk = 最高等級
+  crypto?: CryptoInventory {                                     // v1 檔無此欄位 → None
+    status: NotRequested | EngineAbsent | Completed
+          | { Failed: { reason_key, reason_detail? } },
+    assets: [ CryptoAsset { name, asset_type, quantum, weak_key, location,
+                            primitive?, key_size?, not_after? } ],
+    unscanned_unreadable, unscanned_oversize, unscanned_undetermined
+  }
 }
 ```
 
-- 嚴重度 `Severity` 為 enum（Critical/High/Medium/Low/Negligible/Unknown）；對映與雙語標籤鍵見 ADR-006。
-- `report` 子命令可由既有 `ScanResult` JSON **離線重現**報表（稽核複核）。`ScanResult` 為**版本化稽核產物**，
-  新版 `cytrace report` 須能重現舊版 JSON；schema 穩定性與相容政策見 **ADR-009**。
-- `meta.generated_at` 等時間/易變欄位於 golden baseline 比對前正規化或排除（§9、ADR-008）。
+- **`Severity`**：Critical／High／Medium／Low／Negligible／Unknown；對映與雙語標籤鍵見 ADR-006。
+- **`CbomStatus`**：
+  - 「沒開」「引擎不在」「失敗」「完成但 0 項」四種狀態必須可區分；
+  - `reason_key` 是純 i18n 鍵，不夾散文；不可翻譯的細節（路徑、秒數）放在 `reason_detail`，由讀取端依語系渲染。
+- **`QuantumStatus`** 與 **`weak_key`** 是兩條獨立的軸（`cytrace-core::quantum`；ADR-013 決策 6）：
+  - RSA-4096 量子脆弱，但不是弱金鑰；
+  - 規則移植自 cbomkit 的 `quantum_safe.rego`，再補上金鑰長度規則。
+- **信任邊界**（NFR-09）：`assets` 只記存在、型別、長度、路徑等中繼資料，**不含金鑰內容**。
+  約束範圍包含 `ScanResult`、報表、日誌，以及原樣落地的 `cbom.cdx.json`（ADR-013 決策 8）。
+- **相容政策**（ADR-009）：
+  - 新版 `cytrace report` 必須能重建舊版 JSON（v1 缺 `crypto` → `None`，由回歸測試釘住）；
+  - 讀到比本版新的 `schema_version` 時會警告（`cli.schema_ahead`），因為 serde 會略過未知欄位。
+- **非決定性欄位**：`meta.generated_at` 等欄位在比對 golden baseline 前正規化（§9、ADR-008）。
 
-## 5. 錯誤處理（result_type）
+## 5. 錯誤處理
 
-- core 一律 `Result<T, CytraceError>`；serve 啟動路徑與 CLI 的讀寫錯誤為 `Result<_, Localized>`（見下）。`CytraceError`（thiserror）分類：`Engine`（子程序）、`Parse`（JSON）、`Io`、`Config`、`DbMissing`、`Cbom`（純 i18n 鍵 + 不可翻譯細節）。
-- `CytraceError` 的 `Display` 是**語系中立的 ASCII 診斷**（`engine: …`），不給使用者看。使用者可見文字由呼叫端以
-  `i18n_key()`（`server.err.{kind}` 或 `cbom.err.*`）加 `untranslatable_detail()`（路徑、子程序訊息）依語系渲染。
-- serve 啟動錯誤與 CLI 的 I/O 錯誤以 `cytrace_i18n::Localized { key, vars }` 傳遞，鍵分別在 `server.startup.*`、`cli.err.*`。
-- **終端錯誤格式**：stderr 一行 `cli.err.prefix`（「錯誤：…」／“error: …”），內文依上兩條渲染；第三方函式庫與作業系統的訊息原樣附在細節裡（語言由該來源決定）。
-- 退出碼語意：`0` 正常、`2` `--fail-on`（或 `--fail-on-quantum-vulnerable`）觸發、`1` 錯誤——**含參數用法錯誤**
-  （含 `--fail-on` 的值不在 critical／high／medium／low／negligible／unknown 之內，大小寫不拘）
-  （clap 預設的 `2` 會與 `--fail-on` 撞號，故以 `try_parse` 自行決定；`--help`／`--version` 為 `0`）。
+- **兩種錯誤型別**：
+  - core 一律回傳 `Result<T, CytraceError>`（thiserror）；
+  - serve 啟動路徑與 CLI 的讀寫錯誤回傳 `Result<_, Localized>`（`cytrace_i18n::Localized { key, vars }`）。
+- **`CytraceError` 的分類**：`Engine`（子程序）、`Parse`（JSON）、`Io`、`Config`、`DbMissing`、`Cbom`（純 i18n 鍵加不可翻譯細節）。
+- **`CytraceError` 的 `Display` 是語系中立的 ASCII 診斷**（例如 `engine: …`），不給使用者看。
+  使用者看到的文字，由呼叫端以 `i18n_key()` 加 `untranslatable_detail()` 依語系渲染：
+  - `i18n_key()` 回傳 `server.err.{kind}` 或 `cbom.err.*`；
+  - `untranslatable_detail()` 回傳路徑、子程序訊息等不翻譯的細節。
 
-## 6. i18n（CLI 端）
+  server 的 job 錯誤與 CLI 的終端訊息共用同一組對應。
+- **`Localized` 的鍵**：serve 啟動錯誤在 `server.startup.*`，執行期的 job 隔離與落盤警告在 `server.runtime.*`，
+  CLI 的讀寫與解析錯誤在 `cli.err.*`（附檔案路徑）。
+- **終端錯誤格式**：stderr 印一行 `cli.err.prefix`（「錯誤：…」或 “error: …”），內文依上述方式渲染。
+  第三方函式庫與作業系統的訊息原樣附在細節裡，語言由該來源決定。
+- **退出碼**（ADR-006）：
 
-- 載入共用 `locales/{zh-TW,en-US}.json`（與前端同來源）；以 key 取訊息，缺鍵 fallback zh-TW。
-- 語言來源：`--lang` 旗標 > 環境變數 `CYTRACE_LANG` > 預設 zh-TW，全部子命令一致（`--lang` 為全域旗標，可放在子命令前後）。
-  值的正規化與 `Catalog::load` 共用 `cytrace_i18n::lang_code`（`en*` → en-US、`zh*` → zh-TW，不分大小寫）。
-  優先序最高的有值來源不受支援時退回 zh-TW，並以**兩種語言**各印一行警告（不往下一個來源找）；空白的環境變數視同未設。
-- **serve 的操作者語言**同上：啟動錯誤、關閉訊息、執行期的 job 隔離與落盤警告（`server.runtime.*`）都用它。
-  **API 回應的語言不受影響**，仍依 ADR-011 §7 每個請求各自協商（`?lang=` > `Accept-Language` > zh-TW）。
-- clap 的 `--help` 與用法錯誤是函式庫內建英文加 doc comment 中文，尚未在地化（T914）。
-- **共用值契約（ADR-004）**：前端 react-i18next 與 Rust loader 共用「鍵」也共用「值語意」。釘一種插值語法 `{{var}}`，
-  Rust loader 實作同樣的簡單替換；**共用命名空間禁用複數/context/nesting（`_one`/`_other`、`_male`、`$t()`）**，
-  CLI-facing 字串僅用 `{{var}}`。否則鍵雖同步、值會默默發散（前端寫 `{{count}}` 在 CLI 變字面值）。
-- **CI 檢查（NFR-06）**：不只比對鍵集合，還要做**遞迴葉鍵集合 diff**（巢狀命名空間），並 lint 共用值只能用 Rust loader 支援的特性。
-  注意 ASP 內建 `make i18n-check` 只比頂層鍵數量，不足以守住巢狀「無缺鍵」，須 T003 自建專案檢查。
+  | 碼 | 意義 |
+  |---|---|
+  | `0` | 正常；`--help`、`--version` |
+  | `2` | `--fail-on` 或 `--fail-on-quantum-vulnerable` 觸發 |
+  | `1` | 錯誤，含參數用法錯誤（含 `--fail-on` 值不合法）；量子閘門未取得完整結果（fail-closed） |
+
+  - 同時成立時，1 優先於 2：「根本沒掃到」不得被「有弱點」遮蔽；
+  - clap 預設以 2 表示用法錯誤，會與門檻撞號，因此改用 `try_parse` 自行決定退出碼。
+
+## 6. i18n
+
+- **catalog**：
+  - 共用 `locales/{zh-TW,en-US}.json`，前端、CLI、server 讀同一份；以鍵取訊息，缺鍵時退回 zh-TW；
+  - 插值語法只有 `{{var}}`，以名稱全文比對，不去頭尾空白。
+- **共用值契約**（ADR-004）：
+  - 前端 react-i18next 與 Rust loader 共用鍵，也共用值的語意；
+  - 共用命名空間禁用複數、context、nesting（`_one`／`_other`、`_male`、`$t()`）；
+  - 佔位符名稱必須是單純識別字：react-i18next 會去頭尾空白，Rust 不會，寫成 `{{ addr }}` 兩邊會分歧。
+- **操作者語言**（CLI 與 serve 的終端訊息）：
+  - 來源優先序為 `--lang` > `CYTRACE_LANG` > zh-TW，所有子命令一致；`--lang` 是全域旗標，可放在子命令前後；
+  - 正規化共用 `cytrace_i18n::lang_code`：`en*` → en-US、`zh*` → zh-TW，不分大小寫；
+  - 優先序最高、有給值的來源不受支援時，以兩種語言各印一行警告後退回 zh-TW，不往下一個來源找；
+    空白的環境變數視同未設；
+  - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言。
+- **API 回應的語言**不受操作者語言影響，依 ADR-011 §7 每個請求各自協商：`?lang=` > `Accept-Language` > zh-TW。
+- **尚未在地化**：clap 的 `--help` 與用法錯誤（T914）。
+- **機械閘**（NFR-06）：
+  - `scripts/i18n-check.py`：比對兩語的遞迴葉鍵，並確認程式碼引用的鍵都存在；
+  - i18n 棘輪：全部 workspace 成員的生產碼不得有中文字面值，例外逐筆明列；
+  - 插值對帳：程式碼給的變數必須等於兩語的佔位符；
+  - CLI 端到端測試：兩種語言各跑一次，驗 stdout 與 stderr。
 
 ## 7. 報表內嵌與資料注入契約（ADR-009）
 
-- 前端（Vite 單檔內聯）build → 產物 `report-template.html` 置於 `cytrace-report/assets/`。
-- `rust-embed` 於**編譯期**內嵌樣板（唯讀 `&[u8]`）；`report` 於執行期依下列契約注入 `ScanResult` 並輸出單檔：
-  - **注入點**＝樣板 head 內單一 sentinel：`<!--CYTRACE_DATA-->`。
-  - 替換為：`<script id="cytrace-data" type="application/json">{…ScanResult JSON…}</script>`（`type=application/json` 使資料不進 `script-src`）。
-  - 前端以 `JSON.parse(document.getElementById('cytrace-data').textContent)` 讀取。
-  - **跳脫（必須）**：注入前對 JSON 做 `</` → `<\/`、U+2028/U+2029 處理，避免破版/XSS 等價；以 golden 測試驗證含 `</script>` 與 U+2028 的欄位能 round-trip。
-- 報表零外連、字型本地子集化內嵌；CSP 細節見 ADR-005（內聯自身腳本需 `script-src 'unsafe-inline'`，外連以 `connect-src 'none'` 擋）。
+- **樣板**：
+  - 前端以 Vite 單檔內聯建置，產物 `report-template.html` 放在 `crates/cytrace-report/assets/`，
+    於編譯期內嵌；
+  - 內嵌產物必須與 `frontend/src` 同步：locale 一改就要重產。CI 的「產物與源碼同步」步驟把關，
+    本機的 make 目標不含這項檢查。
+- **注入點**：樣板 head 內只有一個 sentinel `<!--CYTRACE_DATA-->`，替換為
+  `<script id="cytrace-data" type="application/json">{…ScanResult…}</script>`。
+  `type=application/json` 讓資料不受 `script-src` 管轄。
+- **跳脫**：注入前把 `</` 換成 `<\/`，U+2028／U+2029 換成 ` `／` `；
+  golden 測試驗證含 `</script>` 與 U+2028 的欄位能 round-trip。
+- **前端讀取**：`JSON.parse(document.getElementById('cytrace-data').textContent)`。
+  schema v2 的 `crypto` 欄位缺漏時視為未請求，所以 v1 JSON 照樣能渲染。
+- **零外連**：字型本地子集化後內嵌；CSP 以 `connect-src 'none'` 擋外連，
+  內聯腳本需要 `script-src 'unsafe-inline'`（ADR-005）。
 
 ## 8. 建置與交付
 
-- 目標 triple：`x86_64-unknown-linux-musl`（靜態連結、零 runtime）——此為**預設假設，未向驗收單位驗證**（SRS §6、ADR-007）。
-  若目標機為 Windows / arm64 / 國產 Linux（麒麟、UOS、RHEL clone），須同時 cross-compile Rust binary 與重建隨附的 Syft/Grype Go binary，並重新檢視 ADR-001 的 musl 靜態價值主張（musl 限 Linux）。
-- 釘選 `rust-toolchain.toml`、`Cargo.lock`、引擎版本與 DB 快照（ADR-007）。
-- 可重現建置；release 產 `SHA256SUMS` + 簽章 + 自產 SBOM。
+- **兩種交付形態**：
+  - 離線安裝包（`make package` 產 Linux 包，`scripts/package.ps1` 產 Windows 包）：
+    binary、釘選引擎、grype DB 快照、NOTICE、CHANGELOG、`SHA256SUMS`；
+  - 容器映像（ADR-012，主要交付形態），見 docs/DOCKER.md。
+- **建置目標**：Linux 為 `x86_64-unknown-linux-musl` 靜態連結；Windows 為 `x86_64-pc-windows-msvc`。
+  TLS crypto provider 用 ring，兩個平台都能建，不需要 cmake。
+- **釘選與可重現**：`rust-toolchain.toml`、`Cargo.lock`、`scripts/versions.env`（引擎版本與 SHA256）、
+  grype DB 快照（ADR-007）。
+- **建置期檢查**：`build.rs` 讀 `versions.env` 的 `THEIA_VERSION`；值有任何歧義就讓建置失敗。
+  shell 端以相同規則對帳（`scripts/check-theia-version.sh`）。
+- **供應鏈**：
+  - `cargo deny check` 檢查授權、來源白名單、禁止清單、advisories，CI 每次抓最新的 RustSec DB（T913）；
+  - NOTICE 由 `scripts/notice-parity-check.py` 對帳。
 
 ## 9. 測試策略
 
-- 單元：嚴重度對映、風險總評、`--fail-on` 退出碼、解析器（樣本 grype/CycloneDX JSON）。
-- 整合：`scan`/`report` 端到端（以釘選引擎與樣本目標）。
-- 回歸：golden baseline（釘選引擎版本下輸出快照比對；升級才更新 baseline）——策略由 **ADR-008** 擁有。
-- **非決定性欄位**：比對 baseline 前正規化或排除 `ScanResult.meta.generated_at` 等時間/易變欄位，否則同輸入每次跑都會因時間戳造成假性 diff（ADR-008/ADR-009）。
-- 覆蓋率目標 ≥ 80%（NFR-07）。
-- **Web 服務（`cytrace-server`）**：`tower::ServiceExt::oneshot` 整合測試（不開真實 socket、注入 `FakeEngine` 免引擎 binary）——認證生命週期、節流、CSRF、上傳惡意壓縮包（zip-slip/symlink/bomb）、path traversal、job 狀態機與重啟恢復、console 服務與 CSP。
+- **單元**：嚴重度對映、風險總評、閘門退出碼、解析器、量子判定、theia 輸入轉譯與輸出檢查。
+- **golden baseline**（ADR-008）：在釘選的引擎版本下比對輸出快照，升級引擎才更新 baseline。
+  非決定性欄位先正規化。
+- **CLI 端到端**（`crates/cytrace-cli/tests`，unix）：
+  - 以 shim 假扮引擎，驗退出碼語意（`gates.rs`）；
+  - 驗操作者終端訊息的語言、無裸鍵、無殘留佔位符（`operator_lang.rs`）；
+  - 含 serve 的實際起停，以及沒有 tty 時的 `hash-password`。
+- **真引擎整合測試**（`make test-real-engine`，CI 獨立 job）：以真的 theia 跑各種輸入形態，驗 CBOM 的
+  降級與失敗語意。
+- **Web 服務**（`cytrace-server`）：以 `tower::ServiceExt::oneshot` 做整合測試，不開真實 socket，注入
+  `FakeEngine`。涵蓋：
+  - 認證生命週期、節流、CSRF；
+  - 惡意壓縮包（zip-slip、symlink、bomb）、path traversal；
+  - job 狀態機與重啟恢復；
+  - 錯誤格式與語系協商、console 與 CSP。
+- **前端**：typecheck；以 AST 檢查 console 的語系與 API 路徑規則；檢查 CBOM 成因渲染與 server 共用 fixture；
+  零外連檢查。
 
-## 10. Web 服務模式（`serve`；ADR-011）
+## 10. Web 服務模式（`serve`；ADR-011／012）
 
-- **crate**：`cytrace-server`（lib，axum/tokio）+ cli feature `server`（default on，`--no-default-features` 可退零 tokio 純 CLI）。`engine`/`i18n`/`timefmt` 已由 cli 前置重構搬至 `cytrace-core`/`cytrace-i18n`（SDS §2 歸位）。
-- **執行模型**：`serve` 自建 tokio runtime（`main()` 保持同步）；掃描管線同步、經 `spawn_blocking` 隔離；`Semaphore` 限併發；請求路徑禁 panic（`panic=abort` crash-only，clippy `unwrap_used` deny）。
-- **認證**：單一管理帳號（argon2id PHC、`CYTRACE_ADMIN_PASSWORD_HASH` 缺失拒啟動）；in-memory session（token SHA-256 存端、cookie HttpOnly/SameSite=Strict/TLS 時 Secure、TTL 12h）；登入節流 + CSRF（自訂標頭 + 無 CORS）。TLS 自帶 PEM（rustls/ring）。
-- **Job 模型**：無資料庫，`{data_dir}/jobs/<id>/` 檔案系統為狀態真相（job.json 原子落盤）；重啟非終態→`interrupted`。
-- **輸入**：上傳（multipart 串流 + zip/tar/tar.gz 三道解壓防護）+ 掛載目錄白名單（語彙檢查 + canonicalize 前綴驗證）。
-- **API**：`/api/v1`（session/targets/jobs/upload/report/result/artifacts/version）+ `/healthz`；錯誤格式 `{error:{kind,i18n_key,message,detail}}` 沿用 `CytraceError` 分類；訊息走 locales（`server.*`）。
-- **前端 console**：雙 Vite config（與報表樣板分離）、hash routing、rust-embed 內嵌服務；CSP header 硬化（report 端點自帶較寬 CSP 不被覆蓋）。
-- **交付**：容器（ADR-012）為主要交付形態；見 docs/DOCKER.md、DELIVERY_SOP §7。
+- **執行模型**：
+  - `serve` 自建 tokio runtime，`main()` 保持同步；
+  - 掃描管線是同步的，經 `spawn_blocking` 隔離，以 `Semaphore` 限制併發；
+  - 請求路徑禁止 panic（`panic=abort` 的 crash-only 設計，clippy 對 `unwrap_used` 設 deny）；
+  - Ctrl-C 的處理在綁定位址之前就同步註冊。SIGTERM 的優雅關閉尚未處理（T915）。
+- **設定**（`ServerConfig::resolve`）：
+  - 優先序為旗標 > 環境變數 > 預設，函式本身是純函式；
+  - 環境變數經 `Env` 收集：值不是 UTF-8 的變數只記名字，`resolve` **讀到它時**才回傳指名該變數的錯誤；
+    旗標已覆寫的變數不會被讀。
+- **認證**：
+  - 單一管理帳號，密碼以 argon2id PHC 保存；缺少 `CYTRACE_ADMIN_PASSWORD_HASH` 時拒絕啟動；
+  - session 存在記憶體，token 以 SHA-256 雜湊保存；cookie 設 HttpOnly 與 SameSite=Strict，啟用 TLS 時加 Secure；
+    TTL 預設 12 小時；
+  - 登入節流；CSRF 以自訂標頭防護，且不開 CORS。
+- **TLS**：自帶 PEM，以 axum-server（`tls-rustls-no-provider`）加 ring 實作；不支援 ACME，零外連。
+- **Job 模型**：
+  - 沒有資料庫，`{data_dir}/jobs/<id>/` 的檔案系統就是狀態真相；`job.json` 以暫存檔加 rename 原子落盤；
+  - 重啟時，非終態的 job 標為 `interrupted`；損毀的記錄改名為 `.corrupt` 隔離，改名成功才回報。
+- **輸入**：
+  - 上傳：multipart 串流，zip／tar／tar.gz 有三道解壓防護；
+  - 掛載目錄白名單：先做語彙檢查，再以 canonicalize 加前綴驗證擋 symlink 逃逸。
+- **API**：
+  - 路徑：`/api/v1` 下的 session、targets、jobs、upload、report、result、artifacts、version，加上 `/healthz`；
+  - 錯誤格式為 `{error:{kind,i18n_key,message,detail}}`。`message` 依請求語系渲染，`detail` 是不翻譯的原始資訊；
+    job 失敗的 `message` 走與 console 共用 fixture 的退回鏈。
+  - ADR-011 寫的「路徑違規記稽核 log」與實作不符，待處理（T916）。
+- **前端 console**：
+  - 與報表樣板各自一份 Vite config，採 hash routing，以 rust-embed 內嵌；
+  - CSP header 硬化；report 端點自帶較寬的 CSP，不會被覆蓋。
+- **交付**：容器為主，見 docs/DOCKER.md 與 DELIVERY_SOP §7。

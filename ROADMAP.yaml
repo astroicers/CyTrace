@@ -957,7 +957,7 @@ milestones:
         spec: null
         srs_ref: NFR-03
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: review
         source_ref: "v0.3.0 release 準備複審 major #24（2026-09-29）"
@@ -970,6 +970,11 @@ milestones:
           本票即為該承諾的承接（此前只寫了「另開票」卻沒開，是沒有承接的宣稱）。
           範圍：§1 架構圖含 theia 分支、§2 六個 crate、§3 theia 子程序編排（專用 HOME、
           逾時、併發抽乾、fail-closed）、§4 資料模型 crypto 區段、§7 注入契約 v2。
+
+          **結案（2026-10-05）**：docs/SDS.md 全文改寫為 v0.4。取代 0.1 草案與 v0.3.0 檔頭增補；§1–§10 對齊三引擎、
+          schema v2、Web 服務模式與 T912／T913 的現況，版本號一律指向 `scripts/versions.env`，不在 SDS 另抄一份。
+          順帶更正舊稿兩處與實作不符的說法：「不依賴 PATH」實際是經 PATH 由交付包 wrapper 指向包內 bin；
+          以及 §2 的依賴欄。
 
       - id: T911
         title: "Windows 交付包納入 CBOM 引擎（theia GOOS=windows 交叉編譯資產）"
