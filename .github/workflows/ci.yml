@@ -70,13 +70,19 @@ jobs:
         run: make test-real-engine
 
   supply-chain:
-    name: 供應鏈（cargo-deny：license / 來源白名單）
+    name: 供應鏈（cargo-deny：license / 來源白名單 / advisories）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses sources bans
+      # advisories 另一步驟：失敗時一眼看出是哪一類。CI 有網路，每次抓最新的 RustSec DB；
+      # 新公告可能讓與它無關的 PR 轉紅——處置是升級、或在 deny.toml 以理由明列豁免（T913）。
+      # 先前只跑上面那一步，4 則既有依賴的 advisory 從未在 CI 出現。
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
 
   frontend:
     name: 前端（typecheck + 報表/console build + 零外連）

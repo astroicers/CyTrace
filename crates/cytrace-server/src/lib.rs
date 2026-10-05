@@ -48,7 +48,7 @@ pub fn serve(mut cfg: ServerConfig, lang: &str) -> Result<(), Localized> {
 
         let app =
             router::build_router(cfg.clone())?.into_make_service_with_connect_info::<SocketAddr>();
-        let handle = axum_server::Handle::new();
+        let handle = axum_server::Handle::<SocketAddr>::new();
 
         // 中止訊號 → graceful shutdown（10s 寬限）
         tokio::spawn({

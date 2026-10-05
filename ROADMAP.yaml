@@ -1035,7 +1035,7 @@ milestones:
         spec: null
         srs_ref: NFR-05
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: review
         source_ref: "T909 第四輪複審時 `cargo deny check advisories` 實跑（2026-10-01）"
@@ -1055,6 +1055,11 @@ milestones:
           依「穩定優先」，逐則評估可達性與升級成本後刻意處置（升級、或在 deny.toml 以理由豁免），
           升級須重跑 golden 與 real_engine；之後把 advisories 加進 CI，並決定離線 advisory DB 的來源與更新方式
           （CI 有網路，交付環境沒有）。
+
+          **結案（2026-10-05）**：以 `--precise` 升到最低修補版——anyhow 1.0.103、h2 0.4.16、rustls 0.23.45
+          （連帶 rustls-webpki 0.103.15）、spin 0.9.9；axum-server 0.7 → 0.8 以去除 rustls-pemfile（唯一 API 差異：
+          `Handle` 改以位址型別為泛型參數）。CI 供應鏈 job 新增 `check advisories`，每次抓最新 RustSec DB。
+          TLS 以自簽憑證手動實測（自動化測試沒有 TLS 情境）。
 
       - id: T914
         title: "CLI --help 與 clap 用法錯誤的在地化"
