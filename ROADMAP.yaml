@@ -1186,6 +1186,36 @@ milestones:
           `lng: DEFAULT_LANG`、或拿掉 `initialLang` 的白名單，對應測試各自轉紅（實測）。
           獨立複審一輪（NEEDS_WORK：ADR-009 未記修訂、三處測試缺口、SDS §6）後修正。
 
+      - id: T919
+        title: "SBOM 另輸出 SPDX 2.3（FR-001 備用格式）；控制台提供產物下載"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-002
+        spec: null
+        srs_ref: FR-001
+        depends_on: [T918]
+        status: completed
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "v0.4.0 文件對齊時 SRS 標註「SPDX 輸出未實作」（2026-10-05）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-05"
+        description: |
+          FR-001 要求 CycloneDX（主）與 SPDX（備），ADR-002 的成功指標寫「CycloneDX + SPDX 可輸出、以標準
+          驗證器檢查」，但只實作了 CycloneDX。另外控制台只提供報表與 ScanResult 下載，SBOM 檔本身（交件主物）
+          只能經 API 取得。
+
+          **結案（2026-10-05）**：同一次 syft 執行以 `-o cyclonedx-json -o spdx-json=<檔>` 產出兩種格式
+          （`engine::sbom_with_spdx`），SPDX 不是 JSON 或缺 `spdxVersion` 即 fail-closed。CLI `scan --spdx`
+          另寫 `sbom.spdx.json`（預設關閉，既有產物不變）；web 模式一律附上，產物端點新增 `spdx` 並以附件
+          下載（帶檔名），單筆 job 查詢回報實際存在的產物（`artifacts`），控制台據此列出下載連結
+          （CycloneDX、SPDX、Grype、CBOM），刪除按鈕改為獨立一列。釘選版 syft 1.45.1 實測輸出 SPDX-2.3，
+          以官方 2.3 JSON schema 驗證零違規（.asp-fact-check.md）。真引擎 CI job 自 Dockerfile engines stage
+          取出釘選 syft，驗兩種格式的套件集合一致。測試：validate_spdx 單元、CLI 端到端（成功、預設不產、
+          syft 未寫檔與寫錯格式時 fail-closed 且不留半套產物，兩語）、server（清單、附件、引擎不產 SPDX 時
+          清單不列且 404）、真引擎。實跑 server + Playwright：控制台列出三個下載連結，SPDX 下載檔名正確。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

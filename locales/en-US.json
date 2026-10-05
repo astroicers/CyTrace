@@ -76,7 +76,8 @@
         "scan": {
           "target": "Scan target (directory, container image tar, or filesystem)",
           "out_dir": "Output directory (default: current directory)",
-          "cbom": "Also inventory cryptographic assets (CBOM; off by default)"
+          "cbom": "Also inventory cryptographic assets (CBOM; off by default)",
+          "spdx": "Also write the SBOM in SPDX 2.3 format (sbom.spdx.json; off by default)"
         },
         "report": {
           "input": "Path to the ScanResult JSON",
@@ -243,7 +244,11 @@
       "cancel": "Cancel scan",
       "delete": "Delete scan",
       "running_hint": "Scan in progress; this will update automatically…",
-      "counts": "Counts by severity"
+      "counts": "Counts by severity",
+      "download_sbom": "Download SBOM (CycloneDX)",
+      "download_spdx": "Download SBOM (SPDX)",
+      "download_grype": "Download vulnerability matches (Grype)",
+      "download_cbom": "Download CBOM"
     },
     "reports": {
       "title": "Reports",

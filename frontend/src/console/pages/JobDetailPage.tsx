@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { describeJobError } from '../jobError'
 import { api, artifactUrl } from '../api/client'
-import type { JobRecord } from '../api/types'
+import type { ArtifactKind, JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
 import { StatusBadge } from '../components/StatusBadge'
 import { SeverityBadge } from '../../components/ui'
@@ -9,6 +9,14 @@ import { SEVERITY_ORDER, SEVERITY_KEY } from '../../types'
 import { navigate } from '../router'
 import { fmtTime } from '../format'
 import { effectiveLang } from '../../langs'
+
+/** 產物下載連結的文字（鍵寫成字面值，i18n-check 才查得到）。 */
+const ARTIFACT_LABEL: Record<ArtifactKind, string> = {
+  sbom: 'console.job.download_sbom',
+  spdx: 'console.job.download_spdx',
+  grype: 'console.job.download_grype',
+  cbom: 'console.job.download_cbom',
+}
 
 // 非終態 → 2s 輪詢；終態停止。
 function interval(job: JobRecord | null): number {
@@ -155,9 +163,22 @@ export function JobDetailPage({ id }: { id: string }) {
             >
               {t('console.job.download_result')}
             </a>
+            {/* 只列實際存在的產物（server 回報）；升級前的 job 沒有 SPDX，不給點了才 404 的按鈕 */}
+            {(job.artifacts ?? []).map((kind) => (
+              <a
+                key={kind}
+                href={artifactUrl.artifact(id, kind)}
+                className="rounded border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
+              >
+                {t(ARTIFACT_LABEL[kind])}
+              </a>
+            ))}
           </>
         )}
-        {(canCancel || canDelete) && (
+      </div>
+      {/* 破壞性操作獨立一列：下載連結變多後會換行，混在同一列時位置不固定、容易誤按 */}
+      {(canCancel || canDelete) && (
+        <div className="mt-6">
           <button
             type="button"
             onClick={() => void remove()}
@@ -165,8 +186,8 @@ export function JobDetailPage({ id }: { id: string }) {
           >
             {t(canCancel ? 'console.job.cancel' : 'console.job.delete')}
           </button>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   )
 }

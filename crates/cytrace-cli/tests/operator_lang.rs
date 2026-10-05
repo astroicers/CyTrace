@@ -188,9 +188,14 @@ impl Sandbox {
     }
 
     fn shim(&self, name: &str, fixture: &str) {
+        self.shim_script(name, &format!("cat {FIXTURES}/{fixture}\n"));
+    }
+
+    /// 自訂 shim 內容（`#!/bin/sh` 之後的部分）。
+    fn shim_script(&self, name: &str, body: &str) {
         let p = self.dir.join("bin").join(name);
         let _w = writing();
-        fs::write(&p, format!("#!/bin/sh\ncat {FIXTURES}/{fixture}\n")).unwrap();
+        fs::write(&p, format!("#!/bin/sh\n{body}")).unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     }
 
@@ -1092,6 +1097,69 @@ fn report_opens_in_generation_language() {
             let o = sb.run(&args, env);
             assert_eq!(o.code, 0, "{sub} {args:?}：{}", o.stderr);
             assert_eq!(html_lang(&out), *want, "{sub} {args:?} env={env:?}");
+        }
+    }
+}
+
+/// `scan --spdx`：SPDX（備）與 CycloneDX 出自同一次 syft 執行，寫成 `sbom.spdx.json`（FR-001；T919）。
+/// syft shim 模擬真實行為：stdout 給 CycloneDX，`-o spdx-json=<檔>` 寫檔。
+/// 失敗必須 fail-closed：SPDX 缺檔或內容不是 SPDX 時整個 scan 失敗，且不留下半套產物。
+#[test]
+fn scan_spdx_writes_both_formats_or_fails_closed() {
+    let sb = Sandbox::new("spdx");
+    sb.shim("grype", "grype.json");
+    let target = sb.path("target");
+    let spdx_from = |src: &str| {
+        format!(
+            "for a in \"$@\"; do case \"$a\" in spdx-json=*) cp {src} \"${{a#spdx-json=}}\";; esac; done\n\
+             cat {FIXTURES}/cyclonedx.json\n"
+        )
+    };
+
+    // 正常：兩份 SBOM 都在，SPDX 原樣落地
+    sb.shim_script("syft", &spdx_from(&format!("{FIXTURES}/spdx.json")));
+    let out = sb.path("ok");
+    fs::create_dir_all(&out).unwrap();
+    let o = sb.run(&["scan", &target, "--spdx", "-o", &out], &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        fs::read_to_string(format!("{out}/sbom.spdx.json")).unwrap(),
+        fs::read_to_string(format!("{FIXTURES}/spdx.json")).unwrap()
+    );
+    assert!(fs::metadata(format!("{out}/sbom.cdx.json")).is_ok());
+
+    // 未要求：不產 SPDX（預設行為不變）
+    let out = sb.path("default");
+    fs::create_dir_all(&out).unwrap();
+    let o = sb.run(&["scan", &target, "-o", &out], &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(fs::metadata(format!("{out}/sbom.spdx.json")).is_err());
+    assert!(fs::metadata(format!("{out}/sbom.cdx.json")).is_ok());
+
+    // fail-closed：syft 沒寫 SPDX 檔／寫的不是 SPDX
+    for (case, script) in [
+        ("missing", format!("cat {FIXTURES}/cyclonedx.json\n")),
+        ("not-spdx", spdx_from(&format!("{FIXTURES}/cyclonedx.json"))),
+    ] {
+        sb.shim_script("syft", &script);
+        let out = sb.path(case);
+        fs::create_dir_all(&out).unwrap();
+        let (en, zh) = both_langs(
+            &sb,
+            &["scan", &target, "--spdx", "-o", &out],
+            &[],
+            1,
+            "spdx",
+            "spdx",
+        );
+        for o in [&en, &zh] {
+            assert!(o.stderr.contains("spdx-json"), "{case}：{}", o.stderr);
+        }
+        for f in ["sbom.cdx.json", "sbom.spdx.json", "grype.json"] {
+            assert!(
+                fs::metadata(format!("{out}/{f}")).is_err(),
+                "{case}：失敗時不得留下 {f}"
+            );
         }
     }
 }

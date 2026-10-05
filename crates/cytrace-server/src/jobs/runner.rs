@@ -134,9 +134,14 @@ fn run_pipeline(
     cbom: bool,
     lang: Lang,
 ) -> cytrace_core::error::Result<(Summary, bool)> {
-    let sbom = engine.sbom(target)?;
+    // SPDX（備；FR-001）與 CycloneDX 出自同一次 syft 執行，web 模式一律附上（T919）——
+    // 下載哪一種由使用者在 console 選，不必在送出時先決定
+    let (sbom, spdx) = engine.sbom_with_spdx(target)?;
     let grype = engine.vuln(&sbom)?;
     std::fs::write(job_dir.join("sbom.cdx.json"), &sbom)?;
+    if let Some(s) = &spdx {
+        std::fs::write(job_dir.join("sbom.spdx.json"), s)?;
+    }
     std::fs::write(job_dir.join("grype.json"), &grype)?;
 
     // CBOM 失敗只影響 crypto 區段，不中止 job（ADR-013 決策 4）

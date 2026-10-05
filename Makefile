@@ -55,6 +55,7 @@ test:
 # 用 fixture 與 fake engine 一個都測不到——連我們自己寫的 fixture 都在說謊。
 test-real-engine:
 	@command -v cbomkit-theia >/dev/null || { echo "✗ 找不到 cbomkit-theia；先跑 scripts/build-theia.sh"; exit 1; }
+	@command -v syft >/dev/null || { echo "✗ 找不到 syft（SPDX 案例需要；版本見 scripts/versions.env）"; exit 1; }
 	@# 案例缺工具時會 panic（本層不接受靜默略過），故前置一併檢查以給出清楚訊息
 	@for t in openssl ssh-keygen mkfifo; do 		command -v $$t >/dev/null || { echo "✗ 找不到 $$t（真引擎案例需要）"; exit 1; }; 	done
 	cargo test -p cytrace-core --test real_engine -- --ignored

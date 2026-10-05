@@ -723,3 +723,54 @@ fn stderr_is_actually_drained_on_the_normal_path() {
         "自承私鑰數須取自 stderr 的 Found N private key(s)"
     );
 }
+
+/// SPDX（備）與 CycloneDX（主）出自同一次 syft 編目（FR-001；ADR-002；T919）。
+///
+/// fake engine 驗不到的部分：釘選版 syft 真的接受 `-o spdx-json=<檔>` 的多重輸出、
+/// 寫出的是 SPDX 2.3，而且兩種格式的套件集合一致——交件時兩份 SBOM 說法不一，
+/// 比少一份更糟。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn spdx_and_cyclonedx_describe_the_same_packages() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("spdx");
+    fs::write(
+        dir.join("requirements.txt"),
+        "requests==2.31.0\nurllib3==2.0.7\n",
+    )
+    .unwrap();
+
+    let (cdx, spdx) = engine::sbom_with_spdx(&format!("dir:{}", dir.display()))
+        .expect("syft 應同時產出 CycloneDX 與 SPDX");
+    let spdx: serde_json::Value = serde_json::from_str(&spdx).unwrap();
+    let cdx: serde_json::Value = serde_json::from_str(&cdx).unwrap();
+    assert_eq!(spdx["spdxVersion"], "SPDX-2.3", "{spdx}");
+
+    let names = |v: &serde_json::Value, key: &str| -> std::collections::BTreeSet<String> {
+        v[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| key == "packages" || p["type"] == "library")
+            .filter_map(|p| p["name"].as_str().map(String::from))
+            .collect()
+    };
+    let libs = names(&cdx, "components");
+    let pkgs = names(&spdx, "packages");
+    // 非空：沒抓到套件時「子集合」恆真，不含資訊
+    assert!(
+        libs.contains("requests") && libs.contains("urllib3"),
+        "{libs:?}"
+    );
+    assert!(
+        libs.is_subset(&pkgs),
+        "CycloneDX 有、SPDX 沒有：{:?}",
+        libs.difference(&pkgs)
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

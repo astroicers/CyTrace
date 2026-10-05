@@ -19,6 +19,14 @@ pub trait ScanEngine: Send + Sync {
     /// 對 SBOM（CycloneDX JSON）比對 CVE，回傳 grype JSON。
     fn vuln(&self, sbom_cyclonedx_json: &str) -> Result<String>;
 
+    /// 同一次掃描產 CycloneDX（主）與 SPDX 2.3 JSON（備）（FR-001；ADR-002）。
+    ///
+    /// 預設實作只產 CycloneDX、SPDX 回 `None`，使既有 fake 引擎無須改動（測試縫相容）；
+    /// [`RealEngine`] 以單次 syft 執行同時輸出兩種格式，不為 SPDX 再掃一次。
+    fn sbom_with_spdx(&self, target: &str) -> Result<(String, Option<String>)> {
+        Ok((self.sbom(target)?, None))
+    }
+
     /// 對目標產生 CycloneDX CBOM（ADR-013）。
     ///
     /// **降級語意**（決策 4）：引擎 binary 不存在 → `Ok(None)`（不影響 SBOM/CVE 主流程）；
@@ -41,6 +49,9 @@ impl ScanEngine for RealEngine {
     fn vuln(&self, sbom_cyclonedx_json: &str) -> Result<String> {
         vuln(sbom_cyclonedx_json)
     }
+    fn sbom_with_spdx(&self, target: &str) -> Result<(String, Option<String>)> {
+        sbom_with_spdx(target).map(|(cdx, spdx)| (cdx, Some(spdx)))
+    }
     fn cbom(&self, target: &str) -> Result<Option<CbomOutput>> {
         cbom(target)
     }
@@ -53,6 +64,41 @@ pub fn sbom(target: &str) -> Result<String> {
         .output()
         .map_err(|e| CytraceError::Engine(format!("syft: {e}")))?;
     check(out, "syft")
+}
+
+/// 單次 syft 執行同時產 CycloneDX JSON（stdout）與 SPDX 2.3 JSON（寫入暫存檔後讀回）。
+///
+/// syft 的多重輸出語法 `-o <格式>=<檔案>`；兩種格式出自同一次編目，元件集合一致，
+/// 不必為 SPDX 再掃一次。SPDX 輸出若缺檔、不是 JSON、或沒有 `spdxVersion`，一律視為
+/// 引擎錯誤（fail-closed）——交件的 SBOM 不能是半成品。
+pub fn sbom_with_spdx(target: &str) -> Result<(String, String)> {
+    let spdx_path = unique_temp_path("cytrace-spdx").with_extension("spdx.json");
+    let out = Command::new("syft")
+        .args(["scan", target, "-o", "cyclonedx-json", "-o"])
+        .arg(format!("spdx-json={}", spdx_path.display()))
+        .arg("-q")
+        .output();
+    let spdx = std::fs::read_to_string(&spdx_path);
+    let _ = std::fs::remove_file(&spdx_path);
+    let cdx = check(
+        out.map_err(|e| CytraceError::Engine(format!("syft: {e}")))?,
+        "syft",
+    )?;
+    let spdx = spdx.map_err(|e| CytraceError::Engine(format!("syft spdx-json: {e}")))?;
+    validate_spdx(&spdx)?;
+    Ok((cdx, spdx))
+}
+
+/// SPDX JSON 的最低限度檢查：可解析，且 `spdxVersion` 以 `SPDX-` 起頭。
+pub fn validate_spdx(spdx: &str) -> Result<()> {
+    let v: serde_json::Value = serde_json::from_str(spdx)
+        .map_err(|e| CytraceError::Engine(format!("syft spdx-json: not JSON: {e}")))?;
+    match v.get("spdxVersion").and_then(|s| s.as_str()) {
+        Some(s) if s.starts_with("SPDX-") => Ok(()),
+        other => Err(CytraceError::Engine(format!(
+            "syft spdx-json: unexpected spdxVersion {other:?}"
+        ))),
+    }
 }
 
 /// 以 Grype 對 SBOM（CycloneDX JSON）比對 CVE，回傳 grype JSON。離線設定已內建。
@@ -745,6 +791,22 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_spdx_accepts_spdx_documents_only() {
+        assert!(validate_spdx(r#"{"spdxVersion":"SPDX-2.3","packages":[]}"#).is_ok());
+        // fail-closed：不是 JSON、缺版本欄位、拿到 CycloneDX（版本欄位名不同）都是錯誤
+        for bad in [
+            "",
+            "not json",
+            r#"{"packages":[]}"#,
+            r#"{"spdxVersion":2.3}"#,
+            r#"{"bomFormat":"CycloneDX","specVersion":"1.6"}"#,
+        ] {
+            let err = validate_spdx(bad).unwrap_err();
+            assert!(matches!(err, CytraceError::Engine(_)), "{bad:?}");
+        }
+    }
 
     /// 序列化所有改動**行程全域 cwd** 的測試。
     ///

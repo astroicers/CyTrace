@@ -60,6 +60,8 @@ enum Command {
         out_dir: Option<PathBuf>,
         #[arg(long)]
         cbom: bool,
+        #[arg(long)]
+        spdx: bool,
     },
     Report {
         input: PathBuf,
@@ -252,12 +254,22 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
             target,
             out_dir,
             cbom,
+            spdx,
         } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
             println!("{}", cat.t("cli.scanning", &[("target", target)]));
-            let sbom = engine::sbom(target)?;
+            // SPDX（備；FR-001）與 CycloneDX 出自同一次 syft 執行
+            let (sbom, spdx_json) = if *spdx {
+                let (cdx, s) = engine::sbom_with_spdx(target)?;
+                (cdx, Some(s))
+            } else {
+                (engine::sbom(target)?, None)
+            };
             let grype = engine::vuln(&sbom)?;
             write_file(&dir.join("sbom.cdx.json"), &sbom)?;
+            if let Some(s) = &spdx_json {
+                write_file(&dir.join("sbom.spdx.json"), s)?;
+            }
             write_file(&dir.join("grype.json"), &grype)?;
             if *cbom {
                 // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物

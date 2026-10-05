@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### 新增
+
+- SBOM 可另以 SPDX 2.3 格式輸出（T919）：`cytrace scan --spdx` 另寫 `sbom.spdx.json`（預設關閉）。
+  Web 控制台的掃描一律附上 SPDX，任務詳情頁可下載 SBOM（CycloneDX、SPDX）、弱點比對結果與 CBOM。
+  兩種格式出自同一次掃描，元件一致。
+
 ### 變更
 
 - 報表改以產生時的語言開啟（T918）。命令列依 `--lang`（或 `CYTRACE_LANG`）決定；Web 控制台依送出掃描時的

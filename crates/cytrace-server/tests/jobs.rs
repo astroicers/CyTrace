@@ -24,6 +24,7 @@ use tower::util::ServiceExt;
 const CYCLONEDX: &str = include_str!("../../cytrace-core/tests/fixtures/cyclonedx.json");
 const GRYPE: &str = include_str!("../../cytrace-core/tests/fixtures/grype.json");
 const CBOM: &str = include_str!("../../cytrace-core/tests/fixtures/cbom.json");
+const SPDX: &str = include_str!("../../cytrace-core/tests/fixtures/spdx.json");
 
 const TEST_PASSWORD: &str = "test-password-123";
 static TEST_PHC: LazyLock<String> = LazyLock::new(|| hash_password(TEST_PASSWORD).unwrap());
@@ -33,6 +34,9 @@ struct FakeEngine;
 impl ScanEngine for FakeEngine {
     fn sbom(&self, _target: &str) -> CoreResult<String> {
         Ok(CYCLONEDX.into())
+    }
+    fn sbom_with_spdx(&self, _target: &str) -> CoreResult<(String, Option<String>)> {
+        Ok((CYCLONEDX.into(), Some(SPDX.into())))
     }
     fn vuln(&self, _sbom: &str) -> CoreResult<String> {
         Ok(GRYPE.into())
@@ -1567,4 +1571,86 @@ async fn t918_report_opens_in_submitting_request_language() {
     let done = wait_terminal(&env.app, &cookie, &id).await;
     assert_eq!(done["status"], "done", "{done}");
     assert_eq!(html_lang(&id), "en-US", "上傳路徑");
+}
+
+/// web 模式一律附 SPDX（FR-001；T919）：單筆查詢回報實際存在的產物，產物端點以附件下載。
+/// 引擎不產 SPDX（升級前的 job、或 fake 引擎的預設實作）時，job 照常完成、清單不列 spdx、
+/// 端點回 404——console 依清單顯示下載連結，不會給出一個點了才 404 的按鈕。
+#[tokio::test]
+async fn t919_spdx_artifact_is_listed_and_downloadable() {
+    async fn fetch(app: &Router, cookie: &str, uri: &str) -> axum::response::Response {
+        app.clone()
+            .oneshot(
+                Request::get(uri)
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    // 有 SPDX
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job(&env.app, &cookie, "app", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    // FakeEngine 有 CBOM 實作但本 job 未要求 → 不列 cbom
+    assert_eq!(
+        done["artifacts"],
+        serde_json::json!(["sbom", "spdx", "grype"]),
+        "{done}"
+    );
+
+    let resp = fetch(
+        &env.app,
+        &cookie,
+        &format!("/api/v1/jobs/{id}/artifacts/spdx"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cd = resp.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        cd,
+        format!("attachment; filename=\"cytrace-{id}.sbom.spdx.json\"")
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&body).unwrap(),
+        SPDX,
+        "SPDX 應原樣落地與回應"
+    );
+
+    // 列表不附 artifacts（不為每一筆碰檔案系統）
+    let resp = fetch(&env.app, &cookie, "/api/v1/jobs").await;
+    let list = json_of(resp).await;
+    assert!(list["jobs"][0].get("artifacts").is_none(), "{list}");
+
+    // 引擎不產 SPDX：job 照常完成，清單不列、端點 404
+    let env = build_env(Arc::new(BrokenCbomEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (_, v) = create_job(&env.app, &cookie, "app", None).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(
+        done["artifacts"],
+        serde_json::json!(["sbom", "grype"]),
+        "{done}"
+    );
+    let resp = fetch(
+        &env.app,
+        &cookie,
+        &format!("/api/v1/jobs/{id}/artifacts/spdx"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

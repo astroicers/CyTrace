@@ -76,7 +76,8 @@
         "scan": {
           "target": "掃描目標（目錄、容器映像 tar 或檔案系統）",
           "out_dir": "輸出目錄（預設目前目錄）",
-          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）"
+          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）",
+          "spdx": "另輸出 SPDX 2.3 格式的 SBOM（sbom.spdx.json；預設關閉）"
         },
         "report": {
           "input": "ScanResult JSON 的路徑",
@@ -243,7 +244,11 @@
       "cancel": "取消任務",
       "delete": "刪除任務",
       "running_hint": "掃描進行中，稍候會自動更新…",
-      "counts": "各嚴重度計數"
+      "counts": "各嚴重度計數",
+      "download_sbom": "下載 SBOM（CycloneDX）",
+      "download_spdx": "下載 SBOM（SPDX）",
+      "download_grype": "下載弱點比對結果（Grype）",
+      "download_cbom": "下載 CBOM"
     },
     "reports": {
       "title": "報表",
