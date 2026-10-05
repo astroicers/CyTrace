@@ -102,9 +102,36 @@ jobs:
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
+  # Windows 版 CBOM 引擎（T911）：自源碼交叉編譯並驗 SHA256，作為釋出資產。
+  # Windows 交付包由人以 package.ps1 組裝：下載本資產放到 dist\cbomkit-theia.exe，
+  # package.ps1 取用前再比對 versions.env 的 THEIA_WINDOWS_AMD64_SHA256。
+  theia-windows:
+    name: build cbomkit-theia-windows-amd64.exe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 讀引擎釘選版本
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+      - name: 建置並驗 SHA256
+        run: |
+          docker build --target theia-builder-windows -t theia-builder-windows \
+            --build-arg THEIA_COMMIT="$THEIA_COMMIT" \
+            --build-arg THEIA_LINUX_AMD64_SHA256="$THEIA_LINUX_AMD64_SHA256" \
+            --build-arg THEIA_WINDOWS_AMD64_SHA256="$THEIA_WINDOWS_AMD64_SHA256" .
+          cid=$(docker create theia-builder-windows)
+          mkdir -p dist
+          docker cp "$cid:/out/cbomkit-theia.exe" dist/cbomkit-theia-windows-amd64.exe
+          docker rm "$cid"
+          echo "${THEIA_WINDOWS_AMD64_SHA256}  dist/cbomkit-theia-windows-amd64.exe" | sha256sum -c -
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cbomkit-theia-windows-amd64.exe
+          path: dist/cbomkit-theia-windows-amd64.exe
+          if-no-files-found: error
+
   release:
     name: 建立 GitHub Release
-    needs: build
+    needs: [build, theia-windows]
     runs-on: ubuntu-latest
     steps:
       # 說明取自 CHANGELOG.md（scripts/release-notes.py），故需要原始碼

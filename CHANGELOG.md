@@ -8,6 +8,10 @@
 
 ### 新增
 
+- Windows 交付包內含 CBOM 引擎 `cbomkit-theia.exe`（T911），`--cbom` 在 Windows 上也能盤點密碼學資產。
+  引擎同樣自源碼建置：與 Linux 版同一份釘選源碼、同一組參數交叉編譯，產物 SHA256 釘在
+  `versions.env`；打包腳本取用前比對，不符即中止。GitHub Release 另附 `cbomkit-theia-windows-amd64.exe`
+  供打包取用，取得方式見交付 SOP §2。
 - Web 控制台 API：掃描任務失敗時，`GET /api/v1/jobs/{id}` 與任務列表回應的 `error`
   另附依請求語系（`?lang=` 或 `Accept-Language`）渲染的 `message`，供 CI 腳本等非控制台
   用戶端直接使用。落盤的任務記錄不變。控制台與 API 對同一筆失敗顯示相同的說明。

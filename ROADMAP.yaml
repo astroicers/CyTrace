@@ -984,7 +984,7 @@ milestones:
         spec: null
         srs_ref: NFR-05
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: "scripts/package.ps1 2b 段註解；CI windows-package 以 -WithoutCbom 豁免"
@@ -998,6 +998,13 @@ milestones:
           CI 冒煙以 `-WithoutCbom` 顯式豁免。
           待辦：CI 以 GOOS=windows 交叉編譯並驗可重現（SHA 釘進 versions.env）、作為釋出
           資產；package.ps1 改取用之並驗 SHA；移除 CI 的 -WithoutCbom；Windows 實機驗證。
+
+          **結案（2026-10-05）**：Dockerfile 新增 theia-builder-windows stage（同源碼、同 Go image、同參數，
+          GOOS=windows），兩個不同源碼路徑建置 SHA256 一致，釘入 `THEIA_WINDOWS_AMD64_SHA256`。CI 以獨立 job 交叉編譯
+          後交給 windows-package job：package.ps1 驗 SHA 後收進包內（移除 `-WithoutCbom`），並以包內那支引擎跑
+          `real_engine_windows`（憑證偵測、空目錄完成且 0 項）。release workflow 附 `cbomkit-theia-windows-amd64.exe`。
+          engine.rs 在 Windows 上另給 USERPROFILE／APPDATA／LOCALAPPDATA／TEMP／TMP 並帶回 SystemRoot／windir。
+          驗證在 GitHub 的 windows-latest runner 上進行；場域 Windows 機器的實地驗證隨交付時進行。
 
       - id: T912
         title: "操作員終端訊息 i18n（serve 啟動錯誤、CLI 錯誤、CytraceError Display 前綴）"

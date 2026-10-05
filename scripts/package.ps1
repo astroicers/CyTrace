@@ -91,15 +91,25 @@ if ($TheiaLines.Count -ne 1) { throw "versions.env: exactly one non-comment line
 if ($TheiaLines[0] -cnotmatch '^THEIA_VERSION=([0-9]+(\.[0-9]+)+)$') { throw "versions.env: THEIA_VERSION line must be exactly THEIA_VERSION=<digits(.digits)+>: '$($TheiaLines[0])'" }
 $TheiaVersion = $Matches[1]
 
-# 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1）
+# 2b) CBOM 引擎 cbomkit-theia（ADR-013 決策 1、T911）
 #
-# 注意：**不可**比照上方從 GitHub release 下載——ADR-013 明定自源碼建置、不依賴上游
-# release binary。Windows 版須由我方 CI（GOOS=windows 交叉編譯，參數見 versions.env 註解）
-# 產出後作為釋出資產，再由本腳本取用；在該資產就緒前，Windows 包不含 CBOM 引擎，
-# `--cbom` 會降級為「未盤點」，不影響 SBOM 與弱點比對。
+# 注意：**不可**比照上方從 GitHub release 下載上游 binary——ADR-013 明定自源碼建置。
+# Windows 版由我方以 Dockerfile 的 theia-builder-windows stage 交叉編譯
+# （`scripts/build-theia.sh dist windows`，或取我方 release 的 cbomkit-theia-windows-amd64.exe），
+# 放到 dist\ 後由本腳本取用，並比對 versions.env 的 THEIA_WINDOWS_AMD64_SHA256——不符即中止。
+$TheiaShaLines = @($VersionsText -split "`n" | ForEach-Object { $_ -replace "`r$", '' } |
+  Where-Object { $_ -cnotmatch '^[ \t\x0B\x0C\r]*#' -and $_ -cmatch '(?<![A-Za-z0-9_])THEIA_WINDOWS_AMD64_SHA256(?![A-Za-z0-9_])' })
+if ($TheiaShaLines.Count -ne 1 -or $TheiaShaLines[0] -cnotmatch '^THEIA_WINDOWS_AMD64_SHA256=([0-9a-f]{64})$') {
+  throw "versions.env: exactly one line THEIA_WINDOWS_AMD64_SHA256=<64 lowercase hex> is required"
+}
+$TheiaWindowsSha = $Matches[1]
 $TheiaExe = Join-Path $PSScriptRoot "..\dist\cbomkit-theia.exe"
 if (Test-Path $TheiaExe) {
-  Say "collect cbomkit-theia (self-built artifact)"
+  $got = (Get-FileHash -Algorithm SHA256 $TheiaExe).Hash.ToLowerInvariant()
+  if ($got -ne $TheiaWindowsSha) {
+    throw "dist\cbomkit-theia.exe SHA256 $got != pinned $TheiaWindowsSha (versions.env) - not our reproducible build"
+  }
+  Say "collect cbomkit-theia (self-built, SHA256 verified)"
   Copy-Item $TheiaExe "$Bundle\bin\cbomkit-theia.exe"
 } elseif ($WithoutCbom) {
   Say "WithoutCbom: bundle intentionally ships without the CBOM engine (--cbom degrades)"
