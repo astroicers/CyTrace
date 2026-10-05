@@ -181,7 +181,7 @@ ScanResult {
   | `1` | 錯誤，含參數用法錯誤（含 `--fail-on` 值不合法）；量子閘門未取得完整結果（fail-closed） |
 
   - 同時成立時，1 優先於 2：「根本沒掃到」不得被「有弱點」遮蔽；
-  - clap 預設以 2 表示用法錯誤，會與門檻撞號，因此改用 `try_parse` 自行決定退出碼。
+  - clap 預設以 2 表示用法錯誤，會與門檻撞號，因此自行處理解析結果、決定退出碼（`main` 的 `usage_error`）。
 
 ## 6. i18n
 
@@ -199,7 +199,13 @@ ScanResult {
     空白的環境變數視同未設；
   - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言。
 - **API 回應的語言**不受操作者語言影響，依 ADR-011 §7 每個請求各自協商：`?lang=` > `Accept-Language` > zh-TW。
-- **尚未在地化**：clap 的 `--help` 與用法錯誤（T914）。
+- **`--help` 與用法錯誤**（T914，`cytrace-cli/src/help.rs`）：
+  - 語言在解析之前決定：先從 argv 預掃 `--lang`，再看 `CYTRACE_LANG`；
+  - 說明文字住在 locale 的 `cli.help.*`，鍵由子命令名與參數 id 推導；以 clap builder 注入，區段標題、
+    `--help`／`--version` 的說明也一併換掉；CLI 定義上不寫 doc 註解（i18n 棘輪會抓）；
+  - 用法錯誤依 clap 的 `ErrorKind` 與錯誤附帶的 context 組成 `cli.usage.*` 訊息，第二行提示該子命令的
+    `--help`；沒對映到的類型以 `cli.usage.other` 附上 clap 的英文原文；
+  - 仍是英文的部分：usage 行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符，以及沒對映到的錯誤類型的原文。
 - **機械閘**（NFR-06）：
   - `scripts/i18n-check.py`：比對兩語的遞迴葉鍵，並確認程式碼引用的鍵都存在；
   - i18n 棘輪：全部 workspace 成員的生產碼不得有中文字面值，例外逐筆明列；

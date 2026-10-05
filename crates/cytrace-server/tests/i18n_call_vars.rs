@@ -38,6 +38,12 @@ const INTENTIONAL: &[(&str, &str, &str)] = &[(
 /// 鍵不是字面值的 `.t`／`.with_message` 呼叫：（檔案, 鍵運算式, 出現次數, 由誰涵蓋）。
 const NONLITERAL: &[(&str, &str, usize, &str)] = &[
     (
+        "crates/cytrace-cli/src/help.rs",
+        "&k",
+        2,
+        "cli.help.cmd.*／cli.help.arg.* 由子命令名與參數 id 推導、空變數：main.rs every_subcommand_and_arg_has_localized_help 逐一驗無 {{ 且非鍵名",
+    ),
+    (
         "crates/cytrace-cli/src/main.rs",
         "other.i18n_key()",
         1,

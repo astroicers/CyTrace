@@ -46,7 +46,74 @@
       "invalid_address": "Invalid address: {{value}} (e.g. 127.0.0.1:8443)",
       "password_input": "Cannot read the password (an interactive terminal is required; add -it for containers): {{detail}}"
     },
-    "lang_unsupported": "Unsupported language \"{{value}}\"; using zh-TW (available: zh-TW, en-US)"
+    "lang_unsupported": "Unsupported language \"{{value}}\"; using zh-TW (available: zh-TW, en-US)",
+    "help": {
+      "about": "CyTrace — on-premises dependency risk report generator",
+      "usage": "Usage: ",
+      "heading": {
+        "commands": "Commands",
+        "options": "Options",
+        "arguments": "Arguments"
+      },
+      "arg": {
+        "help": "Print help",
+        "version": "Print version",
+        "lang": "Interface language (zh-TW | en-US; falls back to CYTRACE_LANG, then zh-TW)",
+        "run": {
+          "target": "Scan target (directory, container image tar, or filesystem)",
+          "fail_on": "Exit with code 2 when a finding reaches this severity (critical | high | medium | low | negligible | unknown; case-insensitive)",
+          "out": "Report output path (default: ./<target>.report.html)",
+          "cbom": "Also inventory cryptographic assets (CBOM; off by default)",
+          "fail_on_quantum_vulnerable": "Exit with code 2 if any asset is quantum-vulnerable; exit with code 1 if no CBOM result was obtained (requires --cbom)"
+        },
+        "batch": {
+          "targets": "One or more scan targets",
+          "fail_on": "Exit with code 2 when a finding reaches this severity (critical | high | medium | low | negligible | unknown; case-insensitive)",
+          "out_dir": "Report output directory (default: current directory)",
+          "cbom": "Also inventory cryptographic assets (CBOM; off by default)",
+          "fail_on_quantum_vulnerable": "Exit with code 2 if any target has a quantum-vulnerable asset; exit with code 1 if any target has no CBOM result (requires --cbom)"
+        },
+        "scan": {
+          "target": "Scan target (directory, container image tar, or filesystem)",
+          "out_dir": "Output directory (default: current directory)",
+          "cbom": "Also inventory cryptographic assets (CBOM; off by default)"
+        },
+        "report": {
+          "input": "Path to the ScanResult JSON",
+          "out": "Report output path (default: ./<input>.report.html)"
+        },
+        "serve": {
+          "bind": "Listen address (default 127.0.0.1:8443; or CYTRACE_BIND)",
+          "data_dir": "Data directory for jobs and report artifacts (default /data; or CYTRACE_DATA_DIR)",
+          "tls_cert": "TLS certificate PEM (paired with --tls-key; or CYTRACE_TLS_CERT)",
+          "tls_key": "TLS private key PEM (paired with --tls-cert; or CYTRACE_TLS_KEY)"
+        },
+        "health": {
+          "bind": "Address to check (same order as serve: --bind > CYTRACE_BIND > 127.0.0.1:8443)"
+        }
+      },
+      "cmd": {
+        "run": "One shot: generate SBOM → match vulnerabilities → write report (optionally --fail-on)",
+        "batch": "Scan several targets, one report each; exits 2 if any target reaches --fail-on",
+        "scan": "Only write sbom.cdx.json and grype.json (plus cbom.cdx.json with --cbom)",
+        "report": "Rebuild a report offline from an existing ScanResult JSON (audit review)",
+        "serve": "Start the web service: sign-in console plus scan and report API",
+        "hash_password": "Generate the admin password's argon2id PHC string offline (for CYTRACE_ADMIN_PASSWORD_HASH)",
+        "health": "Service liveness check (TCP connect; for container HEALTHCHECK)"
+      }
+    },
+    "usage": {
+      "invalid_value": "'{{value}}' is not a valid value for {{arg}} (allowed: {{valid}})",
+      "invalid_value_plain": "'{{value}}' is not a valid value for {{arg}}",
+      "value_required": "{{arg}} requires a value",
+      "unknown_argument": "unknown argument: {{arg}}",
+      "unknown_subcommand": "unknown subcommand: {{value}}",
+      "missing_required": "missing required arguments: {{args}}",
+      "missing_subcommand": "missing subcommand",
+      "conflict": "{{arg}} cannot be used with {{other}}",
+      "other": "invalid usage ({{detail}})",
+      "hint": "Run `{{command}} --help` for usage"
+    }
   },
   "server": {
     "listening": "CyTrace server listening on {{addr}}",

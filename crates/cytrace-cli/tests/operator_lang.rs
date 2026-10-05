@@ -10,8 +10,8 @@
 //!
 //! stdout 與 stderr 都驗：listening、明文警告、shutdown、完成、報表已輸出、服務存活等在 stdout
 //! （T912 複審 gates#8）。每一次執行的輸出都斷言無裸鍵、無殘留 `{{`（插值變數漏給時
-//! `Catalog::t` 會原樣保留；複審 gates#7）；我方文字另斷言語言相符——clap 的用法錯誤固定是英文
-//! （T914），那幾例不驗語言。
+//! `Catalog::t` 會原樣保留；複審 gates#7）；我方文字另斷言語言相符。T914 起 `--help` 與用法錯誤
+//! 也依操作者語言，一併驗；只有刻意兩語並陳的輸出（不支援語言的警告）不驗語言。
 //!
 //! `hash-password` 沒有 tty 的情境以 `setsid -w` 在新 session 執行（沒有控制終端機，/dev/tty
 //! 開不了，與容器未加 `-t` 相同），只在 Linux 跑。
@@ -145,7 +145,7 @@ fn out_of(o: std::process::Output) -> Out {
 }
 
 /// 每個情境都要成立的：無裸鍵、無殘留佔位符、沒有 panic。
-/// clap 的用法錯誤固定是英文（T914），那幾個情境只驗這一層。
+/// 只有刻意兩語並陳的輸出（不支援語言的警告）只驗這一層。
 fn assert_no_raw(o: &Out, ctx: &str) {
     let all = o.all();
     assert_eq!(bare_key(&all), None, "裸鍵：{ctx}");
@@ -337,25 +337,114 @@ fn scan_cbom_non_cbom_error_is_localized() {
     );
 }
 
+/// 用法錯誤：退出碼 1（clap 預設的 2 與 --fail-on 撞號，ADR-006），訊息依操作者語言（T914）。
+/// 每個樣本兩種語言各跑一次，並帶出使用者給的值，且提示指向該子命令的 --help。
 #[test]
-fn usage_errors_exit_one_not_the_fail_on_code() {
-    // clap 預設以 2 結束，與 --fail-on 撞號（ADR-006）
+fn usage_errors_exit_one_in_the_operator_language() {
     let sb = Sandbox::new("clap");
-    for args in [
-        &["run"][..],
-        &["--no-such-flag"],
-        &["run", "x", "--fail-on"],
-        &[],
+    for (args, en, zh, value) in [
+        (
+            &["run"][..],
+            "missing required arguments",
+            "缺少必要的參數",
+            "<TARGET>",
+        ),
+        (
+            &["run", "x", "--no-such-flag"],
+            "unknown argument",
+            "不認得的參數",
+            "--no-such-flag",
+        ),
+        (
+            &["run", "x", "--fail-on"],
+            "requires a value",
+            "需要一個值",
+            "--fail-on",
+        ),
+        (
+            &["run", "x", "--fail-on", "zz"],
+            "is not a valid value",
+            "不是",
+            "zz",
+        ),
+        (&["bogus"], "unknown subcommand", "不認得的子命令", "bogus"),
+        (
+            &["run", "x", "--fail-on-quantum-vulnerable"],
+            "missing required arguments",
+            "缺少必要的參數",
+            "--cbom",
+        ),
     ] {
-        let o = sb.run(args, &[]);
-        assert_eq!(o.code, 1, "{args:?} 應以 1 結束：{}", o.stderr);
-        assert_no_raw(&o, &format!("{args:?}"));
+        let (o_en, o_zh) = both_langs(&sb, args, &[], 1, en, zh);
+        for o in [&o_en, &o_zh] {
+            assert!(
+                o.stderr.contains(value),
+                "{args:?} 應帶出 {value}：{}",
+                o.stderr
+            );
+            assert!(
+                o.stdout.is_empty(),
+                "{args:?} 錯誤只走 stderr：{}",
+                o.stdout
+            );
+        }
+        if args[0] == "run" {
+            assert!(
+                o_en.stderr.contains("`cytrace run --help`"),
+                "{}",
+                o_en.stderr
+            );
+        }
     }
-    for args in [&["--help"][..], &["--version"], &["run", "--help"]] {
-        let o = sb.run(args, &[]);
-        assert_eq!(o.code, 0, "{args:?} 應以 0 結束：{}", o.stderr);
-        assert_no_raw(&o, &format!("{args:?}"));
+}
+
+/// `--help`：每個子命令與頂層都依操作者語言（T914；修正前 doc 註解寫死中文、clap 標題是英文）。
+#[test]
+fn help_follows_operator_language() {
+    let sb = Sandbox::new("help");
+    // 純 CLI 建置沒有 serve 系列子命令，下面的 extend 不存在
+    #[cfg_attr(not(feature = "server"), allow(unused_mut))]
+    let mut subs = vec![
+        vec!["--help"],
+        vec!["run", "--help"],
+        vec!["batch", "--help"],
+        vec!["scan", "--help"],
+        vec!["report", "--help"],
+    ];
+    #[cfg(feature = "server")]
+    subs.extend([
+        vec!["serve", "--help"],
+        vec!["hash-password", "--help"],
+        vec!["health", "--help"],
+    ]);
+    for args in subs {
+        let (en, zh) = both_langs(&sb, &args, &[], 0, "Usage: cytrace", "用法：cytrace");
+        assert!(en.stdout.contains("Print help"), "{}", en.stdout);
+        assert!(zh.stdout.contains("顯示說明"), "{}", zh.stdout);
+        // clap 會把英文的 `[possible values: …]` 接在說明同一行後面，逐行判語言抓不到；
+        // 可用值已寫進我方說明，這段必須被隱藏
+        for o in [&en, &zh] {
+            assert!(
+                !o.stdout.contains("possible values"),
+                "{args:?}：{}",
+                o.stdout
+            );
+        }
     }
+    // 完全不帶參數：整頁說明到 stderr、以 1 結束（語言只能來自 CYTRACE_LANG）
+    for (lang, has) in [("en-US", "Commands:"), ("zh-TW", "命令:")] {
+        let o = sb.run(&[], &[("CYTRACE_LANG", lang)]);
+        let ctx = format!("{lang}\nstderr:\n{}", o.stderr);
+        assert_eq!(o.code, 1, "{ctx}");
+        assert!(o.stderr.contains(has) && o.stdout.is_empty(), "{ctx}");
+        assert_operator_text(lang, &o, &ctx);
+    }
+    // 給了旗標卻沒有子命令：一行錯誤加提示（clap 此時回報缺少子命令，而非印整頁）
+    both_langs(&sb, &[], &[], 1, "missing subcommand", "缺少子命令");
+    // --version 不受語言影響、以 0 結束
+    let o = sb.run(&["--version"], &[]);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert!(o.stdout.starts_with("cytrace "), "{}", o.stdout);
 }
 
 /// `--fail-on hgih`：T912 前任何字串都被接受、未知值落到最低的 unknown，打錯字等於
@@ -378,13 +467,21 @@ fn fail_on_typo_is_a_usage_error_not_a_threshold() {
         assert_eq!(o.code, 2, "{v}：{}", o.stderr);
         assert_operator_text("zh-TW", &o, v);
     }
-    for args in [
-        vec!["run", &target, "--fail-on", "hgih", "-o", &report],
-        vec!["batch", &target, "--fail-on", "", "--out-dir", &dir],
+    // 空字串在 clap 眼中等同沒給值，訊息是「需要一個值」
+    for (args, want) in [
+        (
+            vec!["run", &target, "--fail-on", "hgih", "-o", &report],
+            "is not a valid value",
+        ),
+        (
+            vec!["batch", &target, "--fail-on", "", "--out-dir", &dir],
+            "requires a value",
+        ),
     ] {
         let o = sb.run(&args, &[("CYTRACE_LANG", "en-US")]);
         assert_eq!(o.code, 1, "{args:?}：{}", o.stderr);
-        assert_no_raw(&o, &format!("{args:?}"));
+        assert!(o.stderr.contains(want), "{args:?}：{}", o.stderr);
+        assert_operator_text("en-US", &o, &format!("{args:?}"));
         assert!(
             !o.all().contains("Reached --fail-on threshold"),
             "{args:?} 不得被當成門檻：{}",

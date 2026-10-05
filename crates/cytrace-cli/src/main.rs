@@ -5,7 +5,9 @@
 //!
 //! 終端訊息（含錯誤）一律以操作者語言輸出：`--lang` > `CYTRACE_LANG` > zh-TW（SDS §6）。
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+
+mod help;
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
 use cytrace_core::{engine, failon, parse, CytraceError};
 use cytrace_i18n::{Catalog, Localized};
@@ -17,11 +19,11 @@ const EXIT_OK: u8 = 0;
 const EXIT_FAILON: u8 = 2;
 const EXIT_ERR: u8 = 1;
 
-/// CyTrace — 地端依賴風險報表產生器。
+// 說明文字不寫在這裡：doc 註解就是 `--help` 的內容，寫死就只有一種語言。
+// 一律放在 locales 的 `cli.help.*`，由 help::localize 依操作者語言注入（T914）。
 #[derive(Parser, Debug)]
-#[command(name = "cytrace", version, about)]
+#[command(name = "cytrace", version)]
 struct Cli {
-    /// 介面語言（zh-TW | en-US；未給時讀 CYTRACE_LANG，皆無則 zh-TW）。
     #[arg(long, global = true)]
     lang: Option<String>,
     #[command(subcommand)]
@@ -30,80 +32,55 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// 一鍵：產 SBOM → 比對 → 出報表（含 --fail-on）。
     Run {
-        /// 掃描目標（目錄/容器映像/檔案系統）。
         target: String,
-        /// 達指定嚴重度即以退出碼 2 結束（critical|high|medium|low|negligible|unknown）。
         #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
-        /// 報表輸出路徑（預設 ./<basename>.report.html）。
         #[arg(long, short)]
         out: Option<PathBuf>,
-        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
         #[arg(long)]
         cbom: bool,
-        /// 有量子脆弱資產即以退出碼 2 結束；**未取得 CBOM 結果則以 1 結束**（fail-closed）。
         #[arg(long, requires = "cbom")]
         fail_on_quantum_vulnerable: bool,
     },
-    /// 多目標批次掃描（FR-010）：逐一出報表；任一目標達 --fail-on 即整體退出碼 2。
     Batch {
-        /// 一或多個掃描目標。
         targets: Vec<String>,
         #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
-        /// 報表輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
-        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
         #[arg(long)]
         cbom: bool,
-        /// 任一目標有量子脆弱資產即退出碼 2；任一目標未取得 CBOM 結果則整批 1。
         #[arg(long, requires = "cbom")]
         fail_on_quantum_vulnerable: bool,
     },
-    /// 只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）。
     Scan {
         target: String,
-        /// 輸出目錄（預設目前目錄）。
         #[arg(long, short)]
         out_dir: Option<PathBuf>,
-        /// 併同盤點密碼學資產（CBOM；ADR-013）。預設關閉。
         #[arg(long)]
         cbom: bool,
     },
-    /// 由既有 ScanResult JSON 離線重現報表（稽核複核；ADR-009）。
     Report {
-        /// ScanResult JSON 路徑。
         input: PathBuf,
-        /// 報表輸出路徑（預設 ./<input>.report.html）。
         #[arg(long, short)]
         out: Option<PathBuf>,
     },
-    /// 啟動 Web 服務模式（ADR-011）：登入控制台 + 掃描/報表 API。
     #[cfg(feature = "server")]
     Serve {
-        /// 監聽位址（預設 127.0.0.1:8443；亦可用 CYTRACE_BIND）。
         #[arg(long)]
         bind: Option<String>,
-        /// 資料目錄（job 與報表產物；預設 /data；亦可用 CYTRACE_DATA_DIR）。
         #[arg(long)]
         data_dir: Option<PathBuf>,
-        /// TLS 憑證 PEM（與 --tls-key 成對；亦可用 CYTRACE_TLS_CERT）。
         #[arg(long)]
         tls_cert: Option<PathBuf>,
-        /// TLS 金鑰 PEM（與 --tls-cert 成對；亦可用 CYTRACE_TLS_KEY）。
         #[arg(long)]
         tls_key: Option<PathBuf>,
     },
-    /// 離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）。
     #[cfg(feature = "server")]
     HashPassword,
-    /// 服務存活檢查（TCP connect；容器 HEALTHCHECK 用，distroless 無 shell）。
     #[cfg(feature = "server")]
     Health {
-        /// 檢查位址（預設同 serve 解析順序：--bind > CYTRACE_BIND > 127.0.0.1:8443）。
         #[arg(long)]
         bind: Option<String>,
     },
@@ -115,17 +92,11 @@ fn fail_on_parser() -> clap::builder::PossibleValuesParser {
 }
 
 fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
-        Ok(cli) => cli,
-        Err(e) => {
-            // clap 的錯誤與 help 文字是函式庫內建英文（help 在地化另見 T914）。
-            // 退出碼自己決定：help／version 為 0，其餘為 1——clap 預設的 2 是 --fail-on 的語意
-            let _ = e.print();
-            return ExitCode::from(if e.use_stderr() { EXIT_ERR } else { EXIT_OK });
-        }
-    };
+    let args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // 語言要在解析之前決定：`--help` 與用法錯誤也得用操作者語言（T914）
     let env_lang = std::env::var_os("CYTRACE_LANG").map(|v| v.to_string_lossy().into_owned());
-    let (lang, unsupported) = resolve_lang(cli.lang.as_deref(), env_lang.as_deref());
+    let flag_lang = help::prescan_lang(&args);
+    let (lang, unsupported) = resolve_lang(flag_lang.as_deref(), env_lang.as_deref());
     if let Some(raw) = unsupported {
         // 要的語言不支援，也就不知道操作者讀哪一種——兩種都印
         for code in ["zh-TW", "en-US"] {
@@ -136,6 +107,17 @@ fn main() -> ExitCode {
         }
     }
     let cat = Catalog::load(lang);
+
+    let cmd = help::localize(Cli::command(), &cat);
+    let sub = help::subcommand_in(&args, &cmd);
+    let parsed = cmd
+        .try_get_matches_from(&args)
+        .and_then(|m| Cli::from_arg_matches(&m));
+    let cli = match parsed {
+        Ok(cli) => cli,
+        Err(e) => return usage_error(e, &cat, sub.as_deref()),
+    };
+
     match run(&cli, lang, &cat) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
@@ -143,6 +125,33 @@ fn main() -> ExitCode {
                 "{}",
                 cat.t("cli.err.prefix", &[("message", &render_error(&e, &cat))])
             );
+            ExitCode::from(EXIT_ERR)
+        }
+    }
+}
+
+/// clap 的解析結果不是「可以執行」時：help／version 照印、以 0 結束；用法錯誤以操作者語言
+/// 印一行錯誤加一行提示，以 1 結束——clap 預設的 2 是 --fail-on 的語意（T912）。
+fn usage_error(e: clap::Error, cat: &Catalog, sub: Option<&str>) -> ExitCode {
+    use clap::error::ErrorKind;
+    match e.kind() {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => {
+            let _ = e.print();
+            ExitCode::from(EXIT_OK)
+        }
+        // 沒給子命令：整頁說明（已在地化）印到 stderr
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => {
+            let _ = e.print();
+            ExitCode::from(EXIT_ERR)
+        }
+        _ => {
+            let message = help::render_usage_error(&e, cat);
+            eprintln!("{}", cat.t("cli.err.prefix", &[("message", &message)]));
+            let command = match sub {
+                Some(s) => format!("cytrace {s}"),
+                None => "cytrace".to_string(),
+            };
+            eprintln!("{}", cat.t("cli.usage.hint", &[("command", &command)]));
             ExitCode::from(EXIT_ERR)
         }
     }
@@ -689,6 +698,83 @@ mod tests {
             !out.chars().any(|c| matches!(c as u32,
                 0x3000..=0x303F | 0x4E00..=0x9FFF | 0xFF00..=0xFFEF)),
             "en-US 不得出現中日韓文字（中文散文洩漏）：{out}"
+        );
+    }
+
+    // ── T914：--help 與用法錯誤在地化 ──
+
+    /// 每個子命令與參數都要有兩語說明；catalog 的 `cli.help.cmd.*`／`cli.help.arg.*` 與命令定義
+    /// 必須一一對上——多出來的是陳舊的鍵，少了就會退回鍵名。
+    #[test]
+    fn every_subcommand_and_arg_has_localized_help() {
+        use std::collections::BTreeSet;
+        let locale: serde_json::Value =
+            serde_json::from_str(include_str!("../../../locales/zh-TW.json")).expect("locale");
+        let mut in_catalog = BTreeSet::new();
+        for (sub, args) in locale["cli"]["help"]["arg"].as_object().unwrap() {
+            if let Some(m) = args.as_object() {
+                for id in m.keys() {
+                    in_catalog.insert(format!("cli.help.arg.{sub}.{id}"));
+                }
+            }
+        }
+        for sub in locale["cli"]["help"]["cmd"].as_object().unwrap().keys() {
+            in_catalog.insert(format!("cli.help.cmd.{sub}"));
+        }
+
+        let mut used = BTreeSet::new();
+        for lang in ["zh-TW", "en-US"] {
+            let cat = Catalog::load(lang);
+            let mut cmd = help::localize(Cli::command(), &cat);
+            cmd.build();
+            let check = |what: &str, text: &str| {
+                assert!(
+                    !text.is_empty() && !text.contains("{{"),
+                    "{lang} {what}：{text}"
+                );
+                assert!(!text.starts_with("cli."), "{lang} {what} 退回鍵名：{text}");
+                assert_eq!(lang == "zh-TW", cjk(text), "{lang} {what} 語言不符：{text}");
+            };
+            check("about", &cmd.get_about().unwrap().to_string());
+            for a in cmd.get_arguments() {
+                check(a.get_id().as_str(), &a.get_help().unwrap().to_string());
+            }
+            for sc in cmd.get_subcommands() {
+                let name = sc.get_name();
+                used.insert(help::command_key(name));
+                check(name, &sc.get_about().unwrap().to_string());
+                for a in sc.get_arguments() {
+                    let id = a.get_id().as_str();
+                    if !a.is_global_set() && id != "help" {
+                        used.insert(help::arg_key(name, id));
+                    }
+                    check(&format!("{name} {id}"), &a.get_help().unwrap().to_string());
+                }
+            }
+        }
+        // 純 CLI 建置（--no-default-features）沒有 serve 系列子命令，只比對實際存在的那一部分
+        #[cfg(feature = "server")]
+        assert_eq!(used, in_catalog, "catalog 的 cli.help.* 與命令定義不一致");
+        #[cfg(not(feature = "server"))]
+        assert!(used.is_subset(&in_catalog), "{used:?}");
+    }
+
+    #[test]
+    fn lang_is_prescanned_before_parsing() {
+        let a = |xs: &[&str]| xs.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            help::prescan_lang(&a(&["cytrace", "--lang", "en-US", "run"])).as_deref(),
+            Some("en-US")
+        );
+        assert_eq!(
+            help::prescan_lang(&a(&["cytrace", "run", "x", "--lang=en"])).as_deref(),
+            Some("en")
+        );
+        assert_eq!(help::prescan_lang(&a(&["cytrace", "run", "x"])), None);
+        // `--` 之後是值，不是旗標
+        assert_eq!(
+            help::prescan_lang(&a(&["cytrace", "run", "--", "--lang", "en"])),
+            None
         );
     }
 

@@ -6,11 +6,11 @@
 //! 並把掃描範圍從 server 擴到全部成員——cli 與 core 一樣會把字串印給操作者。範圍的推導見
 //! `common/mod.rs`（cargo metadata；build.rs 不在內）。
 //!
-//! **看得到的**：字串、字元、C 字串字面值（`"…"`、`'：'`、`c"…"`；含巨集與非 doc 屬性內）。
+//! **看得到的**：字串、字元、C 字串字面值（`"…"`、`'：'`、`c"…"`；含巨集與非 doc 屬性內），
+//! 以及 **clap derive 型別裡的 doc 註解**——那就是 `--help` 的文字（T914 起說明改住 locale 的
+//! `cli.help.*`，寫回 doc 註解就是寫死）。
 //! **看不到的**（已知限制）：
-//! - doc 註解——一般而言不是使用者可見字串，但 **clap derive 的 doc 註解就是 `--help` 文字**，
-//!   目前整頁中文；`--help` 第一行取自 Cargo.toml 的 description，也不在掃描範圍。在地化與
-//!   相應的閘屬 T914；
+//! - 一般的 doc 註解（不是使用者可見字串）；
 //! - `include_str!` 引入的檔案內容（現有用途是 locale、報表樣板，本來就是資料）；
 //! - 以程式組出的字元（`char::from_u32`、`\u{…}` 以外的計算）。
 //!
@@ -95,6 +95,21 @@ use syn::visit::{self, Visit};
 #[derive(Default)]
 struct Collector {
     out: Vec<String>,
+    /// 目前在幾層 clap derive 型別裡（doc 註解在這裡是 `--help` 文字，要算）。
+    clap_depth: usize,
+}
+
+/// `#[derive(...)]` 含 clap 的 Parser／Subcommand／Args／ValueEnum。
+fn is_clap_derive(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("derive")
+            && a.meta.require_list().is_ok_and(|l| {
+                l.tokens.clone().into_iter().any(|t| {
+                    matches!(&t, proc_macro2::TokenTree::Ident(i)
+                        if ["Parser", "Subcommand", "Args", "ValueEnum"].iter().any(|n| i == n))
+                })
+            })
+    })
 }
 
 use common::is_cfg_test;
@@ -145,9 +160,16 @@ impl<'ast> Visit<'ast> for Collector {
         self.tokens(m.tokens.clone());
     }
     fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        // doc 註解略過（一般而言不是使用者可見字串；clap derive 的 doc 註解是例外——
-        // 那是 `--help` 文字，屬 T914 的已知限制，見檔頭）；其他屬性（如 #[error("…")]）照算
-        if !a.path().is_ident("doc") {
+        // doc 註解一般略過（不是使用者可見字串）；**clap derive 型別裡的 doc 註解照算**——
+        // 那就是 `--help` 的文字（T914：在地化後說明改住在 locale，寫回 doc 註解就是寫死）。
+        // 其他屬性（如 #[error("…")]）照算
+        if a.path().is_ident("doc") {
+            if self.clap_depth > 0 {
+                if let syn::Meta::NameValue(nv) = &a.meta {
+                    self.visit_expr(&nv.value);
+                }
+            }
+        } else {
             if let syn::Meta::List(l) = &a.meta {
                 self.tokens(l.tokens.clone());
             } else if let syn::Meta::NameValue(nv) = &a.meta {
@@ -175,7 +197,10 @@ impl<'ast> Visit<'ast> for Collector {
             Use(x) => &x.attrs,
             _ => &[],
         };
+        let clap = matches!(i, Struct(_) | Enum(_)) && is_clap_derive(attrs);
+        self.clap_depth += usize::from(clap);
         skip_cfg_test!(self, i, attrs, visit::visit_item);
+        self.clap_depth -= usize::from(clap);
     }
     fn visit_impl_item(&mut self, i: &'ast syn::ImplItem) {
         use syn::ImplItem::*;
@@ -241,7 +266,7 @@ impl<'ast> Visit<'ast> for Collector {
 /// 前 8 組是歷輪複審實際找到、前一版掃描器會吃掉其後生產碼的形狀（第二輪 1 組、第三輪 2 組、
 /// 第四輪 5 組）；第 9、10 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
 /// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）；
-/// 第 11 組（字元與 C 字串字面值）來自 T912 複審 gates#9。
+/// 第 11 組（字元與 C 字串字面值）來自 T912 複審 gates#9；第 12 組（clap derive 的 doc 註解）來自 T914。
 #[test]
 fn extractor_sees_past_test_only_items() {
     let cases: &[(&str, &str, &[&str])] = &[
@@ -304,6 +329,12 @@ fn g(w: &str) -> String { format!(\"{w}{}\", '（') }
 fn h(c: char) -> bool { c == 'a' }
 ",
             &["無", "法", "中", "（"],
+        ),
+        (
+            // T914：clap derive 的 doc 註解就是 --help 文字；一般型別的 doc 註解不算
+            "clap derive 的 doc 註解",
+            "/// 一般說明\nstruct Plain;\n/// 頂層說明\n#[derive(Parser)]\nstruct Cli {\n    /// 參數說明\n    lang: String,\n}\n#[derive(Debug, clap::Subcommand)]\nenum C {\n    /// 子命令說明\n    Run,\n}\n",
+            &[" 頂層說明", " 參數說明", " 子命令說明"],
         ),
     ];
     for (name, src, want) in cases {
