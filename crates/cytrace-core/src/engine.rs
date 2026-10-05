@@ -455,8 +455,8 @@ fn cbom_with_timeouts(
     // 環境隔離：清空繼承環境後只加回必要項，避免 DOCKER_HOST 等變數把子程序指向非預期的
     // daemon。**注意**：這不是零外連的防線——daemon 走預設 unix socket、registry 也不吃
     // 環境變數。真正關閉回退鏈的是 cbom_target 的絕對路徑正規化。
-    let mut child = match Command::new("cbomkit-theia")
-        .arg(t.subcommand())
+    let mut cmd = Command::new("cbomkit-theia");
+    cmd.arg(t.subcommand())
         .arg(t.path())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -468,9 +468,25 @@ fn cbom_with_timeouts(
         .env(
             "PATH",
             std::env::var_os("PATH").unwrap_or_else(|| "/usr/local/bin:/usr/bin:/bin".into()),
-        )
-        .spawn()
+        );
+    // Windows（T911）：Go 在 Windows 上以 USERPROFILE（家目錄）、APPDATA／LOCALAPPDATA（設定與
+    // 快取）、TEMP／TMP（暫存）取代 HOME／TMPDIR，只給 HOME 等於沒給可寫的家目錄。
+    // SystemRoot／windir 是系統元件的位置，清空後部分系統呼叫會失敗，原樣帶回。
+    #[cfg(windows)]
     {
+        let tmp = std::env::temp_dir();
+        cmd.env("USERPROFILE", home.path())
+            .env("APPDATA", home.path())
+            .env("LOCALAPPDATA", home.path())
+            .env("TEMP", &tmp)
+            .env("TMP", &tmp);
+        for name in ["SystemRoot", "windir"] {
+            if let Some(v) = std::env::var_os(name) {
+                cmd.env(name, v);
+            }
+        }
+    }
+    let mut child = match cmd.spawn() {
         Ok(c) => c,
         // 引擎不存在 → 降級（決策 4）；其餘 I/O 錯誤仍為失敗
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),

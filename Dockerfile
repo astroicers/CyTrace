@@ -75,6 +75,17 @@ RUN set -eux; \
       go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o /out/cbomkit-theia .; \
     echo "${THEIA_LINUX_AMD64_SHA256}  /out/cbomkit-theia" | sha256sum -c -
 
+# ── Stage 3c：CBOM 引擎的 Windows 版（T911；交叉編譯，同一份釘選源碼與 Go image）──
+# 不進容器映像：產物給 Windows 交付包用（CI windows-package job、release 資產）。
+# 沿用 theia-builder 已 vendor 的 /src，只換 GOOS/GOARCH；參數與 Linux 版相同，SHA 同樣釘死。
+FROM theia-builder AS theia-builder-windows
+ARG THEIA_WINDOWS_AMD64_SHA256=3e2e437105759963a4ef8ff0ce477cececca80436c1beff521a14c1286d21073
+RUN set -eux; \
+    cd /src; \
+    CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOFLAGS=-mod=vendor \
+      go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o /out/cbomkit-theia.exe .; \
+    echo "${THEIA_WINDOWS_AMD64_SHA256}  /out/cbomkit-theia.exe" | sha256sum -c -
+
 # ── Stage 4：runtime（distroless static，non-root）──
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:d093aa3e30dbadd3efe1310db061a14da60299baff8450a17fe0ccc514a16639
 COPY --from=rust-builder /usr/local/bin/cytrace /usr/local/bin/cytrace
