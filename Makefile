@@ -27,6 +27,7 @@ frontend-check:
 	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -90,7 +91,9 @@ lint: fmt-check clippy
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	@# console 實際送出的語系必須等於畫面語系（T909；第二輪複審 lang#0 / tests#0）；與上一支同一套前置
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
-	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系，零 warning）"
+	@# 報表以產生時的語言開啟（T918）；載入真的 src/i18n.ts，與上兩支同一套前置
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系 + 報表開啟語言，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

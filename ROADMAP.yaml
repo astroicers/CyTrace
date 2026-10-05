@@ -1152,6 +1152,36 @@ milestones:
           實際行為（403 + `detail` 附原因碼與 root、path）、不補實作的理由（單一管理帳號，違規內容已回給唯一的
           請求者；補實作需另裁格式與 NFR-09 信任邊界）與裁定來源。同步更正 targets.rs 註解與 SDS §10。
 
+      - id: T918
+        title: "報表以產生時的語言開啟"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T917 期間發現；使用者 2026-10-05 同意改為以產生語言開啟"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-05"
+        description: |
+          報表一律以 zh-TW 開啟，產生時的 `--lang`／`CYTRACE_LANG` 只影響終端訊息。操作員以 en-US 產出、
+          交給英文讀者的報表，對方打開仍是中文。ADR-004 只定 zh-TW 為 fallback、報表內可即時切換，
+          未規定開啟語言，屬補齊 `--lang` 的作用範圍，不需新 ADR。
+
+          **結案（2026-10-05）**：`cytrace_report::render` 多一個語言參數，把樣板的 `<html lang="zh-TW">`
+          （必須恰好一個，否則設定錯誤）換成產生語言，正規化規則同 `cytrace_i18n::lang_code`；
+          前端 i18n 初始化讀 `<html lang>`（`initialLang`，只接受有資源的語系）。CLI 的 `report`／`run`
+          以 `--lang`／`CYTRACE_LANG` 決定；server 以**送出掃描那次請求**的語系決定（掛載與上傳兩條路徑）。
+          不動 ScanResult 資料契約（ADR-009）。報表內切換照舊。
+          測試：cytrace-report 以內嵌的實際樣板驗兩語與正規化；CLI 端到端驗 `report`／`run` × 四種
+          旗標與環境變數組合；server 驗掛載（header／`?lang=`／預設）與上傳；
+          `frontend/scripts/report-lang-check.mts` 一案一子程序載入真的 `src/i18n.ts`。
+          把 server 的語言寫死成 zh-TW、或 i18n.ts 改回 `lng: DEFAULT_LANG`，對應測試各自轉紅（實測）。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

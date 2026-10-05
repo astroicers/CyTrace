@@ -55,7 +55,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 | `cytrace-types` | 共用領域型別，零業務邏輯：`Severity`、`Component`、`Vulnerability`、`Meta`、`ScanResult`、`CryptoInventory`、`CbomStatus`、`QuantumStatus` | serde |
 | `cytrace-core` | 子程序編排（`engine`）、解析（`parse`）、嚴重度與風險總評（`severity`）、量子判定（`quantum`）、閘門（`failon`）、時間格式（`timefmt`）、錯誤分類（`error`） | cytrace-types、serde_json、thiserror |
 | `cytrace-i18n` | 輕量 catalog（`Catalog`、`Localized`、`lang_code`），CLI 與 server 共用；locale 以 `include_str!` 內嵌 | serde_json |
-| `cytrace-report` | 內嵌報表樣板、依注入契約產出單檔 HTML（§7） | cytrace-types、cytrace-core |
+| `cytrace-report` | 內嵌報表樣板、依注入契約產出單檔 HTML（§7） | cytrace-types、cytrace-core、cytrace-i18n |
 | `cytrace-server` | Web 服務模式：axum 路由、認證、session、job 佇列與落盤、上傳解壓、掛載白名單、TLS、console 靜態檔（§10） | axum、axum-server、tokio、rustls（ring）、argon2、zip／tar／flate2、rust-embed |
 | `cytrace-cli` | clap 子命令、語言解析、終端錯誤渲染、退出碼；feature `server`（預設開啟）納入 `serve`／`hash-password`／`health` | clap、anyhow、cytrace-server（optional） |
 
@@ -224,6 +224,9 @@ ScanResult {
   `type=application/json` 讓資料不受 `script-src` 管轄。
 - **跳脫**：注入前把 `</` 換成 `<\/`，U+2028／U+2029 換成 ` `／` `；
   golden 測試驗證含 `</script>` 與 U+2028 的欄位能 round-trip。
+- **開啟語言**（T918）：樣板根元素 `<html lang="zh-TW">` 必須恰好一個，產生時換成產生語言
+  （CLI 的 `--lang`／`CYTRACE_LANG`；server 為送出掃描那次請求的語系），正規化同 `cytrace_i18n::lang_code`。
+  前端 i18n 初始化讀它（`initialLang`），只接受 zh-TW／en-US，其餘 → zh-TW。這不是資料，不進 ScanResult。
 - **前端讀取**：`JSON.parse(document.getElementById('cytrace-data').textContent)`。
   schema v2 的 `crypto` 欄位缺漏時視為未請求，所以 v1 JSON 照樣能渲染。
 - **零外連**：字型本地子集化後內嵌；CSP 以 `connect-src 'none'` 擋外連，

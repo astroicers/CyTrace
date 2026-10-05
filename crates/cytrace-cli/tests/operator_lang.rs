@@ -1029,3 +1029,45 @@ mod serve {
         );
     }
 }
+
+/// 報表開啟語言 == 產生時的語言（T918）：`--lang` > `CYTRACE_LANG` > zh-TW，與終端訊息同一套優先序。
+/// `report`（由 JSON 重建）與 `run`（掃描後直接產）是兩個各自呼叫渲染器的地方，兩條都驗。
+#[test]
+fn report_opens_in_generation_language() {
+    let sb = Sandbox::new("t918");
+    sb.shim("syft", "cyclonedx.json");
+    sb.shim("grype", "grype.json");
+    let golden = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../cytrace-core/tests/golden/scanresult.json"
+    );
+    let html_lang = |path: &str| {
+        let html = fs::read_to_string(path).unwrap();
+        let rest = html.split("<html lang=\"").nth(1).expect("缺 <html lang>");
+        rest.split('"').next().unwrap().to_string()
+    };
+    let target = sb.path("target");
+    // （旗標, 環境變數, 預期開啟語言）
+    type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], &'a str);
+    let cases: [Case; 4] = [
+        (&["--lang", "en-US"], &[], "en-US"),
+        (&[], &[("CYTRACE_LANG", "en-US")], "en-US"),
+        (&["--lang", "zh-TW"], &[("CYTRACE_LANG", "en-US")], "zh-TW"),
+        (&[], &[], "zh-TW"),
+    ];
+    for (i, (flags, env, want)) in cases.iter().enumerate() {
+        for sub in ["report", "run"] {
+            let out = sb.path(&format!("{sub}-{i}.html"));
+            let input = if sub == "report" {
+                golden
+            } else {
+                target.as_str()
+            };
+            let mut args: Vec<&str> = flags.to_vec();
+            args.extend([sub, input, "-o", &out]);
+            let o = sb.run(&args, env);
+            assert_eq!(o.code, 0, "{sub} {args:?}：{}", o.stderr);
+            assert_eq!(html_lang(&out), *want, "{sub} {args:?} env={env:?}");
+        }
+    }
+}

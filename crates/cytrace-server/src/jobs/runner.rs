@@ -4,6 +4,7 @@
 //! 產物落 `jobs/<id>/`（ADR-009 稽核產物 + 報表）。
 
 use super::{JobError, JobStatus};
+use crate::error::Lang;
 use crate::state::AppState;
 use cytrace_core::engine::ScanEngine;
 use cytrace_core::error::CytraceError;
@@ -12,8 +13,10 @@ use cytrace_types::{Meta, Severity, Summary};
 use std::path::Path;
 
 /// 送出 job（不清理 input）——掛載目標用。
-pub fn spawn(app: AppState, job_id: String, scan_target: String, cbom: bool) {
-    spawn_with_cleanup(app, job_id, scan_target, false, cbom)
+///
+/// `lang` 是送出掃描那次請求的語系：報表 HTML 是靜態產物，以它決定開啟時的語言（T918）。
+pub fn spawn(app: AppState, job_id: String, scan_target: String, cbom: bool, lang: Lang) {
+    spawn_with_cleanup(app, job_id, scan_target, false, cbom, lang)
 }
 
 /// 送出 job：背景 task 取票（queued）→ running → 終態。呼叫端已 persist queued 記錄。
@@ -24,6 +27,7 @@ pub fn spawn_with_cleanup(
     scan_target: String,
     cleanup_input: bool,
     cbom: bool,
+    lang: Lang,
 ) {
     tokio::spawn(async move {
         let permit = match app.scan_semaphore.clone().acquire_owned().await {
@@ -54,6 +58,7 @@ pub fn spawn_with_cleanup(
                 fail_on.as_deref(),
                 &job_dir,
                 cbom,
+                lang,
             )
         })
         .await;
@@ -127,6 +132,7 @@ fn run_pipeline(
     fail_on: Option<&str>,
     job_dir: &Path,
     cbom: bool,
+    lang: Lang,
 ) -> cytrace_core::error::Result<(Summary, bool)> {
     let sbom = engine.sbom(target)?;
     let grype = engine.vuln(&sbom)?;
@@ -171,7 +177,7 @@ fn run_pipeline(
     // 這是**防禦性**修改：樣板以 include_str! 內嵌且 CI 驗過含 sentinel、ScanResult 序列化不會
     // 失敗，此分支目前從任何輸入都進不來，也沒有測試能讓它轉紅（第二輪完整性批判更正
     // e5e1f21 把它列為「實測可重現」的說法）。
-    let html = cytrace_report::render(&result).map_err(|e| {
+    let html = cytrace_report::render(&result, lang.code()).map_err(|e| {
         CytraceError::Parse(format!(
             "report render: {}",
             e.untranslatable_detail().unwrap_or_default()

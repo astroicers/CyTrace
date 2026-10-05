@@ -37,6 +37,14 @@ export function effectiveLang(i18n: { resolvedLanguage?: string }): LangCode {
   return supportedLang(i18n.resolvedLanguage) ?? DEFAULT_LANG
 }
 
+/**
+ * 開啟時的語言：取 `<html lang>`（報表由 Rust 產生時寫入），只接受有資源的語系，其餘 → DEFAULT_LANG。
+ * 抽成純函式讓檢查腳本能驗真實作（frontend/scripts/report-lang-check.mts）。
+ */
+export function initialLang(htmlLang: string | null | undefined): LangCode {
+  return supportedLang(htmlLang) ?? DEFAULT_LANG
+}
+
 /** console 持久化 UI 語系的 localStorage 鍵。 */
 export const LANG_STORAGE_KEY = 'cytrace.lang'
 
