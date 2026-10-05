@@ -202,10 +202,43 @@ jobs:
         with:
           name: cbomkit-theia-windows
           path: dist
-      # T911 起包內必含 CBOM 引擎：不再帶 -WithoutCbom；package.ps1 取用前比對 SHA256
-      - name: 組裝安裝包（跳過 1.7G DB）
+      # 簽章路徑實測（T920）：以拋棄式金鑰走一次 package.ps1 的 minisign 步驟。
+      # 正式交付的私鑰在交付工作站、不進 CI（DELIVERY_SOP §3）；這把金鑰用完即棄。
+      - name: 取得釘選 minisign 並產生拋棄式金鑰
         shell: pwsh
+        run: |
+          $v = (Select-String -Path scripts/versions.env -Pattern '^MINISIGN_VERSION=(.+)$').Matches[0].Groups[1].Value
+          $sha = (Select-String -Path scripts/versions.env -Pattern '^MINISIGN_WINDOWS_SHA256=(.+)$').Matches[0].Groups[1].Value
+          Invoke-WebRequest "https://github.com/jedisct1/minisign/releases/download/$v/minisign-$v-win64.zip" -OutFile minisign.zip
+          $got = (Get-FileHash minisign.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $sha) { throw "minisign SHA256 $got != pinned $sha" }
+          Expand-Archive minisign.zip -DestinationPath minisign
+          $dir = (Resolve-Path minisign/minisign-win64/x86_64).Path
+          & "$dir\minisign.exe" -G -W -p "$env:RUNNER_TEMP\ci.pub" -s "$env:RUNNER_TEMP\ci.key" -f
+          if ($LASTEXITCODE -ne 0) { throw "minisign keygen failed" }
+          "$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      # T911 起包內必含 CBOM 引擎：不再帶 -WithoutCbom；package.ps1 取用前比對 SHA256
+      - name: 組裝安裝包（跳過 1.7G DB；以拋棄式金鑰簽章）
+        shell: pwsh
+        env:
+          CYTRACE_MINISIGN_SECKEY: ${{ runner.temp }}\ci.key
         run: pwsh scripts/package.ps1 -SkipDb
+      # 驗章用的是 SOP 寫給目標機的同一條指令；竄改後必須驗不過，否則「驗過」不含資訊
+      - name: 簽章可驗、竄改即失敗（T920）
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $sums = Join-Path $b.FullName "SHA256SUMS"
+          if (-not (Test-Path "$sums.minisig")) { throw "missing SHA256SUMS.minisig" }
+          minisign -Vm $sums -p "$env:RUNNER_TEMP\ci.pub"
+          if ($LASTEXITCODE -ne 0) { throw "signature does not verify" }
+          Copy-Item $sums "$env:RUNNER_TEMP\tampered"
+          Copy-Item "$sums.minisig" "$env:RUNNER_TEMP\tampered.minisig"
+          Add-Content "$env:RUNNER_TEMP\tampered" "0000  ./evil"
+          minisign -Vm "$env:RUNNER_TEMP\tampered" -p "$env:RUNNER_TEMP\ci.pub"
+          if ($LASTEXITCODE -eq 0) { throw "tampered SHA256SUMS still verifies" }
+          $global:LASTEXITCODE = 0
+          Write-Host "OK: signature verifies; tampering detected"
       - name: 驗證產物結構 + cytrace.exe 可跑
         shell: pwsh
         run: |
@@ -249,3 +282,67 @@ jobs:
           $env:PATH = (Join-Path $b.FullName "bin") + ";" + $env:PATH
           cargo test -p cytrace-core --test real_engine_windows -- --ignored
           if ($LASTEXITCODE -ne 0) { throw "real_engine_windows failed (exit $LASTEXITCODE)" }
+
+  # Linux 安裝包是主要交付形態，T920 之前 CI 從未跑過 package.sh（曾在缺 musl-gcc 時靜默中止）。
+  # 與交付同一條路徑：釘選引擎取自 Dockerfile 的 engines／theia-builder stage（皆驗 SHA256），
+  # 以拋棄式金鑰走一次簽章，驗章用 SOP 寫給目標機的同一條指令。DB 快照 1.7G，以 WITHOUT_DB=1 略過。
+  linux-package:
+    name: Linux 安裝包冒煙（package.sh + 簽章驗章）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain（釘選於 rust-toolchain.toml）+ musl
+        run: |
+          rustup show
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: 讀釘選版本
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
+      - name: 取出釘選引擎（Dockerfile engines／theia-builder stage）
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          docker build --target engines -t engines .
+          cid=$(docker create engines)
+          docker cp "$cid:/engines/syft" "$RUNNER_TEMP/bin/syft"
+          docker cp "$cid:/engines/grype" "$RUNNER_TEMP/bin/grype"
+          docker rm "$cid"
+          docker build --target theia-builder -t theia-builder .
+          cid=$(docker create theia-builder)
+          docker cp "$cid:/out/cbomkit-theia" "$RUNNER_TEMP/bin/cbomkit-theia"
+          docker rm "$cid"
+          chmod +x "$RUNNER_TEMP"/bin/*
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: 取得釘選 minisign 並產生拋棄式金鑰
+        run: |
+          curl -sSL -o minisign.tgz \
+            "https://github.com/jedisct1/minisign/releases/download/${MINISIGN_VERSION}/minisign-${MINISIGN_VERSION}-linux.tar.gz"
+          echo "${MINISIGN_LINUX_SHA256}  minisign.tgz" | sha256sum -c -
+          tar -xzf minisign.tgz minisign-linux/x86_64/minisign
+          install -m 0755 minisign-linux/x86_64/minisign "$RUNNER_TEMP/bin/minisign"
+          minisign -G -W -p "$RUNNER_TEMP/ci.pub" -s "$RUNNER_TEMP/ci.key" -f
+      - name: 組裝安裝包（略過 DB；以拋棄式金鑰簽章）
+        env:
+          WITHOUT_DB: "1"
+          CYTRACE_MINISIGN_SECKEY: ${{ runner.temp }}/ci.key
+        run: scripts/package.sh dist
+      - name: 驗證產物結構、靜態 binary 可跑、完整性與簽章
+        run: |
+          b=$(ls -d dist/cytrace-*/ | head -1)
+          for f in bin/cytrace bin/syft bin/grype bin/cbomkit-theia cytrace-offline SHA256SUMS SHA256SUMS.minisig NOTICE CHANGELOG.md cytrace.sbom.cdx.json; do
+            [ -e "$b$f" ] || { echo "✗ 缺 $f"; exit 1; }
+          done
+          # musl 產出 static-pie（file 顯示「static-pie linked」）；判準是沒有動態載入器
+          info=$(file "${b}bin/cytrace"); echo "$info"
+          echo "$info" | grep -q 'static' && ! echo "$info" | grep -q 'interpreter' \
+            || { echo "✗ 非靜態連結"; exit 1; }
+          "${b}cytrace-offline" --version | grep -F "$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          ( cd "$b" && sha256sum -c --quiet SHA256SUMS )
+          minisign -Vm "${b}SHA256SUMS" -p "$RUNNER_TEMP/ci.pub"
+          # 竄改後必須驗不過，否則「驗過」不含資訊
+          cp "${b}SHA256SUMS" "$RUNNER_TEMP/tampered"
+          cp "${b}SHA256SUMS.minisig" "$RUNNER_TEMP/tampered.minisig"
+          echo "0000  ./evil" >> "$RUNNER_TEMP/tampered"
+          if minisign -Vm "$RUNNER_TEMP/tampered" -p "$RUNNER_TEMP/ci.pub"; then
+            echo "✗ 竄改後的 SHA256SUMS 仍驗得過"; exit 1
+          fi
+          echo "✓ 結構、靜態連結、版本、SHA256SUMS、簽章皆通過；竄改可偵測"

@@ -400,6 +400,34 @@ milestones:
         description: |
           以 CyTrace 對自身產出 SBOM 並隨安裝包附上（含 NOTICE）；撰寫離線 DB 快照打包/匯入 SOP。
 
+      - id: T920
+        title: "打包腳本的簽章路徑實測；Linux 安裝包納入 CI"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T402]
+        status: completed
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T402 盤點（2026-10-05）：簽章路徑從未被執行過"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-05"
+        description: |
+          盤點 T402 時發現：package.sh 有可選的 minisign 簽章步驟，但 CI 從未跑過 package.sh（Linux 是主要
+          交付形態）；package.ps1 沒有對等的簽章步驟；兩邊的簽章路徑都沒有被執行過。本機實跑 package.sh
+          另揭露缺 musl-gcc 時 cargo 建置在中途失敗、錯誤被丟進 /dev/null，腳本默默結束、沒有任何訊息。
+
+          **結案（2026-10-05）**：package.sh 建置前檢查 musl-gcc，建置失敗時印出記錄尾段（兩者皆實測）；
+          package.ps1 補上與 package.sh 對等的可選簽章（執行期字串維持 ASCII，避免 Windows PowerShell 5.1
+          亂碼）。versions.env 釘選 minisign 0.12（只供 CI，不隨交付包散布；資產先以作者公鑰驗章再釘
+          SHA256）。CI 新增 Linux 安裝包冒煙 job：釘選引擎取自 Dockerfile 的 engines／theia-builder stage，
+          `WITHOUT_DB=1` 打包，驗產物結構、靜態連結、`cytrace-offline --version`、`sha256sum -c`；
+          兩個平台都以拋棄式金鑰簽章，再用 SOP 寫給目標機的指令驗章，並確認竄改後驗不過。
+          T402 仍待人執行：以受管金鑰正式簽一次交付包（金鑰的產生與保管由人決定）。
+
   - id: M5
     title: "批次與 CI／穩定硬化（Batch, CI & Hardening）"
     target_date: 2026-09-16

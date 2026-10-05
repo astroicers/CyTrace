@@ -19,6 +19,10 @@
 
 ### 修正
 
+- `scripts/package.sh` 在缺 musl 的 C 編譯器時會在建置中途默默結束；現在會先檢查並提示安裝 `musl-tools`，
+  建置失敗時也會印出錯誤內容（T920）。
+- Windows 打包腳本 `package.ps1` 補上與 Linux 版對等的 minisign 簽章步驟：`minisign` 在 PATH 上且設了
+  `CYTRACE_MINISIGN_SECKEY` 時，對 `SHA256SUMS` 簽章（T920）。
 - 報表在中文模式仍顯示英文的地方都改為依語言顯示，包括封面的產生時間與弱點資料庫、風險總評的元件／弱點計數，
   以及弱點與 SBOM 表頭（T917）。弱點表的嚴重度欄原本誤用「弱點明細」當表頭，封面的掃描目標列原本誤用
   「機關識別」，兩者一併更正。
