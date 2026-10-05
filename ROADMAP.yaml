@@ -1266,7 +1266,7 @@ milestones:
         spec: null
         srs_ref: null
         depends_on: [T918, T919]
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: review
         source_ref: "T918／T919 複審：#31 正在改寫的文件會帶入已過時的說法"
@@ -1282,6 +1282,11 @@ milestones:
           - README：scan 列補 `--spdx`；控制台可下載 SBOM 兩種格式。
           - ADR-011：job 目錄檔案清單（另補原本就漏的 `cbom.cdx.json`）——以修訂節記錄。
           - DOCKER.md（選擇性）：`/tmp` tmpfs 另需容納 SPDX 暫存檔。
+
+          **結案（2026-10-05）**：T918 兩處於 #33 合併 #32 時更正；其餘於 #34 合併 #33 後更正（SRS FR-001
+          狀態與 CLI 表、NFR-07 另記實測覆蓋率 89.45%；SDS 流程圖、§3.2 多重輸出與 fail-closed、API 產物種類
+          與 `artifacts` 欄位；README scan 列；ADR-011 修訂節補 job 目錄產物與端點種類）。DOCKER.md 不改：
+          SPDX 暫存檔與 SBOM 同量級且用完即刪，1 GB tmpfs 足夠。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"

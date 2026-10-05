@@ -162,3 +162,11 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
   本修訂只更正一句與實作不符的宣稱，不改變本 ADR 的狀態與其他決策。
 - 同步更正：`crates/cytrace-server/src/targets.rs` 的註解（「detail 進稽核 log」）、`docs/SDS.md` §10。
 
+## 修訂：job 目錄的產物（2026-10-05，T919）
+
+**裁定來源**：使用者 2026-10-05 授權依建議推進至專案完整；SPDX 產出本身屬 ADR-002 既有決策。
+
+- 決策 4 列出的 job 目錄檔案不完整：實際另有 `cbom.cdx.json`（要求 CBOM 且引擎產出時；ADR-013），
+  T919 起另有 `sbom.spdx.json`（Web 服務模式一律產出）。
+- 決策 7 的 artifacts 端點種類：`sbom`、`spdx`、`grype`、`cbom`，以附件下載；單筆 job 查詢另附
+  `artifacts` 欄位，列出實際存在的產物。落盤的 `job.json` 格式不變。
