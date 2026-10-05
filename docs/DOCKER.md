@@ -1,7 +1,7 @@
 # CyTrace 容器部署（ADR-012）
 
 > **air-gapped 場域注意**：本檔範例用 `:latest`。離線 tar 只封 semver tag
->（如 `0.3.0`），`docker load` 後須先補打：
+>（如 `0.4.0`），`docker load` 後須先補打：
 > `docker tag ghcr.io/astroicers/cytrace:X.Y.Z ghcr.io/astroicers/cytrace:latest`
 >（見 DELIVERY_SOP §7.2）。
 
@@ -10,6 +10,8 @@ CyTrace 容器跑 `cytrace serve` Web 服務模式（登入控制台 + 掃描/�
 
 - **映像**：`ghcr.io/astroicers/cytrace`（GHCR 私有，linux/amd64）
 - **base**：distroless static（non-root 65532、無 shell、read-only rootfs 可行）
+- **引擎**：Syft、Grype、CBOMkit-theia 皆已在映像內（釘選版本，見 `scripts/versions.env`）；控制台的
+  「CBOM」勾選項可直接使用
 - **grype DB**：**不烤進 image**（slim，選項 B）；以 `/db` volume 掛入（DB 月更只換 volume）
 
 ## 快速上手
@@ -52,17 +54,24 @@ docker compose up -d
 | 變數 | 預設 | 說明 |
 |------|------|------|
 | `CYTRACE_ADMIN_PASSWORD_HASH` | （必填） | argon2id PHC；缺失或格式錯 → 拒絕啟動 |
+| `CYTRACE_ADMIN_USER` | `admin` | 管理帳號的顯示名稱 |
 | `CYTRACE_BIND` | `0.0.0.0:8443` | 監聽位址 |
 | `CYTRACE_TLS_CERT` / `CYTRACE_TLS_KEY` | 未設 | 成對設定啟用 HTTPS（未設 = HTTP 明文，啟動印警告） |
 | `CYTRACE_SCAN_ROOTS` | 未設 | `name=/abs/path,...` 掛載掃描白名單 |
 | `CYTRACE_SESSION_TTL_HOURS` | 12 | session 絕對過期 |
 | `CYTRACE_MAX_UPLOAD_MB` | 512 | 上傳大小上限 |
+| `CYTRACE_MAX_EXTRACT_MB` | min(上傳上限×10, 4096) | 上傳封存檔解壓後的總量上限 |
 | `CYTRACE_MAX_CONCURRENT_SCANS` | 2 | 同時掃描上限 |
+| `CYTRACE_MAX_QUEUED` | 32 | 佇列上限（排隊中與執行中的任務總數；滿了回 429） |
+| `CYTRACE_DATA_DIR` | `/data` | 資料目錄（容器內通常不改，改掛 volume） |
 | `CYTRACE_KEEP_INPUT` | false | 掃後是否保留上傳原檔 |
 | `CYTRACE_LANG` | `zh-TW` | 容器日誌（啟動錯誤、job 隔離與落盤警告）的語言：`zh-TW`／`en-US`。**不影響** console 與 API 的語言（依瀏覽器各自協商） |
 
-離線鐵則（`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`、
+離線鐵則（`GRYPE_DB_CACHE_DIR=/db`、`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`、
 `SYFT/GRYPE_CHECK_FOR_APP_UPDATE=false` 等）已烤進映像，無需設定。
+
+上表變數的值必須是合法的 UTF-8，否則啟動時以退出碼 1 結束並指名該變數；已由命令列旗標覆寫的變數不受影響。
+數值類變數不是整數時同樣拒絕啟動，訊息會指出是哪個變數。
 
 ## 啟用 TLS
 

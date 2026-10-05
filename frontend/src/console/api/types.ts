@@ -31,7 +31,12 @@ export interface JobRecord {
   summary?: JobSummary | null
   failon_triggered?: boolean | null
   error?: JobError | null
+  /** 實際存在的產物（僅單筆查詢附上；T919）。 */
+  artifacts?: ArtifactKind[]
 }
+
+/** 產物種類，對應 `GET /api/v1/jobs/{id}/artifacts/{kind}`（server `api::reports::ARTIFACTS`）。 */
+export type ArtifactKind = 'sbom' | 'spdx' | 'grype' | 'cbom'
 
 export interface JobList {
   jobs: JobRecord[]

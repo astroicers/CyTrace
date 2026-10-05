@@ -47,7 +47,7 @@ jobs:
         run: python3 scripts/release-notes.py check
 
   real-engine:
-    name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013）
+    name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013；SPDX，FR-001）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +64,14 @@ jobs:
           docker rm "$cid"
           chmod +x /usr/local/bin/cbomkit-theia
           echo "${THEIA_LINUX_AMD64_SHA256}  /usr/local/bin/cbomkit-theia" | sha256sum -c -
+      # SPDX（FR-001；T919）由 syft 產出：同樣取交付鏈的那支（Dockerfile engines stage 已驗 SHA256）
+      - name: 取出釘選 syft（Dockerfile engines stage）
+        run: |
+          docker build --target engines -t engines .
+          cid=$(docker create engines)
+          docker cp "$cid:/engines/syft" /usr/local/bin/syft
+          docker rm "$cid"
+          /usr/local/bin/syft version | grep -E "^Version: +${SYFT_VERSION}$"
       # M9 六輪複審中，第四輪之後的全部阻斷級都只有真引擎跑得出來（零資產目標輸出 null、
       # dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、憑證計數欄位名與想像不符）
       - name: 真引擎 × 真實輸入形態
@@ -111,6 +119,13 @@ jobs:
       # 本檢查載入真的 client.ts / upload.ts 驗實際送出值——第二輪複審 lang#0 / tests#0）。
       - name: console 送出語系 == 畫面語系（T909）
         run: node --experimental-strip-types frontend/scripts/console-lang-check.mts
+      # v0.4.0 的中文報表仍印英文表頭與 `Generated`；i18n-check 只驗被引用的鍵存在，
+      # 看不見根本沒走 t() 的字串（T917）。
+      - name: 前端無硬編碼使用者可見字串（T917）
+        run: node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+      # 報表以產生時的語言（--lang／請求語系）開啟；v0.4.0 前一律以 zh-TW 開啟（T918）
+      - name: 報表開啟語言 == <html lang>（T918）
+        run: node --experimental-strip-types frontend/scripts/report-lang-check.mts
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）

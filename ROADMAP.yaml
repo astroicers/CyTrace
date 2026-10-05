@@ -733,7 +733,7 @@ milestones:
   - id: M9
     title: "CBOM 密碼學資產盤點（CycloneDX CBOM + 量子脆弱判定）"
     target_date: 2027-03-31
-    status: in_progress
+    status: completed
     tasks:
       - id: T901
         title: "ADR-013 落稿 + 外部事實查證快照（純文件）"
@@ -1179,6 +1179,142 @@ milestones:
           **結案（2026-10-05）**：使用者選擇「修訂 ADR-011」。決策 6 的「並記稽核 log」劃除，文末加修訂節記錄
           實際行為（403 + `detail` 附原因碼與 root、path）、不補實作的理由（單一管理帳號，違規內容已回給唯一的
           請求者；補實作需另裁格式與 NFR-09 信任邊界）與裁定來源。同步更正 targets.rs 註解與 SDS §10。
+
+      - id: T917
+        title: "報表殘留硬編碼英文與誤用的鍵；前端缺字面值閘"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "v0.4.0 文件對齊時以實際報表截圖查出（2026-10-05）"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-05"
+        description: |
+          v0.4.0 中文報表仍印英文：封面的 `Generated`／`DB`、風險總評的 `N components · M findings`、
+          弱點與 SBOM 表頭（CVE／CVSS／Component／Fixed／Source／Name／Version／Type／Licenses）。
+          另有兩個誤用鍵：弱點表嚴重度欄的表頭用了區段標題（弱點明細），封面的掃描目標列用了區段標題
+          （機關識別）。工具列以 emoji 當圖示（🌐☀️🌙⚠️），離線機器沒有彩色 emoji 字型時會顯示成豆腐字；
+          aria-label 是寫死的英文。`scripts/i18n-check.py` 只驗「被引用的鍵存在」，
+          看不到根本沒經過 t() 的字串，所以這些都沒被擋下。
+
+          **結案（2026-10-05）**：補 `report.meta.*`、`report.counts`、`report.col.*` 與共用的 `ui.*` 鍵（兩語）；
+          工具列改文字標示，主題切換按鈕顯示切換後的主題，判斷改用 `resolvedTheme`；警示框拿掉 emoji。
+          工具列按鈕的無障礙名稱包含可見文字（WCAG 2.5.3），標籤後的冒號移入譯文（zh-TW 為全形）。
+          en-US 的未掃描提示原本是「1 items／1 files／1 assets」，改為不受單複數影響的句型。新增
+          `frontend/scripts/ui-literal-check.mts`：用 TypeScript AST 掃 `frontend/src/**/*.tsx`，六條規則為
+          JSX 文字、JSX 運算式、可見屬性、像文字的字面值（含元件 prop 與模板片段）、`t()` 的字面值必須是
+          帶命名空間的鍵、emoji。非可見屬性採白名單；專有名詞與單位明列豁免並逐項寫理由。20 個必紅哨兵
+          涵蓋每條規則與各分支路徑，另有一份共用必綠樣本與掃描量下限；拿掉 `+`／模板分支、`title`、
+          bad-key 規則或把 `value` 加進白名單，各自有哨兵轉紅（實測）。對 v0.4.0 原碼實測報出 22 處，
+          涵蓋上述全部的字面值問題；兩個誤用鍵是語意錯誤，機械檢查抓不到，改由人工修正。
+          已知不涵蓋：`.ts` 檔、單一個全小寫單字、標點。接進 `make lint`、`make frontend-check` 與 CI。
+          README 報表截圖重拍。獨立複審一輪（NEEDS_WORK：三種繞法與 a11y、冒號）後修正。
+
+      - id: T918
+        title: "報表以產生時的語言開啟"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T917 期間發現；使用者 2026-10-05 同意改為以產生語言開啟"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-05"
+        description: |
+          報表一律以 zh-TW 開啟，產生時的 `--lang`／`CYTRACE_LANG` 只影響終端訊息。操作員以 en-US 產出、
+          交給英文讀者的報表，對方打開仍是中文。ADR-004 只定 zh-TW 為 fallback、報表內可即時切換，
+          未規定開啟語言，屬補齊 `--lang` 的作用範圍，不需新 ADR。
+
+          **結案（2026-10-05）**：`cytrace_report::render` 多一個語言參數，把樣板的 `<html lang="zh-TW">`
+          （必須恰好一個，否則設定錯誤）換成產生語言，正規化規則同 `cytrace_i18n::lang_code`；
+          前端 i18n 初始化讀 `<html lang>`（`initialLang`，只接受有資源的語系）。CLI 的 `report`／`run`
+          （`batch` 經 `run_one` 共用同一處）以 `--lang`／`CYTRACE_LANG` 決定；server 以**送出掃描那次請求**
+          的語系決定（掛載與上傳兩條路徑）。報表內切換照舊。不動 ScanResult schema；ADR-009 加修訂節：
+          注入點多一個根元素、重現輸入改為「JSON ＋ 語言」（語言寫在報表的 `<html lang>`，可據以重現），
+          並寫明先替換根元素、後注入資料。SDS §6／§7 同步。
+          測試：cytrace-report 以內嵌的實際樣板驗兩語、正規化、標記恰好一個、資料含標記字串仍正常；
+          CLI 端到端驗 `report`／`run`／`batch` × 五種旗標與環境變數組合（含不支援的值）；server 驗掛載
+          （header／`?lang=`／預設）與上傳；`frontend/scripts/report-lang-check.mts` 一案一子程序載入真的
+          `src/i18n.ts`，含分得出有無白名單的 `en-us`、`cimode`。把 server 的語言寫死成 zh-TW、i18n.ts 改回
+          `lng: DEFAULT_LANG`、或拿掉 `initialLang` 的白名單，對應測試各自轉紅（實測）。
+          獨立複審一輪（NEEDS_WORK：ADR-009 未記修訂、三處測試缺口、SDS §6）後修正。
+
+      - id: T919
+        title: "SBOM 另輸出 SPDX 2.3（FR-001 備用格式）；控制台提供產物下載"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-002
+        spec: null
+        srs_ref: FR-001
+        depends_on: [T918]
+        status: completed
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "v0.4.0 文件對齊時 SRS 標註「SPDX 輸出未實作」（2026-10-05）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-05"
+        description: |
+          FR-001 要求 CycloneDX（主）與 SPDX（備），ADR-002 的成功指標寫「CycloneDX + SPDX 可輸出、以標準
+          驗證器檢查」，但只實作了 CycloneDX。另外控制台只提供報表與 ScanResult 下載，SBOM 檔本身（交件主物）
+          只能經 API 取得。
+
+          **結案（2026-10-05）**：同一次 syft 執行以 `-o cyclonedx-json -o spdx-json=<檔>` 產出兩種格式
+          （`engine::sbom_with_spdx`），SPDX 不是 JSON 或缺 `spdxVersion` 即 fail-closed（取捨見 ADR-002 修訂節：
+          與 CBOM 的降級不同）。CLI `scan --spdx` 另寫 `sbom.spdx.json`（預設關閉，既有產物不變；SPDX 最先寫入，
+          寫不進去時不留半套；目錄裡有上一輪的 SPDX 而本次未加 `--spdx` 時警告）；web 模式一律附上，產物端點
+          新增 `spdx` 並以附件下載（帶檔名），單筆 job 查詢回報實際存在的產物（`artifacts`），控制台據此列出
+          下載連結（CycloneDX、SPDX、Grype、CBOM），刪除按鈕改為獨立一列。釘選版 syft 1.45.1 實測輸出
+          SPDX-2.3，以官方 2.3 JSON schema 一次性驗證零違規（查證紀錄在本機 .asp-fact-check.md，未入版控）。
+          真引擎 CI job 自 Dockerfile engines stage 取出釘選 syft 並比對版本，經 `&dyn ScanEngine = &RealEngine`
+          驗 SPDX-2.3 且兩種格式的套件（名稱與版本）一致；`make test-real-engine` 同樣比對 syft 版本。
+          測試：validate_spdx 與暫存路徑唯一性單元；CLI 端到端（成功、預設不產、syft 只呼叫一次、暫存檔
+          收乾淨、舊 SPDX 警告、SPDX 寫不進去與 syft 未寫檔／寫錯格式時 fail-closed 且不留半套，兩語）；
+          server（清單、附件、引擎不產 SPDX 時清單不列且 404、產物種類與 console 型別一致）；真引擎。
+          反向實測：拿掉刪暫存檔、改成跑兩次 syft、改回先寫 CycloneDX、拿掉 RealEngine 的覆寫，各自有測試轉紅。
+          實跑 server + Playwright：控制台列出三個下載連結，SPDX 下載檔名正確。
+          獨立複審一輪（NEEDS_WORK：四項拿掉功能仍綠、scan 子命令說明未更新、一條恆真斷言等）後修正。
+
+      - id: T921
+        title: "#31（v0.4.0 文件對齊）合併後，依 T918／T919 更正文件"
+        type: MODIFICATION
+        priority: 2
+        adr: null
+        spec: null
+        srs_ref: null
+        depends_on: [T918, T919]
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T918／T919 複審：#31 正在改寫的文件會帶入已過時的說法"
+        triggered_by: review
+        sla_hours: 72
+        imported_at: "2026-10-05"
+        description: |
+          #31 與 T918／T919 平行進行，#31 的文件寫於兩者之前。#31 合併後必須更正：
+          - UIUX_SPEC §語言切換、DELIVERY_SOP §4：「報表一律以 zh-TW 開啟」→ 以產生語言開啟（T918）。
+          - SRS：FR-001 狀態（刪除「SPDX 輸出未實作」）；CLI 表 scan 列補 `--spdx`。
+          - SDS：流程圖與 §3 的 syft 指令（CLI 僅 `--spdx` 時多重輸出、web 一律）、暫存檔與 fail-closed；
+            API 的 artifacts 種類加 `spdx`、單筆 GET 的 `artifacts` 欄位、產物端點的 Content-Disposition。
+          - README：scan 列補 `--spdx`；控制台可下載 SBOM 兩種格式。
+          - ADR-011：job 目錄檔案清單（另補原本就漏的 `cbom.cdx.json`）——以修訂節記錄。
+          - DOCKER.md（選擇性）：`/tmp` tmpfs 另需容納 SPDX 暫存檔。
+
+          **結案（2026-10-05）**：T918 兩處於 #33 合併 #32 時更正；其餘於 #34 合併 #33 後更正（SRS FR-001
+          狀態與 CLI 表、NFR-07 另記實測覆蓋率 89.45%；SDS 流程圖、§3.2 多重輸出與 fail-closed、API 產物種類
+          與 `artifacts` 欄位；README scan 列；ADR-011 修訂節補 job 目錄產物與端點種類）。DOCKER.md 不改：
+          SPDX 暫存檔與 SBOM 同量級且用完即刪，1 GB tmpfs 足夠。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"

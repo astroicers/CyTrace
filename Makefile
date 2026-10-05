@@ -27,6 +27,8 @@ frontend-check:
 	@# 鍵清單與變數名規則，擋不到行為差異（實際漂開過兩次：空細節漏佔位符、en-US 夾全角）
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
+	node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -54,6 +56,10 @@ test:
 # 用 fixture 與 fake engine 一個都測不到——連我們自己寫的 fixture 都在說謊。
 test-real-engine:
 	@command -v cbomkit-theia >/dev/null || { echo "✗ 找不到 cbomkit-theia；先跑 scripts/build-theia.sh"; exit 1; }
+	@command -v syft >/dev/null || { echo "✗ 找不到 syft（SPDX 案例需要；版本見 scripts/versions.env）"; exit 1; }
+	@# 版本須等於釘選值：別版 syft 可能輸出別版 SPDX 而讓案例以不清楚的訊息失敗，或以未釘選的版本通過
+	@want=$$(sed -n 's/^SYFT_VERSION=//p' scripts/versions.env); got=$$(syft version | sed -n 's/^Version: *//p'); \
+	  [ "$$got" = "$$want" ] || { echo "✗ syft 版本 $$got ≠ 釘選 $$want（scripts/versions.env）"; exit 1; }
 	@# 案例缺工具時會 panic（本層不接受靜默略過），故前置一併檢查以給出清楚訊息
 	@for t in openssl ssh-keygen mkfifo; do 		command -v $$t >/dev/null || { echo "✗ 找不到 $$t（真引擎案例需要）"; exit 1; }; 	done
 	cargo test -p cytrace-core --test real_engine -- --ignored
@@ -90,7 +96,12 @@ lint: fmt-check clippy
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	@# console 實際送出的語系必須等於畫面語系（T909；第二輪複審 lang#0 / tests#0）；與上一支同一套前置
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
-	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系，零 warning）"
+	@# 畫面不得硬編碼使用者可見字串（T917）；需 typescript 剖析 AST，前置缺席同樣 fail-closed
+	@test -d frontend/node_modules/typescript || { echo "✗ 缺 frontend/node_modules/typescript（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
+	node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+	@# 報表以產生時的語言開啟（T918）；載入真的 src/i18n.ts，與上兩支同一套前置
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系 + 前端字面值 + 報表開啟語言，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

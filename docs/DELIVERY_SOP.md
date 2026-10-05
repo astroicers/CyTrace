@@ -20,6 +20,9 @@ cytrace-<版本>/
 └── SHA256SUMS.minisig     # 真實性（minisign detached 簽章）
 ```
 
+Windows 包結構相同，檔名為 `cytrace.exe`、`syft.exe`、`grype.exe`、`cbomkit-theia.exe`，wrapper 為 `cytrace-offline.ps1`，
+目錄名為 `cytrace-<版本>-windows`。
+
 ## 2. 產生安裝包（有網段 / build 機）
 
 **前置（Linux，一次性）**：CBOM 引擎自源碼可重現建置（ADR-013 決策 1；需 Docker）：
@@ -46,8 +49,9 @@ pwsh scripts/package.ps1   # 產 delivery\cytrace-<版本>-windows\
 腳本取用前比對 `versions.env` 的 `THEIA_WINDOWS_AMD64_SHA256`，不符即中止。缺檔時腳本 fail-hard；
 刻意不含 CBOM 引擎時以 `-WithoutCbom` 顯式說出來（此包的 `--cbom` 降級為「未盤點」，
 不影響 SBOM 與弱點比對）。
-腳本會：build musl 靜態 binary → 收集釘選引擎與 grype DB 快照 → 產自產 SBOM →
-寫 NOTICE → 算 SHA256SUMS →（若有金鑰）minisign 簽章。
+兩支腳本的步驟相同：build 靜態 binary（Linux：musl；Windows：msvc 靜態 CRT）→ 收集釘選引擎（syft／grype 核對自報版本，
+CBOM 引擎比對 SHA256）與 grype DB 快照 → 產自產 SBOM → 寫 NOTICE（依包內實際有無 CBOM 引擎）→ 收入 CHANGELOG →
+算 SHA256SUMS。minisign 簽章見 §3（在交付工作站以受管金鑰執行，不在 CI）。
 
 ## 3. 簽章與離線信任錨（ADR-007 / NEW-3）
 
@@ -79,6 +83,14 @@ wrapper 等效設定 `Path=<bundle>\bin`、`GRYPE_DB_CACHE_DIR=<bundle>\db`、
 wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 `GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`（ADR-003：舊快照不被年齡驗證中止）。
 
+**常用選項**（兩平台相同）：
+- `--cbom`：併同盤點密碼學資產（憑證、金鑰、演算法）；`--fail-on-quantum-vulnerable` 有量子脆弱資產即以 2 結束。
+- 語言：`--lang en-US`，或設環境變數 `CYTRACE_LANG=en-US`；終端訊息、錯誤與 `--help` 皆依此語言。
+  報表也以此語言開啟，可在報表內切換。
+- 退出碼：`0` 正常；`2` 達門檻（`--fail-on` 或量子閘門）；`1` 錯誤（含參數打錯、引擎失敗，以及量子閘門
+  未取得完整結果）。`1` 優先於 `2`。
+- 用法：`cytrace --help`、`cytrace <子命令> --help`。
+
 ## 5. 漏洞 DB 離線更新（ADR-003）
 
 1. **有網段**：`grype db update`（取最新庫）。
@@ -88,10 +100,13 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 
 > 進場更新申請耗時 → DB 快照可獨立於 binary 更新（只換 `db/`），降低每次申請的變更面。
 
-## 6. 平台注意（ADR-007）
+## 6. 平台注意（ADR-007 / ADR-010）
 
-預設目標 = `x86_64-unknown-linux-musl`。若驗收環境為 Windows / arm64 / 國產 Linux，
-須 cross-compile cytrace **與**重建對應平台的 syft/grype，並重檢 musl 價值主張（musl 限 Linux）。
+支援 x86_64 的 Linux（`x86_64-unknown-linux-musl`）與 Windows（`x86_64-pc-windows-msvc`）兩個平台，各有安裝包（§2）。
+Windows 包的 CBOM 引擎已在 GitHub 的 Windows runner 上實際執行驗證，**尚未於場域 Windows 機器驗證**——
+首次交付時請以含憑證的目錄跑一次 `--cbom` 確認。
+arm64 或國產 Linux（麒麟、UOS、RHEL clone）**未支援**：須 cross-compile cytrace **與**重建對應平台的
+syft／grype／theia，並重檢 musl 價值主張（musl 限 Linux）。
 
 ## 7. 容器交付（docker save/load；ADR-012）
 

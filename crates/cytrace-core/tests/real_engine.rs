@@ -12,7 +12,7 @@
 
 #![cfg(unix)]
 
-use cytrace_core::engine::{cbom_with_timeout, CbomTarget};
+use cytrace_core::engine::{cbom_with_timeout, CbomTarget, RealEngine, ScanEngine};
 use cytrace_core::failon::{quantum_gate, QuantumGate};
 use cytrace_core::{collect_cbom, engine};
 use cytrace_types::{CbomStatus, CryptoInventory};
@@ -722,4 +722,61 @@ fn stderr_is_actually_drained_on_the_normal_path() {
         out.admitted_keys > 0,
         "自承私鑰數須取自 stderr 的 Found N private key(s)"
     );
+}
+
+/// SPDX（備）與 CycloneDX（主）出自同一次 syft 編目（FR-001；ADR-002；T919）。
+///
+/// fake engine 驗不到的部分：釘選版 syft 真的接受 `-o spdx-json=<檔>` 的多重輸出、
+/// 寫出的是 SPDX 2.3，而且兩種格式的套件集合一致——交件時兩份 SBOM 說法不一，
+/// 比少一份更糟。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn spdx_and_cyclonedx_describe_the_same_packages() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("spdx");
+    fs::write(
+        dir.join("requirements.txt"),
+        "requests==2.31.0\nurllib3==2.0.7\n",
+    )
+    .unwrap();
+
+    // 經 trait 物件呼叫：server 走的是這條。RealEngine 若沒覆寫 sbom_with_spdx，會退回預設實作
+    // 回 None——web 模式靜默不再產 SPDX，而 fake engine 的測試全都看不出來（T919 複審 M1）
+    let engine: &dyn ScanEngine = &RealEngine;
+    let (cdx, spdx) = engine
+        .sbom_with_spdx(&format!("dir:{}", dir.display()))
+        .expect("syft 應同時產出 CycloneDX 與 SPDX");
+    let spdx = spdx.expect("RealEngine 必須產出 SPDX（不得退回 trait 預設實作）");
+    let spdx: serde_json::Value = serde_json::from_str(&spdx).unwrap();
+    let cdx: serde_json::Value = serde_json::from_str(&cdx).unwrap();
+    assert_eq!(spdx["spdxVersion"], "SPDX-2.3", "{spdx}");
+
+    // （名稱, 版本）雙向一致。SPDX 另有一個描述掃描目錄本身的 DocumentRoot 套件，不算元件。
+    let field = |v: &serde_json::Value, k: &str| v[k].as_str().unwrap_or("").to_string();
+    let libs: std::collections::BTreeSet<(String, String)> = cdx["components"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c["type"] == "library")
+        .map(|c| (field(c, "name"), field(c, "version")))
+        .collect();
+    let pkgs: std::collections::BTreeSet<(String, String)> = spdx["packages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| !field(p, "SPDXID").starts_with("SPDXRef-DocumentRoot"))
+        .map(|p| (field(p, "name"), field(p, "versionInfo")))
+        .collect();
+    // 非空：兩邊都沒抓到套件時「相等」恆真，不含資訊
+    assert!(
+        libs.contains(&("requests".to_string(), "2.31.0".to_string())),
+        "{libs:?}"
+    );
+    assert_eq!(libs, pkgs, "兩種格式的套件（名稱與版本）應一致");
+    let _ = fs::remove_dir_all(&dir);
 }

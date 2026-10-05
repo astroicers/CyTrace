@@ -76,7 +76,8 @@
         "scan": {
           "target": "掃描目標（目錄、容器映像 tar 或檔案系統）",
           "out_dir": "輸出目錄（預設目前目錄）",
-          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）"
+          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）",
+          "spdx": "另輸出 SPDX 2.3 格式的 SBOM（sbom.spdx.json；預設關閉）"
         },
         "report": {
           "input": "ScanResult JSON 的路徑",
@@ -95,7 +96,7 @@
       "cmd": {
         "run": "一鍵：產 SBOM → 比對弱點 → 出報表（可加 --fail-on）",
         "batch": "多目標批次掃描：逐一出報表；任一目標達 --fail-on 即整體以 2 結束",
-        "scan": "只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）",
+        "scan": "只產 sbom.cdx.json 與 grype.json（加 --spdx 時另產 sbom.spdx.json、加 --cbom 時另產 cbom.cdx.json）",
         "report": "由既有的 ScanResult JSON 離線重建報表（稽核複核）",
         "serve": "啟動 Web 服務：登入控制台與掃描、報表 API",
         "hash_password": "離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）",
@@ -113,7 +114,8 @@
       "conflict": "{{arg}} 不能與 {{other}} 一起使用",
       "other": "參數用法錯誤（{{detail}}）",
       "hint": "執行 `{{command}} --help` 查看用法"
-    }
+    },
+    "spdx_stale": "注意：{{path}} 是先前掃描留下的 SPDX，與本次的 sbom.cdx.json 不是同一次掃描（本次未加 --spdx）"
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",
@@ -243,7 +245,11 @@
       "cancel": "取消任務",
       "delete": "刪除任務",
       "running_hint": "掃描進行中，稍候會自動更新…",
-      "counts": "各嚴重度計數"
+      "counts": "各嚴重度計數",
+      "download_sbom": "下載 SBOM（CycloneDX）",
+      "download_spdx": "下載 SBOM（SPDX）",
+      "download_grype": "下載弱點比對結果（Grype）",
+      "download_cbom": "下載 CBOM"
     },
     "reports": {
       "title": "報表",
@@ -318,7 +324,25 @@
       "unscanned_oversize": "有 {{count}} 個檔案超過引擎 1 MiB 上限而未掃描，本清單並不完整（此限制無法以權限或參數解除）",
       "unscanned_undetermined": "引擎自承偵測到 {{count}} 項資產但未能建模輸出，本清單並不完整（引擎覆蓋率限制）"
     },
-    "scan_identity": "掃描身分"
+    "scan_identity": "掃描身分",
+    "meta": {
+      "target": "掃描目標",
+      "db": "弱點資料庫",
+      "generated_at": "產生時間"
+    },
+    "counts": "元件 {{components}} 個 · 弱點 {{findings}} 項",
+    "col": {
+      "severity": "嚴重度",
+      "cve": "CVE",
+      "cvss": "CVSS",
+      "component": "元件",
+      "fixed": "修補版本",
+      "source": "來源",
+      "name": "名稱",
+      "version": "版本",
+      "type": "類型",
+      "licenses": "授權"
+    }
   },
   "crypto": {
     "quantum": {
@@ -340,5 +364,12 @@
       "not_cyclonedx": "引擎輸出不是 CycloneDX BOM",
       "engine": "引擎錯誤"
     }
+  },
+  "ui": {
+    "language": "介面語言：{{lang}}",
+    "theme_switch_to": "切換為{{theme}}主題",
+    "theme_dark": "深色",
+    "theme_light": "淺色",
+    "labeled": "{{label}}："
   }
 }

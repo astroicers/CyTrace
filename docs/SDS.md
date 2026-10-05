@@ -6,7 +6,7 @@
 | **專案** | CyTrace |
 | **版本** | 0.4 |
 | **日期** | 2026-10-05 |
-| **狀態** | 現行，與 v0.3.x 程式碼對齊 |
+| **狀態** | 現行，與 v0.4.0 程式碼對齊 |
 | **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
 
 > **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
@@ -32,6 +32,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
         ▼                               ▼
  ┌──────────────── cytrace-core：掃描管線 ─────────────────┐
  │  engine::sbom   → syft  ──→ CycloneDX JSON（sbom.cdx.json）│
+ │                         └─→ SPDX 2.3（sbom.spdx.json，選用）│
  │  engine::vuln   → grype ──→ grype JSON（離線 DB）          │
  │  engine::cbom   → cbomkit-theia ──→ CBOM（僅 --cbom 時）   │
  │        │                                                  │
@@ -55,7 +56,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 | `cytrace-types` | 共用領域型別，零業務邏輯：`Severity`、`Component`、`Vulnerability`、`Meta`、`ScanResult`、`CryptoInventory`、`CbomStatus`、`QuantumStatus` | serde |
 | `cytrace-core` | 子程序編排（`engine`）、解析（`parse`）、嚴重度與風險總評（`severity`）、量子判定（`quantum`）、閘門（`failon`）、時間格式（`timefmt`）、錯誤分類（`error`） | cytrace-types、serde_json、thiserror |
 | `cytrace-i18n` | 輕量 catalog（`Catalog`、`Localized`、`lang_code`），CLI 與 server 共用；locale 以 `include_str!` 內嵌 | serde_json |
-| `cytrace-report` | 內嵌報表樣板、依注入契約產出單檔 HTML（§7） | cytrace-types、cytrace-core |
+| `cytrace-report` | 內嵌報表樣板、依注入契約產出單檔 HTML（§7） | cytrace-types、cytrace-core、cytrace-i18n |
 | `cytrace-server` | Web 服務模式：axum 路由、認證、session、job 佇列與落盤、上傳解壓、掛載白名單、TLS、console 靜態檔（§10） | axum、axum-server、tokio、rustls（ring）、argon2、zip／tar／flate2、rust-embed |
 | `cytrace-cli` | clap 子命令、語言解析、終端錯誤渲染、退出碼；feature `server`（預設開啟）納入 `serve`／`hash-password`／`health` | clap、anyhow、cytrace-server（optional） |
 
@@ -78,11 +79,15 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   **不要假設任意 PATH 上的版本相容**：實測 syft 1.51 預設輸出 CycloneDX 1.7，
   會讓 grype 0.114 無法解讀（`.asp-fact-check.md` 2026-09-29）。
 - theia 自源碼建置，不採用上游的 release binary（ADR-013 決策 1）。Linux 由 Dockerfile 的
-  theia-builder stage 承接；Windows 版尚未就緒（T911），Windows 包以 `-WithoutCbom` 明示不含 theia。
+  theia-builder stage 承接；Windows 版由 theia-builder-windows stage 以同一份源碼與參數交叉編譯（T911），
+  SHA256 釘在 `THEIA_WINDOWS_AMD64_SHA256`，`package.ps1` 取用前比對，也作為 Release 資產發佈。
 
 ### 3.2 Syft／Grype
 
 - `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。
+- 需要 SPDX 時（CLI `scan --spdx`；Web 服務模式一律）改為同一次執行多重輸出：
+  `-o cyclonedx-json -o spdx-json=<暫存檔>`，兩種格式出自同一次編目（T919）。暫存檔名行程內唯一、
+  用完即刪；SPDX 缺檔、不是 JSON 或缺 `spdxVersion` 時整次掃描失敗（fail-closed，取捨見 ADR-002 修訂節）。
 - Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
   DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
   不走 stdin。
@@ -100,6 +105,8 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   - `env_clear` 後只加回 `HOME`、`TMPDIR`、`PATH`；
   - 每次呼叫配一個**專用、可寫的 HOME**，在所有離開路徑上都會清理。HOME 不可寫時，theia 會把警告印進
     stdout、汙染 JSON；併發 job 共用 HOME 會互相干擾。
+  - Windows 上另給 USERPROFILE、APPDATA、LOCALAPPDATA（皆為專用 HOME）與 TEMP、TMP，並帶回 SystemRoot、windir：
+    Go 在 Windows 上以這些變數取代 HOME／TMPDIR（T911）。
 - **逾時與抽乾**：
   - 預設逾時 600 秒，可用 `CYTRACE_CBOM_TIMEOUT_SECS` 覆寫，上限 86,400 秒；這個變數只供除錯，
     值不合法時退回預設；
@@ -197,8 +204,10 @@ ScanResult {
   - 正規化共用 `cytrace_i18n::lang_code`：`en*` → en-US、`zh*` → zh-TW，不分大小寫；
   - 優先序最高、有給值的來源不受支援時，以兩種語言各印一行警告後退回 zh-TW，不往下一個來源找；
     空白的環境變數視同未設；
-  - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言。
+  - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言；
+  - CLI 產出的報表（`report`／`run`／`batch`）也以操作者語言開啟（T918，見 §7「開啟語言」）。
 - **API 回應的語言**不受操作者語言影響，依 ADR-011 §7 每個請求各自協商：`?lang=` > `Accept-Language` > zh-TW。
+  Web 服務產出的報表以**送出掃描那次請求**協商出的語言開啟（T918）。
 - **`--help` 與用法錯誤**（T914，`cytrace-cli/src/help.rs`）：
   - 語言在解析之前決定：先從 argv 預掃 `--lang`，再看 `CYTRACE_LANG`；
   - 說明文字住在 locale 的 `cli.help.*`，鍵由子命令名與參數 id 推導；以 clap builder 注入，區段標題、
@@ -224,6 +233,9 @@ ScanResult {
   `type=application/json` 讓資料不受 `script-src` 管轄。
 - **跳脫**：注入前把 `</` 換成 `<\/`，U+2028／U+2029 換成 ` `／` `；
   golden 測試驗證含 `</script>` 與 U+2028 的欄位能 round-trip。
+- **開啟語言**（T918）：樣板根元素 `<html lang="zh-TW">` 必須恰好一個，產生時換成產生語言
+  （CLI 的 `--lang`／`CYTRACE_LANG`；server 為送出掃描那次請求的語系），正規化同 `cytrace_i18n::lang_code`。
+  前端 i18n 初始化讀它（`initialLang`），只接受 zh-TW／en-US，其餘 → zh-TW。這不是資料，不進 ScanResult。
 - **前端讀取**：`JSON.parse(document.getElementById('cytrace-data').textContent)`。
   schema v2 的 `crypto` 欄位缺漏時視為未請求，所以 v1 JSON 照樣能渲染。
 - **零外連**：字型本地子集化後內嵌；CSP 以 `connect-src 'none'` 擋外連，
@@ -291,6 +303,8 @@ ScanResult {
   - 掛載目錄白名單：先做語彙檢查，再以 canonicalize 加前綴驗證擋 symlink 逃逸。
 - **API**：
   - 路徑：`/api/v1` 下的 session、targets、jobs、upload、report、result、artifacts、version，加上 `/healthz`；
+  - 產物 `GET /jobs/{id}/artifacts/{kind}`：`sbom`（CycloneDX）、`spdx`、`grype`、`cbom`，以附件回應
+    （`Content-Disposition` 帶檔名）；單筆 `GET /jobs/{id}` 另附 `artifacts`，列出實際存在的產物，console 據此顯示下載連結；
   - 錯誤格式為 `{error:{kind,i18n_key,message,detail}}`。`message` 依請求語系渲染，`detail` 是不翻譯的原始資訊；
     job 失敗的 `message` 走與 console 共用 fixture 的退回鏈。
   - 路徑違規回 403，原因碼與請求的 root、path 附在 `detail`；伺服器端不另記稽核 log（ADR-011 修訂節，T916）。

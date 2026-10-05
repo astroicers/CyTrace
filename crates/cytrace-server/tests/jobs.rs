@@ -24,6 +24,7 @@ use tower::util::ServiceExt;
 const CYCLONEDX: &str = include_str!("../../cytrace-core/tests/fixtures/cyclonedx.json");
 const GRYPE: &str = include_str!("../../cytrace-core/tests/fixtures/grype.json");
 const CBOM: &str = include_str!("../../cytrace-core/tests/fixtures/cbom.json");
+const SPDX: &str = include_str!("../../cytrace-core/tests/fixtures/spdx.json");
 
 const TEST_PASSWORD: &str = "test-password-123";
 static TEST_PHC: LazyLock<String> = LazyLock::new(|| hash_password(TEST_PASSWORD).unwrap());
@@ -33,6 +34,9 @@ struct FakeEngine;
 impl ScanEngine for FakeEngine {
     fn sbom(&self, _target: &str) -> CoreResult<String> {
         Ok(CYCLONEDX.into())
+    }
+    fn sbom_with_spdx(&self, _target: &str) -> CoreResult<(String, Option<String>)> {
+        Ok((CYCLONEDX.into(), Some(SPDX.into())))
     }
     fn vuln(&self, _sbom: &str) -> CoreResult<String> {
         Ok(GRYPE.into())
@@ -1502,4 +1506,172 @@ async fn t909_rejections_on_report_query_and_delete_path() {
             "server.err.bad_request",
         );
     }
+}
+
+/// 報表開啟語言 == 送出掃描那次請求的語系（T918）。報表 HTML 是靜態產物：之後用哪種語言
+/// 查看都不影響它，所以只能在產生時決定。掛載與上傳兩條送出路徑、header 與 `?lang=`
+/// 兩種協商方式都要涵蓋——少接一條，那條路徑產的報表就一律以 zh-TW 開啟，且沒有任何錯誤。
+#[tokio::test]
+async fn t918_report_opens_in_submitting_request_language() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let body = r#"{"target":{"kind":"mounted","root":"targets","path":"app"}}"#;
+
+    let html_lang = |id: &str| {
+        let html = std::fs::read_to_string(env.base.join("data/jobs").join(id).join("report.html"))
+            .unwrap();
+        let rest = html
+            .split("<html lang=\"")
+            .nth(1)
+            .expect("缺 <html lang>")
+            .to_string();
+        rest.split('"').next().unwrap().to_string()
+    };
+
+    // 掛載：Accept-Language / ?lang= / 皆無
+    for (uri, accept, want) in [
+        ("/api/v1/jobs", Some("en-US,en;q=0.9"), "en-US"),
+        ("/api/v1/jobs?lang=en-US", Some("zh-TW"), "en-US"),
+        ("/api/v1/jobs", None, "zh-TW"),
+    ] {
+        let mut req = with_csrf_and(Request::post(uri))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie);
+        if let Some(al) = accept {
+            req = req.header(header::ACCEPT_LANGUAGE, al);
+        }
+        let resp = env
+            .app
+            .clone()
+            .oneshot(req.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED, "{uri} {accept:?}");
+        let id = json_of(resp).await["id"].as_str().unwrap().to_string();
+        let done = wait_terminal(&env.app, &cookie, &id).await;
+        assert_eq!(done["status"], "done", "{done}");
+        assert_eq!(html_lang(&id), want, "{uri} Accept-Language={accept:?}");
+    }
+
+    // 上傳：Accept-Language
+    let zip = make_zip_bytes(&[("app/main.py", b"print(1)")]);
+    let boundary = "----cytracet918";
+    let req = with_csrf_and(Request::post("/api/v1/jobs/upload"))
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, &cookie)
+        .header(header::ACCEPT_LANGUAGE, "en-US")
+        .body(Body::from(multipart_body(boundary, "app.zip", &zip, None)))
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let id = json_of(resp).await["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(html_lang(&id), "en-US", "上傳路徑");
+}
+
+/// web 模式一律附 SPDX（FR-001；T919）：單筆查詢回報實際存在的產物，產物端點以附件下載。
+/// 引擎不產 SPDX（升級前的 job、或 fake 引擎的預設實作）時，job 照常完成、清單不列 spdx、
+/// 端點回 404——console 依清單顯示下載連結，不會給出一個點了才 404 的按鈕。
+#[tokio::test]
+async fn t919_spdx_artifact_is_listed_and_downloadable() {
+    async fn fetch(app: &Router, cookie: &str, uri: &str) -> axum::response::Response {
+        app.clone()
+            .oneshot(
+                Request::get(uri)
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+    }
+
+    // 有 SPDX
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job(&env.app, &cookie, "app", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    // FakeEngine 有 CBOM 實作但本 job 未要求 → 不列 cbom
+    assert_eq!(
+        done["artifacts"],
+        serde_json::json!(["sbom", "spdx", "grype"]),
+        "{done}"
+    );
+
+    let resp = fetch(
+        &env.app,
+        &cookie,
+        &format!("/api/v1/jobs/{id}/artifacts/spdx"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let cd = resp.headers()[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        cd,
+        format!("attachment; filename=\"cytrace-{id}.sbom.spdx.json\"")
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::str::from_utf8(&body).unwrap(),
+        SPDX,
+        "SPDX 應原樣落地與回應"
+    );
+
+    // 列表不附 artifacts（不為每一筆碰檔案系統）
+    let resp = fetch(&env.app, &cookie, "/api/v1/jobs").await;
+    let list = json_of(resp).await;
+    assert_eq!(list["total"], 1, "{list}");
+    assert!(list["jobs"][0].get("artifacts").is_none(), "{list}");
+
+    // 引擎不產 SPDX：job 照常完成，清單不列、端點 404
+    let env = build_env(Arc::new(BrokenCbomEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (_, v) = create_job(&env.app, &cookie, "app", None).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(
+        done["artifacts"],
+        serde_json::json!(["sbom", "grype"]),
+        "{done}"
+    );
+    let resp = fetch(
+        &env.app,
+        &cookie,
+        &format!("/api/v1/jobs/{id}/artifacts/spdx"),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// 產物種類的兩份宣告必須一致：server 的 `ARTIFACTS` 與 console 的 `ArtifactKind`。
+/// server 多一種而 console 沒跟上時，下載連結的文字會變成 `t(undefined)`（T919 複審 Info）。
+#[test]
+fn artifact_kinds_match_the_console_type() {
+    let ts = include_str!("../../../frontend/src/console/api/types.ts");
+    let line = ts
+        .lines()
+        .find(|l| l.starts_with("export type ArtifactKind"))
+        .expect("types.ts 應宣告 ArtifactKind");
+    let mut console: Vec<&str> = line.split('\'').skip(1).step_by(2).collect();
+    let mut server: Vec<&str> = cytrace_server::api::reports::ARTIFACTS
+        .iter()
+        .map(|(k, _)| *k)
+        .collect();
+    console.sort_unstable();
+    server.sort_unstable();
+    assert!(!server.is_empty());
+    assert_eq!(server, console, "{line}");
 }

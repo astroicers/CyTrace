@@ -60,6 +60,8 @@ enum Command {
         out_dir: Option<PathBuf>,
         #[arg(long)]
         cbom: bool,
+        #[arg(long)]
+        spdx: bool,
     },
     Report {
         input: PathBuf,
@@ -236,7 +238,7 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                     )
                 );
             }
-            let html = cytrace_report::render(&result)?;
+            let html = cytrace_report::render(&result, cat.code())?;
             let path = out.clone().unwrap_or_else(|| default_report_path(input));
             write_file(&path, html)?;
             println!(
@@ -252,11 +254,32 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
             target,
             out_dir,
             cbom,
+            spdx,
         } => {
             let dir = out_dir.clone().unwrap_or_else(|| PathBuf::from("."));
             println!("{}", cat.t("cli.scanning", &[("target", target)]));
-            let sbom = engine::sbom(target)?;
+            // SPDX（備；FR-001）與 CycloneDX 出自同一次 syft 執行
+            let (sbom, spdx_json) = if *spdx {
+                let (cdx, s) = engine::sbom_with_spdx(target)?;
+                (cdx, Some(s))
+            } else {
+                (engine::sbom(target)?, None)
+            };
             let grype = engine::vuln(&sbom)?;
+            // SPDX 先寫：它寫不進去時，主產物還沒落地，不留半套
+            let spdx_path = dir.join("sbom.spdx.json");
+            match &spdx_json {
+                Some(s) => write_file(&spdx_path, s)?,
+                // 不刪使用者目錄裡的檔案，但要講清楚它和本次的 CycloneDX 不是同一次掃描
+                None if spdx_path.exists() => eprintln!(
+                    "{}",
+                    cat.t(
+                        "cli.spdx_stale",
+                        &[("path", &spdx_path.display().to_string())]
+                    )
+                ),
+                None => {}
+            }
             write_file(&dir.join("sbom.cdx.json"), &sbom)?;
             write_file(&dir.join("grype.json"), &grype)?;
             if *cbom {
@@ -457,7 +480,7 @@ fn run_one(
         findings,
         crypto,
     );
-    let html = cytrace_report::render(&result)?;
+    let html = cytrace_report::render(&result, cat.code())?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
     write_file(&path, html)?;
     let risk = result.summary.overall_risk;
