@@ -111,6 +111,10 @@ jobs:
       # 本檢查載入真的 client.ts / upload.ts 驗實際送出值——第二輪複審 lang#0 / tests#0）。
       - name: console 送出語系 == 畫面語系（T909）
         run: node --experimental-strip-types frontend/scripts/console-lang-check.mts
+      # v0.4.0 的中文報表仍印英文表頭與 `Generated`；i18n-check 只驗被引用的鍵存在，
+      # 看不見根本沒走 t() 的字串（T917）。
+      - name: 前端無硬編碼使用者可見字串（T917）
+        run: node --experimental-strip-types frontend/scripts/ui-literal-check.mts
       # 報表以產生時的語言（--lang／請求語系）開啟；v0.4.0 前一律以 zh-TW 開啟（T918）
       - name: 報表開啟語言 == <html lang>（T918）
         run: node --experimental-strip-types frontend/scripts/report-lang-check.mts

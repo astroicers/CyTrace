@@ -27,7 +27,7 @@ def leaf_keys(obj, prefix=""):
 # 程式碼中出現的字面 i18n 鍵（`"cbom.err.timeout"` 之類）必須存在於 catalog。
 # 只比對兩語系對稱抓不到「根本沒進 catalog 的鍵」——第五輪複審即因此漏掉 cbom.err.* 七鍵。
 # 排除檔名等非鍵字面值（.html/.json/.js/.css 結尾）
-_NS = r"(?:cbom\.err|cli|report|crypto|severity|server|console)"
+_NS = r"(?:cbom\.err|cli|report|crypto|severity|server|console|ui)"
 # 排除「命名空間 + 副檔名」形態的非鍵字面值（`console.log`、`report.pdf`…）。
 # **收尾須有界定**：第六輪把 `(?!html"|json"…)` 的引號拿掉後失去錨點，於是合法鍵只要
 # 第二段以 html/json/js/css/md 起頭（如 `cli.json_export`）就被靜默略過（第七輪複審）。

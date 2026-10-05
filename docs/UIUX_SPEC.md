@@ -4,10 +4,13 @@
 |------|------|
 | **文件** | UI/UX Specification |
 | **專案** | CyTrace |
-| **版本** | 0.1（草案） |
-| **日期** | 2026-06-24 |
-| **狀態** | Draft |
-| **對應** | ADR-004（i18n）、ADR-005（單檔報表）、SRS FR-006/FR-007、NFR-08 |
+| **版本** | 0.4 |
+| **日期** | 2026-10-05 |
+| **狀態** | 現行，與 v0.4.0 對齊 |
+| **對應** | ADR-004（i18n）、ADR-005（單檔報表）、ADR-011（Web 控制台）、ADR-013（密碼學資產）、SRS FR-006/FR-007/FR-011/FR-013、NFR-08 |
+
+> **v0.4 更新**：§1–§7 為報表檢視器；§8 新增 Web 控制台（v0.3.0 起）。並更正 0.1 草案中與實作不符的三處：
+> 報表不持久化語言（持久化的是控制台）、主題只有亮／暗（無高對比）、列印為按鈕而非說明。
 
 ---
 
@@ -21,7 +24,7 @@
 | UI | React 19 + Tailwind | 版面、排版、卡片、表格 |
 | 元件 | Radix UI | Tabs、Dialog、Tooltip、DropdownMenu（語言切換）、無障礙原語 |
 | 動畫 | Motion（`motion/react`） | 進出場/展開的輕量過場（只動 transform/opacity） |
-| 主題 | next-themes | 亮/暗與高對比 |
+| 主題 | next-themes | 亮 / 暗 |
 | 狀態 | Zustand | 語言、主題、嚴重度篩選 |
 | i18n | react-i18next | zh-TW（fallback）/ en-US |
 | 建置 | Vite（單檔內聯） | 內聯 JS/CSS/字型 → 單檔，供 Rust 內嵌 |
@@ -59,11 +62,12 @@
 
 ## 4. 互動
 
-- **語言切換**：右上 Radix DropdownMenu（zh-TW / English），即時切換、寫入 Zustand + 持久化（localStorage 鍵 `cytrace.lang`）。
-- **主題切換**：亮 / 暗 / 高對比（next-themes）。
+- **語言切換**：右上 Radix DropdownMenu（zh-TW / English），即時切換。報表以**產生時的語言**開啟
+  （CLI 的 `--lang`／`CYTRACE_LANG`；Web 服務為送出掃描時的介面語言），讀者可再切換；切換不持久化（T918）。
+- **主題切換**：亮 / 暗（next-themes；預設亮）。
 - **嚴重度篩選**：總評區點等級 → 過濾弱點明細表。
 - **展開細節**：弱點列可展開顯示描述（Radix + Motion 過場）。
-- **列印**：提供「列印 / 另存 PDF」說明（瀏覽器列印；ADR-005 暫不內建 PDF）。
+- **列印**：右上「列印 / 存 PDF」按鈕呼叫瀏覽器列印；列印樣式隱藏工具列等互動元件（ADR-005 不內建 PDF）。
 
 ## 5. 無障礙（WCAG-2.1-AA，NFR-08）
 
@@ -85,3 +89,25 @@
 - 任何使用者可見字串一律走 `react-i18next` 鍵；**禁止硬編碼**（`frontend_quality` 把關）。
 - 兩語系鍵集合一致、無缺鍵（CI 檢查）。
 - 嚴重度標籤鍵與 ADR-006 對齊（`severity.*`）。
+
+## 8. Web 控制台（`cytrace serve`；ADR-011，v0.3.0 起）
+
+控制台是 `serve` 提供的單頁應用，與報表樣板分屬兩份 Vite 建置產物，以 rust-embed 內嵌進 binary。
+採 hash routing（`#/…`），同樣零外連；CSP 由 server 以標頭下發。
+
+| 路由 | 頁面 | 內容 | i18n 鍵命名空間 |
+|------|------|------|----------------|
+| （未登入） | 登入 | 單一管理帳號的密碼登入 | `console.login` |
+| `#/` | 掃描任務 | job 列表：目標、狀態、風險、建立時間；重新整理、新增掃描、檢視 | `console.jobs` |
+| `#/scans/new` | 新增掃描 | 兩種來源：上傳封存檔（zip／tar／tar.gz，顯示進度）或掛載目錄白名單（root + 相對路徑）；`fail_on` 門檻；CBOM 勾選項 | `console.scan` |
+| `#/jobs/{id}` | 任務詳情 | 狀態、時間、風險與計數；失敗時顯示依語系渲染的原因；下載報表與 ScanResult | `console.job` |
+| `#/reports` | 報表 | 已完成掃描的報表列表 | `console.reports` |
+| `#/system` | 系統 | CyTrace 版本、DB 快照狀態、掃描白名單、上傳上限 | `console.system` |
+
+- **語系**：控制台語言持久化在 localStorage 鍵 `cytrace.lang`，只接受 zh-TW／en-US，其他值退回 zh-TW。
+  送往 API 的 `?lang=` 一律是**畫面實際使用的語系**，報表與結果連結也帶語系，時間依介面語系格式化
+  （前端以 AST 檢查把關：`frontend/scripts/console-lang-check.mts`）。
+- **API 錯誤**：顯示依請求語系渲染的 `message`；job 失敗原因的退回鏈與 server 共用同一份 fixture
+  （鍵 → 分類泛用句 → 原始細節 → 內部錯誤）。
+- **零外連**：除同源 `/api` 外不發任何請求；`/api` 字串只准出現在 `api/client.ts`、`api/upload.ts`。
+
