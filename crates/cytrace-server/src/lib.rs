@@ -40,22 +40,22 @@ pub fn serve(mut cfg: ServerConfig, lang: &str) -> Result<(), Localized> {
         .build()
         .map_err(runtime_failed)?;
     rt.block_on(async {
-        // 中止訊號在綁定位址**之前**就掛好：listening 行印出後按下的 Ctrl-C 一定接得到。
+        // 停止訊號在綁定位址**之前**就掛好：listening 行印出後收到的訊號一定接得到。
         // 原本 `ctrl_c()` 在 spawn 出的 task 第一次被 poll 時才註冊，與 listening 行沒有先後
         // 保證——剛印出就按的 Ctrl-C 可能直接殺掉行程（未優雅關閉）或被吞掉（T912 複審 newgates#5
         // 以負載實測重現）
-        let mut interrupt = interrupt_signal().map_err(runtime_failed)?;
+        let mut stop = StopSignals::new().map_err(runtime_failed)?;
 
         let app =
             router::build_router(cfg.clone())?.into_make_service_with_connect_info::<SocketAddr>();
         let handle = axum_server::Handle::<SocketAddr>::new();
 
-        // 中止訊號 → graceful shutdown（10s 寬限）
+        // 停止訊號 → graceful shutdown（10s 寬限）
         tokio::spawn({
             let handle = handle.clone();
             let msg = cat.t("server.shutdown", &[]);
             async move {
-                if interrupt.recv().await.is_some() {
+                if stop.recv().await.is_some() {
                     println!("{msg}");
                     handle.graceful_shutdown(Some(Duration::from_secs(10)));
                 }
@@ -103,14 +103,49 @@ pub fn serve(mut cfg: ServerConfig, lang: &str) -> Result<(), Localized> {
     })
 }
 
-/// 中止訊號（Ctrl-C）。**同步**註冊：回傳時 handler 已經掛上。
-#[cfg(unix)]
-fn interrupt_signal() -> std::io::Result<tokio::signal::unix::Signal> {
-    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+/// 停止訊號。**同步**註冊：建構完成時 handler 已經掛上。
+///
+/// unix 上同時接 SIGINT（Ctrl-C）與 SIGTERM（T915）：`docker stop`、systemd、Kubernetes 送的都是
+/// SIGTERM。容器裡 cytrace 是 PID 1，核心不對 PID 1 套用 SIGTERM 的預設動作——沒有 handler 時
+/// 訊號等於被忽略，`docker stop` 只能等逾時後 SIGKILL，連線不會被優雅關閉。
+struct StopSignals {
+    #[cfg(unix)]
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    ctrl_c: tokio::signal::windows::CtrlC,
 }
 
-/// 中止訊號（Ctrl-C）。**同步**註冊：回傳時 handler 已經掛上。
-#[cfg(windows)]
-fn interrupt_signal() -> std::io::Result<tokio::signal::windows::CtrlC> {
-    tokio::signal::windows::ctrl_c()
+impl StopSignals {
+    #[cfg(unix)]
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::unix::{signal, SignalKind};
+        Ok(StopSignals {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
+    }
+
+    #[cfg(windows)]
+    fn new() -> std::io::Result<Self> {
+        Ok(StopSignals {
+            ctrl_c: tokio::signal::windows::ctrl_c()?,
+        })
+    }
+
+    /// 等到任一停止訊號。
+    async fn recv(&mut self) -> Option<()> {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                r = self.interrupt.recv() => r,
+                r = self.terminate.recv() => r,
+            }
+        }
+        #[cfg(windows)]
+        {
+            self.ctrl_c.recv().await
+        }
+    }
 }
