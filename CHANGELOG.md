@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### 修正
+
+- `scripts/package.sh` 在缺 musl 的 C 編譯器時會在建置中途默默結束；現在會先檢查並提示安裝 `musl-tools`，
+  建置失敗時也會印出錯誤內容（T920）。
+- Windows 打包腳本 `package.ps1` 補上與 Linux 版對等的 minisign 簽章步驟：`minisign` 在 PATH 上且設了
+  `CYTRACE_MINISIGN_SECKEY` 時，對 `SHA256SUMS` 簽章（T920）。
+
 ## [0.4.0] - 2026-10-05
 
 ### 新增

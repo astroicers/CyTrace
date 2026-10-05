@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # CyTrace 離線安裝包組裝（ADR-007 / DELIVERY_SOP）。
 # 用法：scripts/package.sh [輸出目錄=delivery]
-# 需求：cargo + musl target、syft、grype（PATH 或 ~/.local/bin）、已 grype db update。
+# 需求：cargo + musl target + musl-tools（musl-gcc）、syft、grype（PATH 或 ~/.local/bin）、已 grype db update。
+# 簽章（可選）：minisign 在 PATH 且 CYTRACE_MINISIGN_SECKEY 指向私鑰檔（DELIVERY_SOP §3）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -23,6 +24,9 @@ say() { printf '  → %s\n' "$1"; }
 
 command -v syft >/dev/null || { echo "✗ 找不到 syft"; exit 1; }
 command -v grype >/dev/null || { echo "✗ 找不到 grype"; exit 1; }
+# ring 的 C 部分需要 musl 的 C 編譯器；缺了 cargo 會在建置中途失敗（T920 實測）
+command -v musl-gcc >/dev/null || command -v x86_64-linux-musl-gcc >/dev/null \
+  || { echo "✗ 找不到 musl-gcc（Debian/Ubuntu：apt-get install musl-tools）"; exit 1; }
 
 echo "📦 組裝 CyTrace $VERSION → $BUNDLE"
 rm -rf "$BUNDLE"
@@ -33,7 +37,14 @@ say "build musl 靜態 cytrace"
 # touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
 # 報表沿用舊的 theia 版號（第三輪複審 build#0）。強制重跑，讀到當前檔案的值。
 touch "$ROOT/scripts/versions.env"
-( cd "$ROOT" && RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target "$TARGET" -p cytrace-cli >/dev/null 2>&1 )
+# 輸出收進記錄檔；失敗時印出尾段——整段丟進 /dev/null 的話，失敗時只看到腳本默默結束（T920 實測）
+BUILD_LOG="$(mktemp)"
+if ! ( cd "$ROOT" && RUSTFLAGS="-C target-feature=+crt-static" cargo build --release --target "$TARGET" -p cytrace-cli >"$BUILD_LOG" 2>&1 ); then
+  echo "✗ cargo build 失敗（$TARGET），最後 30 行："
+  tail -n 30 "$BUILD_LOG"
+  exit 1
+fi
+rm -f "$BUILD_LOG"
 cp "$ROOT/target/$TARGET/release/cytrace" "$BUNDLE/bin/cytrace"
 
 # 2) 釘選引擎——**版本必須符 versions.env**，不驗就是「收集 PATH 上剛好有的版本」。

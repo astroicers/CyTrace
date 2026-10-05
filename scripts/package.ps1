@@ -200,4 +200,15 @@ Get-ChildItem -Recurse -File | Where-Object { $_.Name -ne 'SHA256SUMS' } | ForEa
 } | Out-File -Encoding ascii "SHA256SUMS"
 Pop-Location
 
+# 8) 簽章（真實性，可選）— 需 minisign 與私鑰（DELIVERY_SOP §3；與 package.sh 對等，T920）
+$minisign = Get-Command minisign -ErrorAction SilentlyContinue
+if ($minisign -and $env:CYTRACE_MINISIGN_SECKEY) {
+  Say "minisign sign SHA256SUMS"
+  & $minisign.Source -Sm "$Bundle\SHA256SUMS" -s $env:CYTRACE_MINISIGN_SECKEY | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "minisign signing failed (exit $LASTEXITCODE)" }
+} else {
+  # 執行期字串維持 ASCII：Windows PowerShell 5.1 讀無 BOM 的 UTF-8 腳本時非 ASCII 會亂碼
+  Write-Host "  skip signing (no minisign on PATH or CYTRACE_MINISIGN_SECKEY unset); see DELIVERY_SOP section 3"
+}
+
 Write-Host "DONE: $Bundle"
