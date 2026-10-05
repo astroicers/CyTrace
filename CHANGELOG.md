@@ -6,13 +6,15 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-06
+
 ### 新增
 
-- 交付簽章公鑰發布為 `keys/cytrace.pub`（金鑰 ID `055ACC6F1822B10E`），公鑰字串同時寫在交付 SOP §3
-  與 README，場域以交付驗收單上抄錄的字串驗章（T402）。
 - SBOM 可另以 SPDX 2.3 格式輸出（T919）：`cytrace scan --spdx` 另寫 `sbom.spdx.json`（預設關閉）。
   Web 控制台的掃描一律附上 SPDX，任務詳情頁可下載 SBOM（CycloneDX、SPDX）、弱點比對結果與 CBOM。
   兩種格式出自同一次掃描，套件名稱與版本一致。SPDX 產出失敗時整次掃描失敗，不會只交出一半的 SBOM。
+- 交付簽章公鑰發布為 `keys/cytrace.pub`（金鑰 ID `055ACC6F1822B10E`），公鑰字串同時寫在交付 SOP §3
+  與 README，場域以交付驗收單上抄錄的字串驗章（T402）。
 
 ### 變更
 
@@ -21,10 +23,6 @@
 
 ### 修正
 
-- `scripts/package.sh` 在缺 musl 的 C 編譯器時會在建置中途默默結束；現在會先檢查並提示安裝 `musl-tools`，
-  建置失敗時也會印出錯誤內容（T920）。
-- Windows 打包腳本 `package.ps1` 補上與 Linux 版對等的 minisign 簽章步驟：`minisign` 在 PATH 上且設了
-  `CYTRACE_MINISIGN_SECKEY` 時，對 `SHA256SUMS` 簽章（T920）。
 - 報表在中文模式仍顯示英文的地方都改為依語言顯示，包括封面的產生時間與弱點資料庫、風險總評的元件／弱點計數，
   以及弱點與 SBOM 表頭（T917）。弱點表的嚴重度欄原本誤用「弱點明細」當表頭，封面的掃描目標列原本誤用
   「機關識別」，兩者一併更正。
@@ -32,10 +30,24 @@
   原本的 🌐☀️🌙⚠️ 會顯示成方框。主題按鈕改為顯示切換後的主題。
 - 英文報表的未掃描提示原本在數量為 1 時寫成「1 items」「1 files」「1 assets」，現已改正。
 - 中文報表的標籤冒號改為全形；語言與主題按鈕的無障礙名稱包含畫面上的文字，語音操作可直接以按鈕文字點選。
+- `scripts/package.sh` 在缺 musl 的 C 編譯器時會在建置中途默默結束；現在會先檢查並提示安裝 `musl-tools`，
+  建置失敗時也會印出錯誤內容（T920）。
+- Windows 打包腳本 `package.ps1` 補上與 Linux 版對等的 minisign 簽章步驟：`minisign` 在 PATH 上且設了
+  `CYTRACE_MINISIGN_SECKEY` 時，對 `SHA256SUMS` 簽章（T920）。
 - 文件對齊 v0.4.0：README（下載資產、安裝釘選版引擎、完整子命令與退出碼、CBOM、Web 服務、狀態）、
   需求規格（新增 FR-011～FR-015 並標註各需求的實作狀態）、UI/UX 規格
   （新增 Web 控制台；更正報表語言、主題與列印的描述）、交付 SOP（Windows 包結構、常用選項、平台支援）、
   容器部署（補齊環境變數）。
+
+### 已知限制
+
+- CBOM 為檔案系統／映像層盤點；**原始碼層**演算法辨識不在本版（無合規離線方案）。
+- 引擎對 >1 MiB 檔案跳掃（如大型 CA bundle）；以「未掃描」計數揭露並由閘門承接。
+- OpenSSH 格式私鑰引擎偵測到但不建模；計入「引擎自承未建模」計數。
+- Windows 交付包的 CBOM 引擎已在 GitHub 的 Windows runner 上實際執行驗證，**尚未於場域 Windows 機器驗證**。
+- SPDX 輸出已以釘選版 syft 在 Linux 實測，並以官方 SPDX 2.3 JSON schema 驗證零違規；**Windows 上尚未實測**。
+- `--help` 用法行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符，以及少數未逐一翻譯的參數錯誤類型，仍為英文。
+- `docker stop`（或 Ctrl-C）時，進行中的掃描不會等它跑完；重啟後該任務標為「中斷」，可重新送出。
 
 ## [0.4.0] - 2026-10-05
 

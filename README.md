@@ -12,7 +12,7 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 - **命令列**：單一靜態 binary，跑完即產出**離線單檔 HTML 報表**；可接 CI（退出碼閘門）。
 - **Web 服務模式**（`cytrace serve`）：場域內集中掃描伺服器，瀏覽器登入控制台送掃描、看報表；以容器交付。
 
-目前版本：**v0.4.0**（變更見 [CHANGELOG.md](CHANGELOG.md)）。
+目前版本：**v0.5.0**（變更見 [CHANGELOG.md](CHANGELOG.md)）。
 
 ## 報表範例
 
