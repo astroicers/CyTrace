@@ -316,7 +316,10 @@ jobs:
           for f in bin/cytrace bin/syft bin/grype bin/cbomkit-theia cytrace-offline SHA256SUMS SHA256SUMS.minisig NOTICE CHANGELOG.md cytrace.sbom.cdx.json; do
             [ -e "$b$f" ] || { echo "✗ 缺 $f"; exit 1; }
           done
-          file "${b}bin/cytrace" | grep -q 'statically linked' || { file "${b}bin/cytrace"; echo "✗ 非靜態連結"; exit 1; }
+          # musl 產出 static-pie（file 顯示「static-pie linked」）；判準是沒有動態載入器
+          info=$(file "${b}bin/cytrace"); echo "$info"
+          echo "$info" | grep -q 'static' && ! echo "$info" | grep -q 'interpreter' \
+            || { echo "✗ 非靜態連結"; exit 1; }
           "${b}cytrace-offline" --version | grep -F "$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
           ( cd "$b" && sha256sum -c --quiet SHA256SUMS )
           minisign -Vm "${b}SHA256SUMS" -p "$RUNNER_TEMP/ci.pub"
