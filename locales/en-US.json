@@ -360,9 +360,10 @@
     }
   },
   "ui": {
-    "language": "Language",
-    "theme_toggle": "Toggle light/dark theme",
+    "language": "Language: {{lang}}",
+    "theme_switch_to": "Switch to {{theme}} theme",
     "theme_dark": "Dark",
-    "theme_light": "Light"
+    "theme_light": "Light",
+    "labeled": "{{label}}:"
   }
 }

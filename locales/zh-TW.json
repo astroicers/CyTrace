@@ -360,9 +360,10 @@
     }
   },
   "ui": {
-    "language": "介面語言",
-    "theme_toggle": "切換亮暗主題",
+    "language": "介面語言：{{lang}}",
+    "theme_switch_to": "切換為{{theme}}主題",
     "theme_dark": "深色",
-    "theme_light": "淺色"
+    "theme_light": "淺色",
+    "labeled": "{{label}}："
   }
 }

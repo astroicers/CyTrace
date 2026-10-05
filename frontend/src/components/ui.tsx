@@ -61,7 +61,8 @@ function LangSwitch() {
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
-        aria-label={t('ui.language')}
+        // 無障礙名稱須包含可見文字（WCAG 2.5.3 Label in Name）
+        aria-label={t('ui.language', { lang: current.label })}
       >
         {current.label}
       </DropdownMenu.Trigger>
@@ -98,14 +99,16 @@ function ThemeToggle() {
   const { t } = useTranslation()
   const { resolvedTheme, setTheme } = useTheme()
   const next = resolvedTheme === 'dark' ? 'light' : 'dark'
+  const label = t(next === 'dark' ? 'ui.theme_dark' : 'ui.theme_light')
+  // 無障礙名稱須包含可見文字（WCAG 2.5.3 Label in Name）：語音操作說「深色」要點得到
   return (
     <button
       type="button"
       onClick={() => setTheme(next)}
       className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
-      aria-label={t('ui.theme_toggle')}
+      aria-label={t('ui.theme_switch_to', { theme: label })}
     >
-      {t(next === 'dark' ? 'ui.theme_dark' : 'ui.theme_light')}
+      {label}
     </button>
   )
 }

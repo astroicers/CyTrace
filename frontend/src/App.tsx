@@ -77,7 +77,9 @@ function RiskSummary({
   return (
     <Section id="summary" title={t('report.summary')}>
       <div className="mb-3 flex items-center gap-3 text-sm">
-        <span className="text-gray-500">{t('report.summary')}:</span>
+        <span className="text-gray-500">
+          {t('ui.labeled', { label: t('report.summary') })}
+        </span>
         <SeverityBadge severity={result.summary.overall_risk} />
         <span className="text-gray-500">
           {t('report.counts', {
@@ -266,9 +268,9 @@ function Crypto() {
             ).map(([key, value]) => (
               <span key={key}>
                 <span className="text-gray-500">
-                  {t(`report.crypto.summary.${key}`)}:{' '}
+                  {t('ui.labeled', { label: t(`report.crypto.summary.${key}`) })}
                 </span>
-                <span className="font-mono font-semibold">{value}</span>
+                <span className="ml-1 font-mono font-semibold">{value}</span>
               </span>
             ))}
           </div>

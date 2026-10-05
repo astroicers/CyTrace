@@ -6,21 +6,28 @@
  * 對「根本沒走 t() 的字串」看不見。本檢查以 TypeScript AST 掃 `frontend/src/**\/*.tsx`：
  *
  * - **jsx-text**：JSX 文字節點含任何字母。
- * - **jsx-expr**：JSX 子節點運算式（含條件／`??`／`||` 分支與模板字串）裡的字串字面值含字母。
+ * - **jsx-expr**：JSX 子節點運算式（含條件／`??`／`||`／`+` 分支與模板字串）裡的字串字面值含字母。
  * - **visible-attr**：`aria-label`、`title`、`placeholder`、`alt` 等會被念出或顯示的屬性值含字母。
- * - **prose**：其他位置的字串字面值「像文字」（含中日韓字元，或有大寫開頭的單字）
- *   ——抓 `['Generated', m.generated_at]` 這種先放進陣列、之後才渲染的標籤。
- *   比較運算元、`case`、型別字面值、import、`t()` 的鍵、非可見屬性、`new Error()` 不算。
+ * - **prose**：其他位置的字面值「像文字」——含中日韓字元、大寫開頭的單字、兩個以上的純字母單字；
+ *   模板字串的固定片段只要有一個獨立的純字母單字就算（`${a} components · ${b} findings`）。
+ *   抓的是先放進變數、陣列或元件 prop（`<Row value="Not configured" />`），之後才渲染的字串。
+ *   比較運算元、`case`、型別字面值、import、`new Error()`、以及**白名單內**的非可見屬性
+ *   （className、id、type、role…；含其內層運算式）不算。
+ * - **bad-key**：`t()` 的第一個參數若是字面值，必須是帶命名空間的鍵。i18next 找不到鍵時原樣回傳，
+ *   `t('No data')` 會在兩種語言都顯示英文，而 i18n-check 只認得帶命名空間的鍵，兩道閘都看不見。
  * - **emoji**：任何 Extended_Pictographic 字元。交付場域多為無彩色 emoji 字型的離線機器，
  *   ⚠️／🌐／🌙 會變成豆腐字。
  *
  * 專有名詞與單位（產品名、引擎名、`MB`）列在 [`EXEMPT_TOKENS`]，**逐項寫理由**；
  * 從字串移除這些詞之後若仍有字母，照樣判違規。
  *
- * 反空轉：每條規則各有一個必紅樣本、外加一個必綠樣本；另有掃描檔數與 `t()` 呼叫數的下限，
- * 以及必須被掃到的檔案清單——glob 或剖析一旦失效，「零違規」不含資訊。
+ * **已知不涵蓋**：`.ts` 檔（目前只有語言自稱名與協定字串；顯示文字一律在 .tsx 經 t() 輸出）、
+ * 單一個全小寫單字的一般字串（與識別字、列舉值無法區分，如 `'light'`、`'page'`）、標點（全形／半形）。
  *
- * 跑法：node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+ * 反空轉：每條規則、每條分支路徑各有必紅樣本，外加一份必綠樣本；另有掃描檔數與 `t()` 呼叫數的
+ * 下限，以及必須被掃到的檔案清單——glob 或剖析一旦失效，「零違規」不含資訊。
+ *
+ * 跑法：node --experimental-strip-types frontend/scripts/ui-literal-check.mts [另一份 src 目錄]
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -41,6 +48,7 @@ const EXEMPT_TOKENS: Record<string, string> = {
   MB: '容量單位符號，兩語相同',
 }
 
+/** 會被念出或顯示的屬性：值含任何字母即違規。 */
 const VISIBLE_ATTRS = new Set([
   'aria-label',
   'aria-description',
@@ -53,13 +61,54 @@ const VISIBLE_ATTRS = new Set([
   'label',
 ])
 
-type Rule = 'jsx-text' | 'jsx-expr' | 'visible-attr' | 'prose' | 'emoji'
+/**
+ * 確定不會顯示的屬性（白名單）。不在名單上的屬性——包括自訂元件的 prop——其字串值走 prose 規則；
+ * 反過來列黑名單的話，`<Row value="…" />` 這類渲染型 prop 會整個漏掉（T917 複審 finding A）。
+ */
+const NON_VISIBLE_ATTRS = new Set([
+  'className',
+  'key',
+  'id',
+  'type',
+  'role',
+  'scope',
+  'htmlFor',
+  'rel',
+  'target',
+  'href',
+  'src',
+  'name',
+  'method',
+  'accept',
+  'autoComplete',
+  'inputMode',
+  'lang',
+  'dir',
+  'aria-hidden',
+  'aria-live',
+  'aria-current',
+  'aria-pressed',
+  'aria-expanded',
+  'aria-controls',
+  'aria-describedby',
+  'aria-labelledby',
+  'attribute',
+  'defaultTheme',
+  'side',
+  'align',
+])
+
+const KEY_NS = '(?:cbom\\.err|cli|report|crypto|severity|server|console|ui)'
+const I18N_KEY = new RegExp(`^${KEY_NS}\\.[a-z0-9_.]+$`)
+
+type Rule = 'jsx-text' | 'jsx-expr' | 'visible-attr' | 'prose' | 'bad-key' | 'emoji'
 type Violation = { file: string; line: number; rule: Rule; text: string }
 
 const LETTER = /\p{L}/u
 const EMOJI = /\p{Extended_Pictographic}/u
 const HAN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u
 const CAPITALIZED_WORD = /(?:^|[^\p{L}\p{N}_$])\p{Lu}/u
+const PURE_WORD = /^\p{L}{2,}$/u
 
 function stripExempt(text: string): string {
   let out = text
@@ -69,10 +118,13 @@ function stripExempt(text: string): string {
   return out
 }
 
+const pureWords = (s: string) => s.split(/\s+/).filter((w) => PURE_WORD.test(w)).length
 const hasLetter = (s: string) => LETTER.test(stripExempt(s))
-const looksLikeProse = (s: string) => {
+const looksLikeProse = (s: string, isTemplatePiece: boolean) => {
   const r = stripExempt(s)
-  return HAN.test(r) || CAPITALIZED_WORD.test(r)
+  return (
+    HAN.test(r) || CAPITALIZED_WORD.test(r) || pureWords(r) >= (isTemplatePiece ? 1 : 2)
+  )
 }
 
 /** 字面值的文字（含模板字串的固定片段）；非字面值回 null。 */
@@ -82,7 +134,10 @@ function literalText(n: ts.Node): string | null {
   return null
 }
 
-/** 運算式最後會被渲染的字面值葉節點：穿過括號、條件、`??`／`||`／`&&`、模板字串。 */
+const isTemplatePiece = (n: ts.Node) =>
+  ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)
+
+/** 運算式最後會被渲染的字面值葉節點：穿過括號、條件、`??`／`||`／`+`／`&&` 右側、模板字串。 */
 function renderLeaves(e: ts.Expression, out: ts.Node[] = []): ts.Node[] {
   if (ts.isParenthesizedExpression(e)) return renderLeaves(e.expression, out)
   if (ts.isConditionalExpression(e)) {
@@ -99,6 +154,7 @@ function renderLeaves(e: ts.Expression, out: ts.Node[] = []): ts.Node[] {
       renderLeaves(e.left, out)
       return renderLeaves(e.right, out)
     }
+    // `&&` 左側的非空字串字面值必為真值、不會被渲染
     if (k === ts.SyntaxKind.AmpersandAmpersandToken) return renderLeaves(e.right, out)
     return out
   }
@@ -110,6 +166,17 @@ function renderLeaves(e: ts.Expression, out: ts.Node[] = []): ts.Node[] {
   return out
 }
 
+const isTCall = (c: ts.CallExpression) => /^(t|i18n\.t)$/.test(c.expression.getText())
+
+/** 往上找最近的 JSX 屬性；遇到 JSX 元素或敘述即停（字面值不在屬性值裡）。 */
+function enclosingAttr(n: ts.Node): ts.JsxAttribute | null {
+  for (let p = n.parent; p; p = p.parent) {
+    if (ts.isJsxAttribute(p)) return p
+    if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p) || ts.isStatement(p)) return null
+  }
+  return null
+}
+
 /** 該字面值所在位置是否「本來就不是給人看的」（prose 規則的排除清單）。 */
 function inSafeContext(n: ts.Node): boolean {
   const p = n.parent
@@ -117,7 +184,6 @@ function inSafeContext(n: ts.Node): boolean {
   if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isImportAttribute?.(p))
     return true
   if (ts.isLiteralTypeNode(p) || ts.isCaseClause(p)) return true
-  if (ts.isJsxAttribute(p)) return true // 可見屬性另由 visible-attr 規則處理
   if (ts.isPropertyAssignment(p) && p.name === n) return true
   if (ts.isBinaryExpression(p)) {
     const k = p.operatorToken.kind
@@ -130,12 +196,12 @@ function inSafeContext(n: ts.Node): boolean {
     )
       return true
   }
-  if (ts.isCallExpression(p) && p.arguments[0] === n) {
-    const callee = p.expression.getText()
-    if (callee === 't' || callee === 'i18n.t') return true
-  }
+  // t() 的鍵另由 bad-key 規則驗形態
+  if (ts.isCallExpression(p) && p.arguments[0] === n && isTCall(p)) return true
   // 開發者訊息（不會出現在畫面上）
   if (ts.isNewExpression(p) && p.expression.getText().endsWith('Error')) return true
+  const attr = enclosingAttr(n)
+  if (attr && NON_VISIBLE_ATTRS.has(attr.name.getText())) return true
   return false
 }
 
@@ -156,8 +222,7 @@ export function scanSource(file: string, src: string): Violation[] {
     } else if (ts.isJsxExpression(n) && n.expression) {
       const p = n.parent
       const isChild = ts.isJsxElement(p) || ts.isJsxFragment(p)
-      const isVisibleAttr =
-        ts.isJsxAttribute(p) && VISIBLE_ATTRS.has(p.name.getText(sf))
+      const isVisibleAttr = ts.isJsxAttribute(p) && VISIBLE_ATTRS.has(p.name.getText(sf))
       if (isChild || isVisibleAttr) {
         for (const leaf of renderLeaves(n.expression)) {
           judged.add(leaf)
@@ -176,11 +241,18 @@ export function scanSource(file: string, src: string): Violation[] {
       const text = n.initializer.text
       if (EMOJI.test(text)) push(n, 'emoji', text)
       else if (hasLetter(text)) push(n, 'visible-attr', text)
+    } else if (ts.isCallExpression(n) && isTCall(n) && n.arguments[0]) {
+      const text = literalText(n.arguments[0])
+      if (text !== null && !isTemplatePiece(n.arguments[0]) && !I18N_KEY.test(text)) {
+        judged.add(n.arguments[0])
+        push(n.arguments[0], 'bad-key', text)
+      }
     } else {
       const text = literalText(n)
       if (text !== null && !judged.has(n)) {
         if (EMOJI.test(text)) push(n, 'emoji', text)
-        else if (!inSafeContext(n) && looksLikeProse(text)) push(n, 'prose', text)
+        else if (!inSafeContext(n) && looksLikeProse(text, isTemplatePiece(n)))
+          push(n, 'prose', text)
       }
     }
     ts.forEachChild(n, visit)
@@ -200,24 +272,43 @@ function countTCalls(src: string): number {
   return n
 }
 
-// ── 反空轉哨兵：每條規則一個必紅樣本，外加一個必綠樣本 ──
-const MUST_FAIL: Record<Rule, string> = {
-  'jsx-text': `const A = () => <th>Name</th>`,
-  'jsx-expr': `const A = ({ x }) => <td>{x ? 'Yes' : t('k')}</td>`,
-  'visible-attr': `const A = () => <button aria-label="theme" />`,
-  prose: `const rows = [['Generated', m.generated_at]]`,
-  emoji: `const A = () => <p>⚠️ {t('report.notes.x')}</p>`,
-}
+// ── 反空轉哨兵：每條規則、每條分支路徑各一個必紅樣本，外加一份必綠樣本 ──
+const MUST_FAIL: [Rule, string, string][] = [
+  ['jsx-text', '表頭', `const A = () => <th>Name</th>`],
+  ['jsx-text', 'v0.4.0 計數', `const A = () => <span>· {n} components · {m} findings</span>`],
+  ['jsx-expr', '條件分支', `const A = ({ x }) => <td>{x ? 'Yes' : t('report.x')}</td>`],
+  ['jsx-expr', '?? 分支', `const A = ({ x }) => <td>{x ?? 'none yet'}</td>`],
+  ['jsx-expr', '|| 分支', `const A = ({ x }) => <td>{x || 'none'}</td>`],
+  ['jsx-expr', '+ 串接', `const A = ({ n }) => <td>{n + ' items'}</td>`],
+  ['jsx-expr', '模板字串', 'const A = ({ n }) => <td>{`${n} items`}</td>'],
+  ['visible-attr', '字串屬性', `const A = () => <button aria-label="theme" />`],
+  ['visible-attr', 'title 屬性', `const A = () => <span title="Details" />`],
+  ['visible-attr', '運算式屬性', `const A = () => <button aria-label={'theme'} />`],
+  ['visible-attr', '屬性模板字串', 'const A = ({ x }) => <img alt={`photo of ${x}`} />'],
+  ['prose', '陣列標籤', `const rows = [['Generated', m.generated_at]]`],
+  ['prose', '元件 prop', `const A = () => <Row label={t('report.x')} value="Not configured" />`],
+  ['prose', '全小寫片語', `const msg = cond ? 'not configured' : t('report.x')`],
+  ['prose', '模板片段（v0.4.0 寫法挪出 JSX）', 'const s = `${a} components · ${b} findings`'],
+  ['prose', '中文字面值', `const label = '產生時間'`],
+  ['bad-key', '英文當鍵', `const A = () => <p>{t('No data')}</p>`],
+  ['bad-key', '中文當鍵', `const A = () => <p>{t('暫無資料')}</p>`],
+  ['emoji', 'JSX 文字', `const A = () => <p>⚠️ {t('report.notes.x')}</p>`],
+  ['emoji', '運算式', `const A = ({ d }) => <b>{d ? '☀️' : '🌙'}</b>`],
+]
 const MUST_PASS = `
 import { x } from './data'
 type S = 'Critical' | 'High'
-const A = ({ s }: { s: S }) => {
+const A = ({ s, ok, n, c }: { s: S; ok: boolean; n: number; c: string }) => {
   if (s === 'Critical') throw new Error('Unreachable state')
   switch (s) { case 'High': break }
+  const next = ok ? 'light' : 'dark'
   return (
-    <div className="mx-auto" role="note" aria-hidden="true">
+    <div className="mx-auto max-w-4xl" role="note" aria-hidden="true">
       <h1>CyTrace — {t('report.title')}</h1>
-      <span title={t('ui.language')}>{n} MB</span>
+      <span title={t('ui.language', { lang: 'English' === c ? c : n })}>{n} MB</span>
+      <span className={\`rounded border \${ok ? 'text-white dark:bg-gray-900' : 'px-3 py-1'}\`} />
+      <tr key={\`\${c}-\${n}\`}><th>{t(\`report.col.\${c}\`)}</th></tr>
+      <a href="#/scans/new" aria-current={ok ? 'page' : undefined}>{t(ok ? 'ui.theme_dark' : 'ui.theme_light')}</a>
       {'Failed' in s ? t('report.crypto.failed') : '—'}
     </div>
   )
@@ -226,10 +317,10 @@ const A = ({ s }: { s: S }) => {
 
 function selfTest(): string[] {
   const errs: string[] = []
-  for (const [rule, src] of Object.entries(MUST_FAIL) as [Rule, string][]) {
-    const got = scanSource(`<sentinel:${rule}>`, src)
+  for (const [rule, name, src] of MUST_FAIL) {
+    const got = scanSource(`<sentinel:${rule}:${name}>`, src)
     if (!got.some((v) => v.rule === rule)) {
-      errs.push(`哨兵 ${rule} 應判違規卻沒有（實得：${JSON.stringify(got)}）`)
+      errs.push(`哨兵 ${rule}（${name}）應判違規卻沒有（實得：${JSON.stringify(got)}）`)
     }
   }
   const clean = scanSource('<sentinel:pass>', MUST_PASS)
@@ -284,5 +375,5 @@ if (errors.length) {
 }
 console.log(
   `✓ 前端無硬編碼使用者可見字串（${files.length} 個 .tsx、t() 呼叫 ${tCalls} 次；` +
-    `${Object.keys(MUST_FAIL).length} 條規則哨兵皆紅、必綠樣本為綠）`,
+    `${MUST_FAIL.length} 個必紅哨兵涵蓋 6 條規則、必綠樣本為綠）`,
 )
