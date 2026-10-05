@@ -6,7 +6,7 @@
 | **專案** | CyTrace |
 | **版本** | 0.4 |
 | **日期** | 2026-10-05 |
-| **狀態** | 現行，與 v0.3.x 程式碼對齊 |
+| **狀態** | 現行，與 v0.4.0 程式碼對齊 |
 | **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
 
 > **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
@@ -78,7 +78,8 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   **不要假設任意 PATH 上的版本相容**：實測 syft 1.51 預設輸出 CycloneDX 1.7，
   會讓 grype 0.114 無法解讀（`.asp-fact-check.md` 2026-09-29）。
 - theia 自源碼建置，不採用上游的 release binary（ADR-013 決策 1）。Linux 由 Dockerfile 的
-  theia-builder stage 承接；Windows 版尚未就緒（T911），Windows 包以 `-WithoutCbom` 明示不含 theia。
+  theia-builder stage 承接；Windows 版由 theia-builder-windows stage 以同一份源碼與參數交叉編譯（T911），
+  SHA256 釘在 `THEIA_WINDOWS_AMD64_SHA256`，`package.ps1` 取用前比對，也作為 Release 資產發佈。
 
 ### 3.2 Syft／Grype
 
@@ -100,6 +101,8 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   - `env_clear` 後只加回 `HOME`、`TMPDIR`、`PATH`；
   - 每次呼叫配一個**專用、可寫的 HOME**，在所有離開路徑上都會清理。HOME 不可寫時，theia 會把警告印進
     stdout、汙染 JSON；併發 job 共用 HOME 會互相干擾。
+  - Windows 上另給 USERPROFILE、APPDATA、LOCALAPPDATA（皆為專用 HOME）與 TEMP、TMP，並帶回 SystemRoot、windir：
+    Go 在 Windows 上以這些變數取代 HOME／TMPDIR（T911）。
 - **逾時與抽乾**：
   - 預設逾時 600 秒，可用 `CYTRACE_CBOM_TIMEOUT_SECS` 覆寫，上限 86,400 秒；這個變數只供除錯，
     值不合法時退回預設；
