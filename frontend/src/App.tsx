@@ -31,7 +31,7 @@ function Cover() {
   const { t } = useTranslation()
   const m = result.meta
   const rows: [string, string][] = [
-    [t('report.cover'), m.target],
+    [t('report.meta.target'), m.target],
     ['Syft / Grype', `${m.tool_versions.syft} / ${m.tool_versions.grype}`],
     ...(m.tool_versions.theia
       ? ([['CBOMkit-theia', m.tool_versions.theia]] as [string, string][])
@@ -42,14 +42,14 @@ function Cover() {
     // "unavailable" 是 core 的 fail-closed sentinel（grype db status 取不到時）；
     // 原樣印英文 sentinel 對操作員無意義，譯為明確的「無法取得」訊息（NFR-03/NFR-06）
     [
-      'DB',
+      t('report.meta.db'),
       // 'unavailable' 是 v2 的顯性 sentinel；'snapshot' 是 v1 時期的硬編碼假值
       // （不具稽核效力，ADR-009 修訂節）——舊 JSON 重建時同樣不得渲染成像真值
       m.db_snapshot.version === 'unavailable' || m.db_snapshot.version === 'snapshot'
         ? t('report.db_unavailable')
         : `${m.db_snapshot.version}（${m.db_snapshot.built}）`,
     ],
-    ['Generated', m.generated_at],
+    [t('report.meta.generated_at'), m.generated_at],
   ]
   return (
     <Section id="cover" title={t('report.cover')}>
@@ -77,11 +77,15 @@ function RiskSummary({
   return (
     <Section id="summary" title={t('report.summary')}>
       <div className="mb-3 flex items-center gap-3 text-sm">
-        <span className="text-gray-500">{t('report.summary')}:</span>
+        <span className="text-gray-500">
+          {t('ui.labeled', { label: t('report.summary') })}
+        </span>
         <SeverityBadge severity={result.summary.overall_risk} />
         <span className="text-gray-500">
-          · {result.components.length} components · {result.findings.length}{' '}
-          findings
+          {t('report.counts', {
+            components: result.components.length,
+            findings: result.findings.length,
+          })}
         </span>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -119,24 +123,13 @@ function Findings({ filter }: { filter: Severity | null }) {
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-gray-300 text-left dark:border-gray-600">
-              <th scope="col" className="py-1 pr-3">
-                {t('report.findings')}
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                CVE
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                CVSS
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Component
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Fixed
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Source
-              </th>
+              {(
+                ['severity', 'cve', 'cvss', 'component', 'fixed', 'source'] as const
+              ).map((c) => (
+                <th key={c} scope="col" className="py-1 pr-3">
+                  {t(`report.col.${c}`)}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -177,18 +170,11 @@ function Sbom() {
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-gray-300 text-left dark:border-gray-600">
-              <th scope="col" className="py-1 pr-3">
-                Name
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Version
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Type
-              </th>
-              <th scope="col" className="py-1 pr-3">
-                Licenses
-              </th>
+              {(['name', 'version', 'type', 'licenses'] as const).map((c) => (
+                <th key={c} scope="col" className="py-1 pr-3">
+                  {t(`report.col.${c}`)}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -282,9 +268,9 @@ function Crypto() {
             ).map(([key, value]) => (
               <span key={key}>
                 <span className="text-gray-500">
-                  {t(`report.crypto.summary.${key}`)}:{' '}
+                  {t('ui.labeled', { label: t(`report.crypto.summary.${key}`) })}
                 </span>
-                <span className="font-mono font-semibold">{value}</span>
+                <span className="ml-1 font-mono font-semibold">{value}</span>
               </span>
             ))}
           </div>
@@ -296,7 +282,6 @@ function Crypto() {
             <div className="mb-3 space-y-1 rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
               {crypto.unscanned_unreadable > 0 && (
                 <p>
-                  ⚠️{' '}
                   {t('report.crypto.unscanned_unreadable', {
                     count: crypto.unscanned_unreadable,
                   })}
@@ -304,7 +289,6 @@ function Crypto() {
               )}
               {crypto.unscanned_oversize > 0 && (
                 <p>
-                  ⚠️{' '}
                   {t('report.crypto.unscanned_oversize', {
                     count: crypto.unscanned_oversize,
                   })}
@@ -312,7 +296,6 @@ function Crypto() {
               )}
               {crypto.unscanned_undetermined > 0 && (
                 <p>
-                  ⚠️{' '}
                   {t('report.crypto.unscanned_undetermined', {
                     count: crypto.unscanned_undetermined,
                   })}
@@ -378,7 +361,7 @@ function Notes() {
   return (
     <Section id="notes" title={t('report.notes.title')}>
       <p className="rounded border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950">
-        ⚠️ {t('report.notes.disclaimer_not_pentest')}
+        {t('report.notes.disclaimer_not_pentest')}
       </p>
     </Section>
   )

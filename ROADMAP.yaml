@@ -1152,6 +1152,42 @@ milestones:
           實際行為（403 + `detail` 附原因碼與 root、path）、不補實作的理由（單一管理帳號，違規內容已回給唯一的
           請求者；補實作需另裁格式與 NFR-09 信任邊界）與裁定來源。同步更正 targets.rs 註解與 SDS §10。
 
+      - id: T917
+        title: "報表殘留硬編碼英文與誤用的鍵；前端缺字面值閘"
+        type: MODIFICATION
+        priority: 2
+        adr: ADR-004
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "v0.4.0 文件對齊時以實際報表截圖查出（2026-10-05）"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-05"
+        description: |
+          v0.4.0 中文報表仍印英文：封面的 `Generated`／`DB`、風險總評的 `N components · M findings`、
+          弱點與 SBOM 表頭（CVE／CVSS／Component／Fixed／Source／Name／Version／Type／Licenses）。
+          另有兩個誤用鍵：弱點表嚴重度欄的表頭用了區段標題（弱點明細），封面的掃描目標列用了區段標題
+          （機關識別）。工具列以 emoji 當圖示（🌐☀️🌙⚠️），離線機器沒有彩色 emoji 字型時會顯示成豆腐字；
+          aria-label 是寫死的英文。`scripts/i18n-check.py` 只驗「被引用的鍵存在」，
+          看不到根本沒經過 t() 的字串，所以這些都沒被擋下。
+
+          **結案（2026-10-05）**：補 `report.meta.*`、`report.counts`、`report.col.*` 與共用的 `ui.*` 鍵（兩語）；
+          工具列改文字標示，主題切換按鈕顯示切換後的主題，判斷改用 `resolvedTheme`；警示框拿掉 emoji。
+          工具列按鈕的無障礙名稱包含可見文字（WCAG 2.5.3），標籤後的冒號移入譯文（zh-TW 為全形）。
+          en-US 的未掃描提示原本是「1 items／1 files／1 assets」，改為不受單複數影響的句型。新增
+          `frontend/scripts/ui-literal-check.mts`：用 TypeScript AST 掃 `frontend/src/**/*.tsx`，六條規則為
+          JSX 文字、JSX 運算式、可見屬性、像文字的字面值（含元件 prop 與模板片段）、`t()` 的字面值必須是
+          帶命名空間的鍵、emoji。非可見屬性採白名單；專有名詞與單位明列豁免並逐項寫理由。20 個必紅哨兵
+          涵蓋每條規則與各分支路徑，另有一份共用必綠樣本與掃描量下限；拿掉 `+`／模板分支、`title`、
+          bad-key 規則或把 `value` 加進白名單，各自有哨兵轉紅（實測）。對 v0.4.0 原碼實測報出 22 處，
+          涵蓋上述全部的字面值問題；兩個誤用鍵是語意錯誤，機械檢查抓不到，改由人工修正。
+          已知不涵蓋：`.ts` 檔、單一個全小寫單字、標點。接進 `make lint`、`make frontend-check` 與 CI。
+          README 報表截圖重拍。獨立複審一輪（NEEDS_WORK：三種繞法與 a11y、冒號）後修正。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

@@ -48,18 +48,23 @@ export function QuantumBadge({ status }: { status: QuantumStatus }) {
   )
 }
 
-/** 語言切換（Radix DropdownMenu，鍵盤可達）。 */
+/**
+ * 語言切換（Radix DropdownMenu，鍵盤可達）。
+ *
+ * 不用 emoji 圖示：交付場域多為無彩色 emoji 字型的離線機器，🌐 會變成豆腐字（T917）。
+ */
 function LangSwitch() {
-  const { i18n } = useTranslation()
+  const { t, i18n } = useTranslation()
   const current =
     SUPPORTED_LANGS.find((l) => l.code === effectiveLang(i18n)) ?? SUPPORTED_LANGS[0]
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger
         className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
-        aria-label="language"
+        // 無障礙名稱須包含可見文字（WCAG 2.5.3 Label in Name）
+        aria-label={t('ui.language', { lang: current.label })}
       >
-        🌐 {current.label}
+        {current.label}
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
@@ -84,18 +89,26 @@ function LangSwitch() {
   )
 }
 
-/** 亮/暗主題切換（next-themes）。 */
+/**
+ * 亮/暗主題切換（next-themes）。按鈕文字是**切換後**的主題。
+ *
+ * 判斷用 `resolvedTheme`：`theme` 可能是 'system'，此時拿它比 'dark' 會把已是深色的畫面
+ * 再設成深色、按了沒反應。
+ */
 function ThemeToggle() {
-  const { theme, setTheme } = useTheme()
-  const next = theme === 'dark' ? 'light' : 'dark'
+  const { t } = useTranslation()
+  const { resolvedTheme, setTheme } = useTheme()
+  const next = resolvedTheme === 'dark' ? 'light' : 'dark'
+  const label = t(next === 'dark' ? 'ui.theme_dark' : 'ui.theme_light')
+  // 無障礙名稱須包含可見文字（WCAG 2.5.3 Label in Name）：語音操作說「深色」要點得到
   return (
     <button
       type="button"
       onClick={() => setTheme(next)}
       className="rounded border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-800"
-      aria-label="theme"
+      aria-label={t('ui.theme_switch_to', { theme: label })}
     >
-      {theme === 'dark' ? '☀️' : '🌙'}
+      {label}
     </button>
   )
 }

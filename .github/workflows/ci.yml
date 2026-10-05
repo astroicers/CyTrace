@@ -111,6 +111,10 @@ jobs:
       # 本檢查載入真的 client.ts / upload.ts 驗實際送出值——第二輪複審 lang#0 / tests#0）。
       - name: console 送出語系 == 畫面語系（T909）
         run: node --experimental-strip-types frontend/scripts/console-lang-check.mts
+      # v0.4.0 的中文報表仍印英文表頭與 `Generated`；i18n-check 只驗被引用的鍵存在，
+      # 看不見根本沒走 t() 的字串（T917）。
+      - name: 前端無硬編碼使用者可見字串（T917）
+        run: node --experimental-strip-types frontend/scripts/ui-literal-check.mts
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）
