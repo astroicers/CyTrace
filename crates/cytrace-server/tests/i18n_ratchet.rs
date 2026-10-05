@@ -1,42 +1,68 @@
-//! i18n 棘輪：server 非測試程式碼的中文字面值只減不增（NFR-06 / T909 / T912）。
+//! i18n 棘輪：所有 workspace 成員的生產碼不得有含中文的字串／字元字面值，只有 [`EXEMPT`]
+//! 明列的例外（NFR-06 / T909 / T912）。
 //!
-//! T909 把流進 **API 回應**的中文散文全數改走 i18n 鍵（經 53 個代理分類 + 反證確認範圍）。
-//! 剩下的都印在**操作員終端**（serve 啟動錯誤、job 落盤警告），屬 T912，列於 [`T912_BACKLOG`]。
+//! T909 把流進 **API 回應**的中文散文全數改走 i18n 鍵（經 53 個代理分類 + 反證確認範圍）；
+//! T912 把印在**操作者終端**的（serve 啟動錯誤、job 隔離與落盤警告、CLI 錯誤）也改走鍵，
+//! 並把掃描範圍從 server 擴到全部成員——cli 與 core 一樣會把字串印給操作者。範圍的推導見
+//! `common/mod.rs`（cargo metadata；build.rs 不在內）。
+//!
+//! **看得到的**：字串、字元、C 字串字面值（`"…"`、`'：'`、`c"…"`；含巨集與非 doc 屬性內）。
+//! **看不到的**（已知限制）：
+//! - doc 註解——一般而言不是使用者可見字串，但 **clap derive 的 doc 註解就是 `--help` 文字**，
+//!   目前整頁中文；`--help` 第一行取自 Cargo.toml 的 description，也不在掃描範圍。在地化與
+//!   相應的閘屬 T914；
+//! - `include_str!` 引入的檔案內容（現有用途是 locale、報表樣板，本來就是資料）；
+//! - 以程式組出的字元（`char::from_u32`、`\u{…}` 以外的計算）。
+//!
+//! 範圍外引入的原始碼（`#[path]`、`include!`）會讓掃描整段漏掉，由
+//! `production_code_has_no_out_of_tree_modules` 直接禁止。
 //!
 //! 本測試是雙向的：
-//! - 出現清單外的新中文字面值 → 紅（T909 修掉的不得回來；新增的必須走 i18n 鍵或進清單並說明）
-//! - 清單內的項目已不存在 → 紅（T912 修掉一個就得從清單移除——否則清單變陳舊，
+//! - 出現清單外的中文字面值 → 紅（使用者可見字串必須走 i18n 鍵）
+//! - 清單內的項目次數不符 → 紅（多了＝複製了例外字串；少了＝修掉後沒更新清單，
 //!   日後有人照同樣字串加回來也不會被抓）
 //!
-//! 鍵為（檔案, 字面值片段），不用行號——行號一改就漂。
+//! 鍵為（crate 相對路徑, 字面值全文），不用行號——行號一改就漂。
 
-use std::path::Path;
+mod common;
 
-/// T912 待辦：已知印在操作員終端、尚未 i18n 的字面值片段與**出現次數**。**只能減，不該加**。
+/// 明列的例外：（crate 相對路徑, 字面值**全文**, 出現次數, 理由）。
 ///
-/// 計次數而非只看片段是否存在：只看存在的話，一筆清單能豁免任意多個同片段字面值——
-/// 複製既有錯誤訊息（例如再貼一處「job.json 落盤失敗」送進 API）正是新散文最常見的來源
-/// （T909 對抗式複審 v11，3/3 確認）。
-const T912_BACKLOG: &[(&str, &str, usize)] = &[
-    ("config.rs", "CYTRACE_BIND 不是合法位址", 1),
-    ("config.rs", "缺少 CYTRACE_ADMIN_PASSWORD_HASH", 1),
+/// 比對全文而不是片段：片段比對下，一筆 `"（"` 會豁免該檔所有含全形括號的字面值。
+/// 計次數：只看存在的話，一筆清單能豁免任意多個同字串字面值——複製既有訊息正是新散文
+/// 最常見的來源（T909 對抗式複審 v11，3/3 確認）。
+const EXEMPT: &[(&str, &str, usize, &str)] = &[
     (
-        "config.rs",
-        "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串",
+        "crates/cytrace-core/src/engine.rs",
+        "reap 只在 early return 時取走",
         1,
+        "unreachable! 的不變式說明；panic 訊息給開發者，依構造到不了",
     ),
-    ("config.rs", "CYTRACE_SESSION_TTL_HOURS 不是整數", 1),
-    ("config.rs", "TLS 憑證與金鑰必須成對設定", 1),
-    ("config.rs", "{key} 不是整數", 1),
-    ("config.rs", "CYTRACE_MAX_EXTRACT_MB 不是整數", 1),
-    // 只含全形冒號、無漢字——初版 is_cjk 只認 U+4E00–9FFF，這條看不到
-    ("config.rs", "CYTRACE_SCAN_ROOTS：", 1),
-    ("jobs/registry.rs", "無法建立資料目錄", 1),
-    ("jobs/registry.rs", "損毀的 job 記錄", 1),
-    ("jobs/registry.rs", "job.json 落盤失敗", 2),
-    ("targets.rs", "格式應為 name=/abs/path：", 1),
-    ("targets.rs", "格式應為 name=/abs/path（絕對路徑）", 1),
-    ("tls.rs", "TLS 憑證載入失敗", 1),
+    (
+        "crates/cytrace-core/src/engine.rs",
+        "正常結束路徑上 reap 必然還在",
+        1,
+        "expect 的不變式說明；同上",
+    ),
+    (
+        "crates/cytrace-i18n/src/lib.rs",
+        "內嵌 locale 應為合法 JSON",
+        1,
+        "expect：locale 以 include_str! 內嵌，壞掉在測試就紅，執行期到不了",
+    ),
+    (
+        "crates/cytrace-i18n/src/lib.rs",
+        "內嵌 zh-TW 應為合法 JSON",
+        1,
+        "同上",
+    ),
+    (
+        "crates/cytrace-i18n/src/lib.rs",
+        "（",
+        1,
+        "Catalog::parens 的 zh-TW 分支（依語系選全形／半形括號，en-US 走半形）",
+    ),
+    ("crates/cytrace-i18n/src/lib.rs", "）", 1, "同上"),
 ];
 
 /// 與 tests/jobs.rs 的 `has_cjk` 同範圍：漢字 + CJK 標點 + 全形字元。
@@ -71,28 +97,34 @@ struct Collector {
     out: Vec<String>,
 }
 
-fn is_cfg_test(attrs: &[syn::Attribute]) -> bool {
-    attrs.iter().any(|a| {
-        a.path().is_ident("cfg")
-            && a.meta
-                .require_list()
-                .is_ok_and(|l| l.tokens.to_string().trim() == "test")
-    })
-}
+use common::is_cfg_test;
 
 impl Collector {
-    /// token 串裡的字串字面值（巨集參數、屬性參數；含 raw string 與跳脫序列）。
+    /// token 串裡的字面值（巨集參數、屬性參數；含 raw string 與跳脫序列）。
+    /// 原本只認字串：`['無', '法'].into_iter().collect()` 組出的中文訊息整條看不到（複審 gates#9）。
     fn tokens(&mut self, ts: proc_macro2::TokenStream) {
         for tt in ts {
             match tt {
                 proc_macro2::TokenTree::Group(g) => self.tokens(g.stream()),
                 proc_macro2::TokenTree::Literal(l) => {
-                    if let Ok(s) = syn::parse_str::<syn::LitStr>(&l.to_string()) {
-                        self.out.push(s.value());
+                    if let Ok(lit) = syn::parse_str::<syn::Lit>(&l.to_string()) {
+                        self.lit(&lit);
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn lit(&mut self, l: &syn::Lit) {
+        match l {
+            syn::Lit::Str(s) => self.out.push(s.value()),
+            syn::Lit::Char(c) => self.out.push(c.value().to_string()),
+            syn::Lit::CStr(c) => self.out.push(c.value().to_string_lossy().into_owned()),
+            syn::Lit::ByteStr(b) => self
+                .out
+                .push(String::from_utf8_lossy(&b.value()).into_owned()),
+            _ => {}
         }
     }
 }
@@ -106,14 +138,15 @@ macro_rules! skip_cfg_test {
 }
 
 impl<'ast> Visit<'ast> for Collector {
-    fn visit_lit_str(&mut self, l: &'ast syn::LitStr) {
-        self.out.push(l.value());
+    fn visit_lit(&mut self, l: &'ast syn::Lit) {
+        self.lit(l);
     }
     fn visit_macro(&mut self, m: &'ast syn::Macro) {
         self.tokens(m.tokens.clone());
     }
     fn visit_attribute(&mut self, a: &'ast syn::Attribute) {
-        // doc 註解不是使用者可見字串；其他屬性（如 #[error("…")]）照算
+        // doc 註解略過（一般而言不是使用者可見字串；clap derive 的 doc 註解是例外——
+        // 那是 `--help` 文字，屬 T914 的已知限制，見檔頭）；其他屬性（如 #[error("…")]）照算
         if !a.path().is_ident("doc") {
             if let syn::Meta::List(l) = &a.meta {
                 self.tokens(l.tokens.clone());
@@ -206,8 +239,9 @@ impl<'ast> Visit<'ast> for Collector {
 
 /// 抽取器的正負對照：反空轉只驗「抽到東西」不夠，要驗「抓得到違規」。
 /// 前 8 組是歷輪複審實際找到、前一版掃描器會吃掉其後生產碼的形狀（第二輪 1 組、第三輪 2 組、
-/// 第四輪 5 組）；最後 2 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
-/// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）。
+/// 第四輪 5 組）；第 9、10 組（doc 註解與屬性、cfg(test) 的 let／陳述式）是釘住 syn 版語意的設計
+/// 案例，不是歷輪找到的（宣稱核對 server#2／meta#3 更正前版「每組都是」的說法）；
+/// 第 11 組（字元與 C 字串字面值）來自 T912 複審 gates#9。
 #[test]
 fn extractor_sees_past_test_only_items() {
     let cases: &[(&str, &str, &[&str])] = &[
@@ -261,68 +295,45 @@ fn extractor_sees_past_test_only_items() {
             "fn f() {\n    #[cfg(test)]\n    let _a = \"測一\";\n    #[cfg(test)]\n    println!(\"測二\");\n    eprintln!(\"生產\");\n}\n",
             &["生產"],
         ),
+        (
+            // 複審 gates#9：只認字串時，這三種形狀都看不到
+            "字元與 C 字串字面值（含巨集內）",
+            "fn f() -> String { ['無', '法'].into_iter().collect() }
+const C: &core::ffi::CStr = c\"中\";
+fn g(w: &str) -> String { format!(\"{w}{}\", '（') }
+fn h(c: char) -> bool { c == 'a' }
+",
+            &["無", "法", "中", "（"],
+        ),
     ];
     for (name, src, want) in cases {
         assert_eq!(production_cjk_literals(src), *want, "{name}：\n{src}");
     }
 }
 
-fn walk(dir: &Path, files: &mut Vec<std::path::PathBuf>) {
-    for e in std::fs::read_dir(dir).expect("讀 src") {
-        let p = e.unwrap().path();
-        if p.is_dir() {
-            walk(&p, files);
-        } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
-            files.push(p);
-        }
-    }
-}
-
 #[test]
-fn server_cjk_literals_only_shrink() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut files = Vec::new();
-    walk(&src, &mut files);
-    assert!(
-        files.len() >= 15,
-        "只找到 {} 個 .rs——掃描可能已失效",
-        files.len()
-    );
+fn cjk_literals_only_in_exempt_places() {
+    // 範圍：全部 workspace 成員的 lib／bin（cargo metadata 推導；見 common/mod.rs）
+    let sources = common::production_sources();
+    common::assert_scope_not_vacuous(&sources, 30);
 
     let mut found: Vec<(String, String)> = Vec::new();
-    for f in &files {
-        let rel = f
-            .strip_prefix(&src)
-            .unwrap()
-            .to_string_lossy()
-            .replace('\\', "/");
-        let text = std::fs::read_to_string(f).unwrap();
+    for f in &sources.files {
+        let text = std::fs::read_to_string(&f.path).unwrap();
         for lit in production_cjk_literals(&text) {
-            found.push((rel.clone(), lit));
+            found.push((f.rel.clone(), lit));
         }
     }
 
-    // 每筆清單項目的實際出現次數
-    let count_of = |bf: &str, frag: &str| {
-        found
-            .iter()
-            .filter(|(f, l)| f == bf && l.contains(frag))
-            .count()
-    };
-
-    // 方向 1：清單外的新中文字面值
+    // 方向 1：清單外的中文字面值
     let unexpected: Vec<_> = found
         .iter()
-        .filter(|(file, lit)| {
-            !T912_BACKLOG
-                .iter()
-                .any(|(bf, frag, _)| file == bf && lit.contains(frag))
-        })
+        .filter(|(file, lit)| !EXEMPT.iter().any(|(ef, el, _, _)| file == ef && lit == el))
         .collect();
     assert!(
         unexpected.is_empty(),
-        "server 出現清單外的中文字面值（使用者可見字串須走 i18n 鍵；若確屬操作員終端，\
-         加進 T912_BACKLOG 並在 commit 說明）：\n{}",
+        "出現清單外的中文字面值（使用者可見字串須走 i18n 鍵；確屬開發者訊息者，\
+         加進 EXEMPT 並寫明理由）：\n{}",
         unexpected
             .iter()
             .map(|(f, l)| format!("  {f}: \"{l}\""))
@@ -330,23 +341,91 @@ fn server_cjk_literals_only_shrink() {
             .join("\n")
     );
 
-    // 方向 2：次數必須精確相符——多了是複製了既有散文，少了是 T912 修掉後沒更新清單
-    let drift: Vec<_> = T912_BACKLOG
+    // 方向 2：次數必須精確相符
+    let drift: Vec<_> = EXEMPT
         .iter()
-        .filter_map(|(bf, frag, want)| {
-            let got = count_of(bf, frag);
-            (got != *want).then(|| format!("  {bf} 「{frag}」：清單記 {want} 處，實際 {got} 處"))
+        .filter_map(|(ef, el, want, _)| {
+            let got = found.iter().filter(|(f, l)| f == ef && l == el).count();
+            (got != *want).then(|| format!("  {ef} 「{el}」：清單記 {want} 處，實際 {got} 處"))
         })
         .collect();
     assert!(
         drift.is_empty(),
-        "T912_BACKLOG 與程式碼次數不符（多了＝複製了既有中文散文；少了＝修掉後請更新清單）：\n{}",
+        "EXEMPT 與程式碼次數不符（多了＝複製了例外字串；少了＝修掉後請更新清單）：\n{}",
         drift.join("\n")
     );
+}
 
-    // 反空轉：清單非空時必須真的看到中文字面值，否則抽取邏輯可能失效
+/// 掃描範圍是各 target 目錄底下的檔案（common/mod.rs）。`#[path = "../外面.rs"] mod x;` 或
+/// `include!("x.rs")` 會把目錄外的程式碼編進生產碼，兩支 i18n 閘卻都看不到（T912 複審
+/// newgates#7 實測：types 以 `#[path]` 引入目錄外的中文常數，全套測試仍綠）。
+/// 目前生產碼沒有任何這種用法，故直接禁止，而不是去追模組樹。
+#[test]
+fn production_code_has_no_out_of_tree_modules() {
+    // 掃整個 token 流，不靠 AST 節點的形狀：只看 `#[path]` 與最外層巨集名時，
+    // `format!("{}", include!(…))`、`#[cfg_attr(all(), path = …)]`、`use core::include as inc;`
+    // 都繞得過（第三輪複審 gates）。規則刻意寬：生產碼裡任何 `include` 識別字、任何屬性內的
+    // `path =` 都算命中——目前兩者都沒有，真有需要時再明列例外。
+    fn walk(ts: proc_macro2::TokenStream, in_attr: bool, out: &mut Vec<String>) {
+        use proc_macro2::TokenTree as T;
+        let toks: Vec<T> = ts.into_iter().collect();
+        for (i, t) in toks.iter().enumerate() {
+            match t {
+                T::Ident(id) if id == "include" => out.push("include".into()),
+                T::Ident(id)
+                    if in_attr
+                        && id == "path"
+                        && matches!(toks.get(i + 1), Some(T::Punct(p)) if p.as_char() == '=') =>
+                {
+                    out.push("屬性內的 path =".into())
+                }
+                T::Group(g) => {
+                    // `#[…]` 或 `#![…]`：方括號群組前面是 `#`（中間可夾 `!`）
+                    let attr = g.delimiter() == proc_macro2::Delimiter::Bracket
+                        && (matches!(i.checked_sub(1).and_then(|j| toks.get(j)), Some(T::Punct(p)) if p.as_char() == '#')
+                            || matches!(
+                                (i.checked_sub(2).and_then(|j| toks.get(j)), i.checked_sub(1).and_then(|j| toks.get(j))),
+                                (Some(T::Punct(a)), Some(T::Punct(b))) if a.as_char() == '#' && b.as_char() == '!'
+                            ));
+                    walk(g.stream(), in_attr || attr, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let scan = |src: &str| {
+        let ts: proc_macro2::TokenStream = src.parse().expect("token 化");
+        let mut out = Vec::new();
+        walk(ts, false, &mut out);
+        out
+    };
+    // 自檢：直接寫、包在巨集裡、cfg_attr、改名引入都抓得到；include_str! 是資料，不算
+    let hits = |src: &str| scan(src).len();
+    assert_eq!(hits("#[path = \"../x.rs\"] mod x;"), 1);
+    assert_eq!(hits("fn f() { include!(\"y.rs\"); }"), 1);
+    assert_eq!(
+        hits("fn f() -> String { format!(\"{}\", include!(\"y.rs\")) }"),
+        1
+    );
+    assert_eq!(hits("#[cfg_attr(all(), path = \"../o.rs\")] mod o;"), 1);
+    assert_eq!(hits("use core::include as inc;"), 1);
+    assert_eq!(hits("#![path = \"x\"]"), 1);
+    assert_eq!(
+        hits("const S: &str = include_str!(\"z.json\");\nfn g(path: &str) { let path = 1; }"),
+        0
+    );
+
+    let sources = common::production_sources();
+    common::assert_scope_not_vacuous(&sources, 30);
+    let mut found = Vec::new();
+    for f in &sources.files {
+        for hit in scan(&std::fs::read_to_string(&f.path).unwrap()) {
+            found.push(format!("  {}: {hit}", f.rel));
+        }
+    }
     assert!(
-        !found.is_empty() || T912_BACKLOG.is_empty(),
-        "一個中文字面值都沒抽到，但 T912_BACKLOG 非空——抽取可能失效"
+        found.is_empty(),
+        "生產碼引入了掃描範圍外的原始碼（i18n 閘看不到）：\n{}",
+        found.join("\n")
     );
 }

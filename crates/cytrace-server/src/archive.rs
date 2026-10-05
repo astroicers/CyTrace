@@ -211,6 +211,23 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    /// `api::jobs` 以 `with_message(ae.i18n_key(), &[])` 渲染——鍵不是字面值，插值對帳
+    /// 比不到，在此逐變體驗不需變數（T912 複審 newgates#3）。
+    #[test]
+    fn every_archive_error_message_renders_without_variables() {
+        for e in [
+            ArchiveError::PathViolation(String::new()),
+            ArchiveError::TooLarge(String::new()),
+            ArchiveError::Malformed(String::new()),
+        ] {
+            for lang in ["zh-TW", "en-US"] {
+                let m = cytrace_i18n::Catalog::load(lang).t(e.i18n_key(), &[]);
+                assert_ne!(m, e.i18n_key(), "{lang} 查不到");
+                assert!(!m.contains("{{"), "{lang} {}：{m}", e.i18n_key());
+            }
+        }
+    }
+
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     fn tmp() -> PathBuf {

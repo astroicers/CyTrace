@@ -31,11 +31,20 @@ impl Lang {
         }
     }
 
-    fn from_code(code: &str) -> Lang {
-        if code.trim().to_ascii_lowercase().starts_with("en") {
-            Lang::EnUs
-        } else {
-            Lang::ZhTw
+    /// 正規化規則與 CLI、`Catalog::load` 共用（`cytrace_i18n::lang_code`）；不支援的值依
+    /// ADR-011 §7 退回 zh-TW。
+    pub fn from_code(code: &str) -> Lang {
+        match cytrace_i18n::lang_code(code) {
+            Some("en-US") => Lang::EnUs,
+            _ => Lang::ZhTw,
+        }
+    }
+
+    /// 語系碼（`zh-TW`／`en-US`）。
+    pub fn code(self) -> &'static str {
+        match self {
+            Lang::ZhTw => "zh-TW",
+            Lang::EnUs => "en-US",
         }
     }
 
@@ -204,12 +213,12 @@ impl ApiError {
             // CBOM 引擎失敗歸引擎類（掃描整體仍可完成，只是 crypto 區段缺）
             CytraceError::Cbom { .. } => ErrorKind::Engine,
         };
-        // Cbom 的 Display 是「鍵：細節」——直接當 detail 就是把裸鍵送出 API。
+        // Cbom 的 Display 是「鍵: 細節」——直接當 detail 就是把裸鍵送出 API。
         // 改以請求語系渲染，與 CLI 共用 Catalog::render_cbom（單一實作）。
         //
-        // 其餘變體的 Display 各帶一段中文前綴（「引擎子程序錯誤：」…），直接當 detail
-        // 會讓 `--lang en-US` 的 API 回應夾中文（第七輪複審：與 collect_cbom 同一種錯法，
-        // 只是位置在 server）。故一律走 CytraceError::untranslatable_detail。
+        // 其餘變體的 Display 帶分類前綴（T912 前是中文「引擎子程序錯誤：」…，直接當 detail
+        // 會讓 `--lang en-US` 的 API 回應夾中文——第七輪複審；現為 ASCII `engine: …`，
+        // 仍與 kind 重複）。故一律走 CytraceError::untranslatable_detail。
         let detail = match err {
             CytraceError::Cbom { key, detail } => {
                 Some(lang.catalog().render_cbom(key, detail.as_deref()))
@@ -286,6 +295,72 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::*;
 
+    /// 全部變體。`exhaustive` 的 match 讓新增變體時編譯失敗，提醒把它加進陣列。
+    fn all_kinds() -> [ErrorKind; 17] {
+        fn exhaustive(k: ErrorKind) {
+            match k {
+                ErrorKind::Engine
+                | ErrorKind::Parse
+                | ErrorKind::Io
+                | ErrorKind::Config
+                | ErrorKind::DbMissing
+                | ErrorKind::NotFound
+                | ErrorKind::Internal
+                | ErrorKind::Auth
+                | ErrorKind::Csrf
+                | ErrorKind::RateLimited
+                | ErrorKind::Validation
+                | ErrorKind::ForbiddenPath
+                | ErrorKind::Conflict
+                | ErrorKind::QueueFull
+                | ErrorKind::PayloadTooLarge
+                | ErrorKind::UnsupportedArchive
+                | ErrorKind::MethodNotAllowed => {}
+            }
+        }
+        let all = [
+            ErrorKind::Engine,
+            ErrorKind::Parse,
+            ErrorKind::Io,
+            ErrorKind::Config,
+            ErrorKind::DbMissing,
+            ErrorKind::NotFound,
+            ErrorKind::Internal,
+            ErrorKind::Auth,
+            ErrorKind::Csrf,
+            ErrorKind::RateLimited,
+            ErrorKind::Validation,
+            ErrorKind::ForbiddenPath,
+            ErrorKind::Conflict,
+            ErrorKind::QueueFull,
+            ErrorKind::PayloadTooLarge,
+            ErrorKind::UnsupportedArchive,
+            ErrorKind::MethodNotAllowed,
+        ];
+        all.iter().for_each(|k| exhaustive(*k));
+        all
+    }
+
+    /// `into_response` 沒有 `with_message` 時以 `t(&kind.i18n_key(), &[])` 渲染——鍵不是字面值，
+    /// 插值對帳（tests/i18n_call_vars.rs）比不到，在此逐變體驗（T912 複審 newgates#3）。
+    #[test]
+    fn every_kind_message_renders_without_variables() {
+        let kinds = all_kinds();
+        let distinct: std::collections::BTreeSet<_> = kinds.iter().map(|k| k.as_str()).collect();
+        assert_eq!(distinct.len(), kinds.len(), "all_kinds 有重複");
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            for k in kinds {
+                let key = k.i18n_key();
+                let m = lang.catalog().t(&key, &[]);
+                assert_ne!(m, key, "{lang:?} 查不到 {key}");
+                assert!(
+                    !m.contains("{{"),
+                    "{lang:?} {key} 需要變數，不能以空變數渲染：{m}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn negotiate_prefers_query_over_header() {
         assert_eq!(
@@ -312,7 +387,7 @@ mod tests {
 
     #[test]
     fn cbom_error_detail_is_translated_not_a_bare_key() {
-        // Cbom 的 Display 是「鍵：細節」；若直接當 detail，API 消費者收到的是裸鍵。
+        // Cbom 的 Display 是「鍵: 細節」；若直接當 detail，API 消費者收到的是裸鍵。
         let err = CytraceError::Cbom {
             key: "cbom.err.timeout",
             detail: Some("600".into()),

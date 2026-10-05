@@ -1002,7 +1002,7 @@ milestones:
         spec: null
         srs_ref: NFR-06
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: review
         source_ref: "T909 分類 workflow（2026-10-01；53 agents，33 站點 + 反向追蹤，3 項判定經反證翻轉）"
@@ -1018,6 +1018,107 @@ milestones:
           - CytraceError 的 `#[error]` Display 中文前綴（error.rs:9/13/17/21）——經 main.rs:115
             印到終端；`--lang en-US` 下照樣吐中文
           難點：serve 啟動時尚無請求語系，需決定依環境變數或 `--lang` 渲染。
+
+          **結案（2026-10-02）**：操作者語言統一為 `--lang` > `CYTRACE_LANG` > zh-TW（全部子命令，
+          含 serve 的執行期訊息）；API 協商（ADR-011 §7）不動。serve 啟動錯誤與 CLI I/O 錯誤改為
+          `Localized { key, vars }`；`CytraceError` 的 Display 改為語系中立 ASCII，使用者可見文字一律
+          由 `i18n_key()` + `untranslatable_detail()` 渲染。clap 用法錯誤改為 1（原 2 與 --fail-on 撞號），`--fail-on` 的值改由 clap 驗證。
+          機械閘：i18n 棘輪擴到全部 workspace 成員（範圍由 cargo metadata 推導；含字元字面值；
+          例外 6 筆明列、全文比對）、程式碼插值變數與 catalog 佔位符一致（syn）、鍵的佔位符兩語一致、
+          CLI 端到端測試兩種語言（stdout 與 stderr，含 serve 實際起停）。範圍外另開：T914（--help 在地化）、T915（SIGTERM）、T916（ADR-011 稽核 log 宣稱）。
+
+      - id: T913
+        title: "既有依賴的安全 advisory 處置，並讓 CI 檢查 advisories"
+        type: MODIFICATION
+        priority: 2
+        adr: null
+        spec: null
+        srs_ref: NFR-05
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T909 第四輪複審時 `cargo deny check advisories` 實跑（2026-10-01）"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-02"
+        description: |
+          `cargo deny check advisories` 列出 4 則**既有依賴**的 advisory；CI 供應鏈 job 只跑
+          `licenses sources bans`，沒有檢查 advisories，故從未在 CI 出現。
+          2026-10-02 以本機 advisory DB 快照（2026-10-01）離線實跑：
+          - `anyhow` 1.0.102——RUSTSEC-2026-0190（unsound：`Error::downcast_mut()`）；
+          - `h2` 0.4.15（經 hyper／axum）——RUSTSEC-2026-0258（vulnerability：unbounded empty DATA frames）；
+          - `rustls` 0.23.41（cytrace-server 直接相依；另經 axum-server／tokio-rustls）——RUSTSEC-2026-0285（vulnerability：TLS 1.3
+            握手訊息跨加密層級被接受）；
+          - `rustls-pemfile` 2.2.0（經 axum-server）——RUSTSEC-2025-0134（unmaintained，非漏洞）。
+          另有 yanked 警告：`spin` 0.9.8（經 multer／axum）。
+          依「穩定優先」，逐則評估可達性與升級成本後刻意處置（升級、或在 deny.toml 以理由豁免），
+          升級須重跑 golden 與 real_engine；之後把 advisories 加進 CI，並決定離線 advisory DB 的來源與更新方式
+          （CI 有網路，交付環境沒有）。
+
+      - id: T914
+        title: "CLI --help 與 clap 用法錯誤的在地化"
+        type: MODIFICATION
+        priority: 4
+        adr: null
+        spec: null
+        srs_ref: NFR-06
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T912 範圍界定（2026-10-02）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-02"
+        description: |
+          `--help` 的說明文字來自 doc comment（寫死中文），clap 內建字串（Usage、各種解析錯誤）是英文；
+          `--lang` 對兩者都不生效。clap 4 無法直接在地化內建字串，且解析錯誤發生在語言決定之前。
+          做法：先從 argv 與 `CYTRACE_LANG` 預掃語言，以 `Cli::command()` 的 builder 注入 `cli.help.*` 鍵，
+          解析錯誤依 ErrorKind 對映到自己的鍵。T912 已改用 `try_parse`，退出碼不受本票影響。
+          **AC 含機械閘**：i18n 棘輪目前全面略過 doc 註解（依構造看不到 `--help` 文字），在地化後須把
+          clap derive 型別、變體、欄位上的 doc 註解納入掃描，否則沒有防回歸。`--help` 第一行的 about 取自
+          Cargo.toml 的 description（「CyTrace CLI（clap run/scan/report；SDS §2）」），也在範圍內，棘輪同樣看不到。
+
+      - id: T915
+        title: "serve 收到 SIGTERM 時優雅關閉（容器 docker stop）"
+        type: MODIFICATION
+        priority: 3
+        adr: ADR-011
+        spec: null
+        srs_ref: null
+        depends_on: []
+        status: pending
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T912 實作時讀 serve()（2026-10-02）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-02"
+        description: |
+          `serve()` 只監聽 `ctrl_c`（SIGINT）。`docker stop` 送的是 SIGTERM，服務不會進入 10 秒寬限的
+          graceful shutdown，而是等容器執行環境逾時後被 SIGKILL；執行中的 job 在下次啟動才被標為 interrupted。
+          待辦：unix 上同時監聽 SIGTERM；以容器實測 `docker stop` 的退出碼與 job 狀態。
+
+      - id: T916
+        title: "ADR-011「路徑違規記稽核 log」與實作不符"
+        type: MODIFICATION
+        priority: 3
+        adr: ADR-011
+        spec: null
+        srs_ref: null
+        depends_on: []
+        status: pending
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T912 理解 workflow（2026-10-02）"
+        triggered_by: review
+        sla_hours: 336
+        imported_at: "2026-10-02"
+        description: |
+          ADR-011 寫「違規一律 403 並記稽核 log」，但 server 沒有任何稽核日誌輸出（未依賴 tracing／log），
+          違規資訊只出現在 API 回應。二擇一並由人裁定：實作稽核日誌（格式、落點、保存期限、是否含路徑），
+          或修訂 ADR-011 的這句宣稱。修訂 ADR 需走人類核准流程。
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

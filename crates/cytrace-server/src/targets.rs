@@ -3,6 +3,7 @@
 //! 驗證順序：**先語彙檢查**（拒 `..`/絕對路徑/Prefix，不給 FS 任何機會）→
 //! `canonicalize` → 前綴驗證（擋 symlink 逃逸）。失敗一律對外 403（不洩漏檔案系統結構）。
 
+use cytrace_i18n::Localized;
 use std::path::{Component, Path, PathBuf};
 
 /// 解析失敗原因（對外一律 403；detail 進稽核 log）。
@@ -25,16 +26,19 @@ impl TargetError {
     }
 }
 
-/// 解析 `CYTRACE_SCAN_ROOTS`（`name=/abs/path` 逗號清單）。
-pub fn parse_roots(raw: &str) -> Result<Vec<(String, PathBuf)>, String> {
+/// 解析 `CYTRACE_SCAN_ROOTS`（`name=/abs/path` 逗號清單）。錯誤為啟動訊息（`server.startup.*`）。
+pub fn parse_roots(raw: &str) -> Result<Vec<(String, PathBuf)>, Localized> {
     let mut roots = Vec::new();
     for item in raw.split(',').filter(|s| !s.trim().is_empty()) {
         let (name, path) = item
             .split_once('=')
-            .ok_or_else(|| format!("格式應為 name=/abs/path：{item}"))?;
+            .ok_or_else(|| Localized::new("server.startup.scan_roots_format").var("item", item))?;
         let (name, path) = (name.trim(), Path::new(path.trim()));
-        if name.is_empty() || !path.is_absolute() {
-            return Err(format!("格式應為 name=/abs/path（絕對路徑）：{item}"));
+        if name.is_empty() {
+            return Err(Localized::new("server.startup.scan_roots_format").var("item", item));
+        }
+        if !path.is_absolute() {
+            return Err(Localized::new("server.startup.scan_roots_not_absolute").var("item", item));
         }
         roots.push((name.to_string(), path.to_path_buf()));
     }

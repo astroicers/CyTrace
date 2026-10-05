@@ -118,7 +118,7 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 
 ### 7.3 啟動
 依 DOCKER.md（run / compose 範例）。`/db` 掛入 §5 攜入的 DB 快照。
-起站前以 `docker run --rm <image> hash-password` 產管理密碼 hash。
+起站前以 `docker run --rm -it <image> hash-password` 產管理密碼 hash（需 `-it`：密碼由終端機讀取）。
 
 ### 7.4 DB 更新
 **同 §5，只換 `/db` volume 內容並重啟容器；不需更新 image。**（slim 方案的紅利。）
