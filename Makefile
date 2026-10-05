@@ -28,6 +28,7 @@ frontend-check:
 	node --experimental-strip-types frontend/scripts/cbom-message-check.mts
 	node --experimental-strip-types frontend/scripts/console-lang-check.mts
 	node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
 
 # Console SPA（ADR-011）：產物 commit 至 crates/cytrace-server/assets/console/（rust-embed）。
 # 改 console 前端後跑 make frontend-console 重產。
@@ -94,7 +95,9 @@ lint: fmt-check clippy
 	@# 畫面不得硬編碼使用者可見字串（T917）；需 typescript 剖析 AST，前置缺席同樣 fail-closed
 	@test -d frontend/node_modules/typescript || { echo "✗ 缺 frontend/node_modules/typescript（先跑 make frontend 或 npm --prefix frontend install）"; exit 1; }
 	node --experimental-strip-types frontend/scripts/ui-literal-check.mts
-	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系 + 前端字面值，零 warning）"
+	@# 報表以產生時的語言開啟（T918）；載入真的 src/i18n.ts，與上兩支同一套前置
+	node --experimental-strip-types frontend/scripts/report-lang-check.mts
+	@echo "✓ lint passed（fmt + clippy + i18n + NOTICE 對帳與哨兵 + CBOM 成因渲染 + console 語系 + 前端字面值 + 報表開啟語言，零 warning）"
 
 # 覆蓋率：有 cargo-llvm-cov 用之，否則退回跑測試（NFR-07 目標 ≥ 80%）
 coverage:

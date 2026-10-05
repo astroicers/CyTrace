@@ -86,7 +86,7 @@ wrapper 等效於設定 `PATH=$BUNDLE/bin`、`GRYPE_DB_CACHE_DIR=$BUNDLE/db`、
 **常用選項**（兩平台相同）：
 - `--cbom`：併同盤點密碼學資產（憑證、金鑰、演算法）；`--fail-on-quantum-vulnerable` 有量子脆弱資產即以 2 結束。
 - 語言：`--lang en-US`，或設環境變數 `CYTRACE_LANG=en-US`；終端訊息、錯誤與 `--help` 皆依此語言。
-  報表開啟後一律以 zh-TW 顯示，可在報表內切換。
+  報表也以此語言開啟，可在報表內切換。
 - 退出碼：`0` 正常；`2` 達門檻（`--fail-on` 或量子閘門）；`1` 錯誤（含參數打錯、引擎失敗，以及量子閘門
   未取得完整結果）。`1` 優先於 `2`。
 - 用法：`cytrace --help`、`cytrace <子命令> --help`。

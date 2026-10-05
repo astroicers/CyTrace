@@ -91,6 +91,15 @@ impl Catalog {
         }
     }
 
+    /// 本 catalog 的語系碼（`zh-TW`／`en-US`）。報表以它決定開啟時的語言（T918）。
+    pub fn code(&self) -> &'static str {
+        if self.is_en {
+            "en-US"
+        } else {
+            "zh-TW"
+        }
+    }
+
     /// 取訊息並插值。缺鍵時退回 fallback，再缺則回鍵本身（方便察覺漏譯）。
     pub fn t(&self, key: &str, vars: &[(&str, &str)]) -> String {
         let raw = lookup(&self.lang, key)

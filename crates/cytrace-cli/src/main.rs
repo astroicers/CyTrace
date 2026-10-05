@@ -236,7 +236,7 @@ fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
                     )
                 );
             }
-            let html = cytrace_report::render(&result)?;
+            let html = cytrace_report::render(&result, cat.code())?;
             let path = out.clone().unwrap_or_else(|| default_report_path(input));
             write_file(&path, html)?;
             println!(
@@ -457,7 +457,7 @@ fn run_one(
         findings,
         crypto,
     );
-    let html = cytrace_report::render(&result)?;
+    let html = cytrace_report::render(&result, cat.code())?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
     write_file(&path, html)?;
     let risk = result.summary.overall_risk;

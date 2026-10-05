@@ -115,6 +115,9 @@ jobs:
       # 看不見根本沒走 t() 的字串（T917）。
       - name: 前端無硬編碼使用者可見字串（T917）
         run: node --experimental-strip-types frontend/scripts/ui-literal-check.mts
+      # 報表以產生時的語言（--lang／請求語系）開啟；v0.4.0 前一律以 zh-TW 開啟（T918）
+      - name: 報表開啟語言 == <html lang>（T918）
+        run: node --experimental-strip-types frontend/scripts/report-lang-check.mts
       - name: build 報表（單檔內聯）
         run: cd frontend && pnpm build
       - name: 報表 sentinel 未污染（console 不得破壞注入契約 ADR-009）

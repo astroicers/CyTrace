@@ -1503,3 +1503,68 @@ async fn t909_rejections_on_report_query_and_delete_path() {
         );
     }
 }
+
+/// 報表開啟語言 == 送出掃描那次請求的語系（T918）。報表 HTML 是靜態產物：之後用哪種語言
+/// 查看都不影響它，所以只能在產生時決定。掛載與上傳兩條送出路徑、header 與 `?lang=`
+/// 兩種協商方式都要涵蓋——少接一條，那條路徑產的報表就一律以 zh-TW 開啟，且沒有任何錯誤。
+#[tokio::test]
+async fn t918_report_opens_in_submitting_request_language() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let body = r#"{"target":{"kind":"mounted","root":"targets","path":"app"}}"#;
+
+    let html_lang = |id: &str| {
+        let html = std::fs::read_to_string(env.base.join("data/jobs").join(id).join("report.html"))
+            .unwrap();
+        let rest = html
+            .split("<html lang=\"")
+            .nth(1)
+            .expect("缺 <html lang>")
+            .to_string();
+        rest.split('"').next().unwrap().to_string()
+    };
+
+    // 掛載：Accept-Language / ?lang= / 皆無
+    for (uri, accept, want) in [
+        ("/api/v1/jobs", Some("en-US,en;q=0.9"), "en-US"),
+        ("/api/v1/jobs?lang=en-US", Some("zh-TW"), "en-US"),
+        ("/api/v1/jobs", None, "zh-TW"),
+    ] {
+        let mut req = with_csrf_and(Request::post(uri))
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie);
+        if let Some(al) = accept {
+            req = req.header(header::ACCEPT_LANGUAGE, al);
+        }
+        let resp = env
+            .app
+            .clone()
+            .oneshot(req.body(Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED, "{uri} {accept:?}");
+        let id = json_of(resp).await["id"].as_str().unwrap().to_string();
+        let done = wait_terminal(&env.app, &cookie, &id).await;
+        assert_eq!(done["status"], "done", "{done}");
+        assert_eq!(html_lang(&id), want, "{uri} Accept-Language={accept:?}");
+    }
+
+    // 上傳：Accept-Language
+    let zip = make_zip_bytes(&[("app/main.py", b"print(1)")]);
+    let boundary = "----cytracet918";
+    let req = with_csrf_and(Request::post("/api/v1/jobs/upload"))
+        .header(
+            header::CONTENT_TYPE,
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .header(header::COOKIE, &cookie)
+        .header(header::ACCEPT_LANGUAGE, "en-US")
+        .body(Body::from(multipart_body(boundary, "app.zip", &zip, None)))
+        .unwrap();
+    let resp = env.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    let id = json_of(resp).await["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(html_lang(&id), "en-US", "上傳路徑");
+}

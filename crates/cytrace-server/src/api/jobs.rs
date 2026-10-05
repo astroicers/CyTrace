@@ -67,7 +67,7 @@ pub(crate) fn submit(
     app.jobs
         .insert(record.clone())
         .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
-    runner::spawn(app.clone(), record.id.clone(), scan_target, cbom);
+    runner::spawn(app.clone(), record.id.clone(), scan_target, cbom, lang);
     Ok(record)
 }
 
@@ -249,6 +249,7 @@ pub async fn upload(
         prep.scan_target,
         !app.cfg.keep_input,
         cbom,
+        lang,
     );
     Ok((StatusCode::ACCEPTED, JsonOut(record)).into_response())
 }
