@@ -84,7 +84,8 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
    symlink/hardlink entry 一律跳過、zip-bomb（entry 數 + 單檔 + 總解壓量三重上限，只信實際解出 bytes）。
    掃描完成後 input 預設刪除（`CYTRACE_KEEP_INPUT=false`）——縮小機密資料駐留窗。
 6. **掛載掃描**：`CYTRACE_SCAN_ROOTS=name=path,...` 白名單；先語彙檢查（拒 `..`/絕對路徑）再
-   `canonicalize` + 前綴驗證（擋 symlink 逃逸）；違規一律 403 並記稽核 log。
+   `canonicalize` + 前綴驗證（擋 symlink 逃逸）；違規一律 403 ~~並記稽核 log~~。
+   （2026-10-05 修訂：不記伺服器端稽核 log，原因與請求的 root、path 附在回應的 `detail`；見文末修訂節）
 7. **API**：`/api/v1`（session/targets/jobs/jobs upload/report/result/artifacts/version）+ `/healthz`（無 auth）。
    語言協商 `?lang=` > `Accept-Language` > `zh-TW`；錯誤格式 `{error:{kind, i18n_key, message, detail}}`
    沿用 CytraceError 5 類 + server 新增類；所有使用者可見訊息走 locales 鍵（`server.*` 命名空間，NFR-06 延伸）。
@@ -142,3 +143,22 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
 - 配套：ADR-012（容器化交付與 GHCR——本功能的主要交付形態）
 - 修訂：SRS NFR-09（信任邊界）；SDS §2（engine 歸位 core）
 - 參考：ROADMAP M8（T801–T809）
+
+## 修訂：路徑違規的稽核紀錄（2026-10-05，T916）
+
+決策 6 原寫「違規一律 403 並記稽核 log」，但實作從未有稽核 log：server 不依賴 tracing／log，沒有任何日誌
+輸出。違規的實際處置是回 403（`server.err.forbidden_path`），並在回應的 `detail` 附上原因碼
+（`unknown_root`／`lexical_violation`／`escape`／`not_found`）與請求的 root、path（`crates/cytrace-server/src/api/jobs.rs`）。
+上傳封存檔的路徑穿越同樣以 403 與 `detail` 回報。
+
+**修訂**：刪除「並記稽核 log」，以上述實際行為為準，不補實作。
+
+- 理由：本服務為**單一管理帳號**（決策 3），會觸發路徑違規的請求必定來自已登入的那一位管理者，
+  違規內容已原樣回給他；伺服器端再記一份，對「誰做了什麼」沒有新增資訊。
+  補實作則須另外裁定格式、落點、保存期限，以及 log 是否可含機密目標的路徑（NFR-09 信任邊界），
+  成本與風險都不小，而目前沒有需求方。
+- 日後若出現多帳號或稽核需求（例如交件單位要求留存存取紀錄），另開 ADR 處理，而不是回頭恢復這一句。
+- 裁定：使用者 2026-10-05 於對話中選擇此方案（「按你的建議」，回應「建議 B：修訂 ADR-011 拿掉這句」）。
+  本修訂只更正一句與實作不符的宣稱，不改變本 ADR 的狀態與其他決策。
+- 同步更正：`crates/cytrace-server/src/targets.rs` 的註解（「detail 進稽核 log」）、`docs/SDS.md` §10。
+

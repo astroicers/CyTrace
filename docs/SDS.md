@@ -293,7 +293,7 @@ ScanResult {
   - 路徑：`/api/v1` 下的 session、targets、jobs、upload、report、result、artifacts、version，加上 `/healthz`；
   - 錯誤格式為 `{error:{kind,i18n_key,message,detail}}`。`message` 依請求語系渲染，`detail` 是不翻譯的原始資訊；
     job 失敗的 `message` 走與 console 共用 fixture 的退回鏈。
-  - ADR-011 寫的「路徑違規記稽核 log」與實作不符，待處理（T916）。
+  - 路徑違規回 403，原因碼與請求的 root、path 附在 `detail`；伺服器端不另記稽核 log（ADR-011 修訂節，T916）。
 - **前端 console**：
   - 與報表樣板各自一份 Vite config，採 hash routing，以 rust-embed 內嵌；
   - CSP header 硬化；report 端點自帶較寬的 CSP，不會被覆蓋。

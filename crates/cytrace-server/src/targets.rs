@@ -6,7 +6,8 @@
 use cytrace_i18n::Localized;
 use std::path::{Component, Path, PathBuf};
 
-/// 解析失敗原因（對外一律 403；detail 進稽核 log）。
+/// 解析失敗原因（對外一律 403；原因碼與請求的 root、path 附在回應的 `detail`。
+/// 伺服器端不另記稽核 log——ADR-011 修訂節，T916）。
 #[derive(Debug, PartialEq, Eq)]
 pub enum TargetError {
     UnknownRoot,
