@@ -46,7 +46,74 @@
       "invalid_address": "位址不合法：{{value}}（格式如 127.0.0.1:8443）",
       "password_input": "無法讀取密碼輸入（需要互動式終端機；容器請加 -it）：{{detail}}"
     },
-    "lang_unsupported": "不支援的語言「{{value}}」，改用 zh-TW（可用：zh-TW、en-US）"
+    "lang_unsupported": "不支援的語言「{{value}}」，改用 zh-TW（可用：zh-TW、en-US）",
+    "help": {
+      "about": "CyTrace — 地端依賴風險報表產生器",
+      "usage": "用法：",
+      "heading": {
+        "commands": "命令",
+        "options": "選項",
+        "arguments": "參數"
+      },
+      "arg": {
+        "help": "顯示說明",
+        "version": "顯示版本",
+        "lang": "介面語言（zh-TW｜en-US；未給時讀 CYTRACE_LANG，皆無則 zh-TW）",
+        "run": {
+          "target": "掃描目標（目錄、容器映像 tar 或檔案系統）",
+          "fail_on": "達指定嚴重度即以退出碼 2 結束（critical｜high｜medium｜low｜negligible｜unknown，大小寫不拘）",
+          "out": "報表輸出路徑（預設 ./<目標名>.report.html）",
+          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）",
+          "fail_on_quantum_vulnerable": "有量子脆弱資產即以退出碼 2 結束；未取得 CBOM 結果則以 1 結束（需 --cbom）"
+        },
+        "batch": {
+          "targets": "一或多個掃描目標",
+          "fail_on": "達指定嚴重度即以退出碼 2 結束（critical｜high｜medium｜low｜negligible｜unknown，大小寫不拘）",
+          "out_dir": "報表輸出目錄（預設目前目錄）",
+          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）",
+          "fail_on_quantum_vulnerable": "任一目標有量子脆弱資產即以 2 結束；任一目標未取得 CBOM 結果則整批以 1 結束（需 --cbom）"
+        },
+        "scan": {
+          "target": "掃描目標（目錄、容器映像 tar 或檔案系統）",
+          "out_dir": "輸出目錄（預設目前目錄）",
+          "cbom": "併同盤點密碼學資產（CBOM；預設關閉）"
+        },
+        "report": {
+          "input": "ScanResult JSON 的路徑",
+          "out": "報表輸出路徑（預設 ./<輸入檔名>.report.html）"
+        },
+        "serve": {
+          "bind": "監聽位址（預設 127.0.0.1:8443；亦可用 CYTRACE_BIND）",
+          "data_dir": "資料目錄，存放 job 與報表產物（預設 /data；亦可用 CYTRACE_DATA_DIR）",
+          "tls_cert": "TLS 憑證 PEM（與 --tls-key 成對；亦可用 CYTRACE_TLS_CERT）",
+          "tls_key": "TLS 金鑰 PEM（與 --tls-cert 成對；亦可用 CYTRACE_TLS_KEY）"
+        },
+        "health": {
+          "bind": "檢查的位址（預設同 serve：--bind > CYTRACE_BIND > 127.0.0.1:8443）"
+        }
+      },
+      "cmd": {
+        "run": "一鍵：產 SBOM → 比對弱點 → 出報表（可加 --fail-on）",
+        "batch": "多目標批次掃描：逐一出報表；任一目標達 --fail-on 即整體以 2 結束",
+        "scan": "只產 sbom.cdx.json 與 grype.json（加 --cbom 時另產 cbom.cdx.json）",
+        "report": "由既有的 ScanResult JSON 離線重建報表（稽核複核）",
+        "serve": "啟動 Web 服務：登入控制台與掃描、報表 API",
+        "hash_password": "離線產生管理密碼的 argon2id PHC 字串（放入 CYTRACE_ADMIN_PASSWORD_HASH）",
+        "health": "服務存活檢查（TCP 連線；供容器 HEALTHCHECK 使用）"
+      }
+    },
+    "usage": {
+      "invalid_value": "「{{value}}」不是 {{arg}} 的合法值（可用：{{valid}}）",
+      "invalid_value_plain": "「{{value}}」不是 {{arg}} 的合法值",
+      "value_required": "{{arg}} 需要一個值",
+      "unknown_argument": "不認得的參數：{{arg}}",
+      "unknown_subcommand": "不認得的子命令：{{value}}",
+      "missing_required": "缺少必要的參數：{{args}}",
+      "missing_subcommand": "缺少子命令",
+      "conflict": "{{arg}} 不能與 {{other}} 一起使用",
+      "other": "參數用法錯誤（{{detail}}）",
+      "hint": "執行 `{{command}} --help` 查看用法"
+    }
   },
   "server": {
     "listening": "CyTrace 服務已啟動：{{addr}}",

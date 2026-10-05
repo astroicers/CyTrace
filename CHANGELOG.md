@@ -12,6 +12,8 @@
   引擎同樣自源碼建置：與 Linux 版同一份釘選源碼、同一組參數交叉編譯，產物 SHA256 釘在
   `versions.env`；打包腳本取用前比對，不符即中止。GitHub Release 另附 `cbomkit-theia-windows-amd64.exe`
   供打包取用，取得方式見交付 SOP §2。
+- `--help` 與參數用法錯誤依指定語言輸出（T914）：說明文字、區段標題、錯誤訊息都跟著 `--lang`／
+  `CYTRACE_LANG`；錯誤訊息第二行提示該子命令的 `--help`。usage 行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符維持原樣。
 - Web 控制台 API：掃描任務失敗時，`GET /api/v1/jobs/{id}` 與任務列表回應的 `error`
   另附依請求語系（`?lang=` 或 `Accept-Language`）渲染的 `message`，供 CI 腳本等非控制台
   用戶端直接使用。落盤的任務記錄不變。控制台與 API 對同一筆失敗顯示相同的說明。
@@ -21,6 +23,7 @@
 
 ### 變更
 
+- 移除 `cytrace help <子命令>` 的寫法，請改用 `cytrace <子命令> --help`（T914；說明在地化後由我方提供 `--help`）。
 - **退出碼**：參數打錯（未知旗標、缺少必要參數）的退出碼由 `2` 改為 `1`。現在 `2` 只代表
   `--fail-on` 或 `--fail-on-quantum-vulnerable` 觸發；先前以退出碼 2 判斷門檻的 CI 腳本，
   會把參數打錯誤判為門檻觸發。`--help`、`--version` 仍為 `0`。

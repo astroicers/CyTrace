@@ -1081,7 +1081,7 @@ milestones:
         spec: null
         srs_ref: NFR-06
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: review
         source_ref: "T912 範圍界定（2026-10-02）"
@@ -1096,6 +1096,12 @@ milestones:
           **AC 含機械閘**：i18n 棘輪目前全面略過 doc 註解（依構造看不到 `--help` 文字），在地化後須把
           clap derive 型別、變體、欄位上的 doc 註解納入掃描，否則沒有防回歸。`--help` 第一行的 about 取自
           Cargo.toml 的 description（「CyTrace CLI（clap run/scan/report；SDS §2）」），也在範圍內，棘輪同樣看不到。
+
+          **結案（2026-10-05）**：`cytrace-cli/src/help.rs`——解析前從 argv 預掃 `--lang`、再看 `CYTRACE_LANG`；
+          以 clap builder 注入 `cli.help.*`（鍵由子命令名與參數 id 推導，含區段標題與自備的 `--help`／`--version`）；
+          用法錯誤依 `ErrorKind` 與 context 組成 `cli.usage.*`。CLI 定義移除全部 doc 註解；**AC 的機械閘**：i18n 棘輪
+          把 clap derive 型別裡的 doc 註解算進去，`every_subcommand_and_arg_has_localized_help` 要求 catalog 與命令定義
+          一一對上。about 不再取自 Cargo.toml 的 description。clap 開啟 `string` feature（不新增 crate）。
 
       - id: T915
         title: "serve 收到 SIGTERM 時優雅關閉（容器 docker stop）"
