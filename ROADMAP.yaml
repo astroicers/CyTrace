@@ -1175,12 +1175,16 @@ milestones:
           **結案（2026-10-05）**：`cytrace_report::render` 多一個語言參數，把樣板的 `<html lang="zh-TW">`
           （必須恰好一個，否則設定錯誤）換成產生語言，正規化規則同 `cytrace_i18n::lang_code`；
           前端 i18n 初始化讀 `<html lang>`（`initialLang`，只接受有資源的語系）。CLI 的 `report`／`run`
-          以 `--lang`／`CYTRACE_LANG` 決定；server 以**送出掃描那次請求**的語系決定（掛載與上傳兩條路徑）。
-          不動 ScanResult 資料契約（ADR-009）。報表內切換照舊。
-          測試：cytrace-report 以內嵌的實際樣板驗兩語與正規化；CLI 端到端驗 `report`／`run` × 四種
-          旗標與環境變數組合；server 驗掛載（header／`?lang=`／預設）與上傳；
-          `frontend/scripts/report-lang-check.mts` 一案一子程序載入真的 `src/i18n.ts`。
-          把 server 的語言寫死成 zh-TW、或 i18n.ts 改回 `lng: DEFAULT_LANG`，對應測試各自轉紅（實測）。
+          （`batch` 經 `run_one` 共用同一處）以 `--lang`／`CYTRACE_LANG` 決定；server 以**送出掃描那次請求**
+          的語系決定（掛載與上傳兩條路徑）。報表內切換照舊。不動 ScanResult schema；ADR-009 加修訂節：
+          注入點多一個根元素、重現輸入改為「JSON ＋ 語言」（語言寫在報表的 `<html lang>`，可據以重現），
+          並寫明先替換根元素、後注入資料。SDS §6／§7 同步。
+          測試：cytrace-report 以內嵌的實際樣板驗兩語、正規化、標記恰好一個、資料含標記字串仍正常；
+          CLI 端到端驗 `report`／`run`／`batch` × 五種旗標與環境變數組合（含不支援的值）；server 驗掛載
+          （header／`?lang=`／預設）與上傳；`frontend/scripts/report-lang-check.mts` 一案一子程序載入真的
+          `src/i18n.ts`，含分得出有無白名單的 `en-us`、`cimode`。把 server 的語言寫死成 zh-TW、i18n.ts 改回
+          `lng: DEFAULT_LANG`、或拿掉 `initialLang` 的白名單，對應測試各自轉紅（實測）。
+          獨立複審一輪（NEEDS_WORK：ADR-009 未記修訂、三處測試缺口、SDS §6）後修正。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"

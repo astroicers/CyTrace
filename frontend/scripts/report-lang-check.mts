@@ -34,6 +34,10 @@ const CASES: [string, string][] = [
   // 只接受有資源的語系碼；其餘一律 zh-TW（不猜、不做前綴比對——Rust 寫入的一定是正規碼）
   ['en', 'zh-TW'],
   ['en-GB', 'zh-TW'],
+  // 以下兩案分得出「有沒有白名單」：沒有 initialLang 過濾時，i18next 會把 en-us 正規化成 en-US、
+  // cimode 會讓 resolvedLanguage 變成 undefined（T918 複審 L1）
+  ['en-us', 'zh-TW'],
+  ['cimode', 'zh-TW'],
   ['fr-FR', 'zh-TW'],
   ['', 'zh-TW'],
   [NO_DOCUMENT, 'zh-TW'],
@@ -48,8 +52,6 @@ for (const [htmlLang, want] of CASES) {
   ).trim()
   if (got !== want) errors.push(`<html lang="${htmlLang}"> → 開啟語言 ${got}，應為 ${want}`)
 }
-// 反空轉：至少要有一個案例解析成非預設語言，否則「全部等於 zh-TW」不含資訊
-if (!CASES.some(([, want]) => want !== 'zh-TW')) errors.push('案例全為預設語言，檢查沒有鑑別力')
 
 if (errors.length) {
   console.error('✗ 報表開啟語言檢查失敗：')

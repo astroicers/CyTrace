@@ -89,3 +89,22 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - 序列化形狀由 `cbom_status_serialization_matches_the_frontend_contract`
   （`crates/cytrace-types`）與跨語言契約測試（`crates/cytrace-i18n/tests/cbom_keys.rs`）
   機械釘住。
+
+## 修訂：報表開啟語言（2026-10-05，T918）
+
+**裁定來源**：使用者於 2026-10-05 同意「報表以產生時的語言開啟」（先前一律以 zh-TW 開啟）。
+本修訂不動 ScanResult schema（仍為 v2），只調整決策 2 的注入點數量與決策 3 的重現輸入。
+
+- **決策 2（注入契約）**：除資料 sentinel 外，新增第二個替換點：樣板根元素 `<html lang="zh-TW">`
+  （必須恰好一個，否則產生報表即失敗）換成產生語言。前端 i18n 以它決定開啟時的語言，只接受
+  zh-TW／en-US，其餘 → zh-TW。**先替換根元素、後注入資料**：資料內容（例如上傳目標的元件名）
+  含同樣字串時，不影響計數與替換（由 cytrace-report 的回歸測試釘住）。
+- **決策 3（重現契約）**：重現的輸入由「ScanResult JSON」改為「ScanResult JSON ＋ 語言」。
+  - CLI：語言即 `--lang`／`CYTRACE_LANG`（皆無則 zh-TW）。
+  - server：語言為送出掃描那次請求的語系；不落在 ScanResult 與 job 記錄裡，但**寫在報表本身**
+    （`<html lang>`）。稽核者以 `cytrace --lang <該值> report <scan-result.json>` 即可重現同一份報表。
+  - 語言只影響根元素的 `lang` 屬性；資料區塊與其餘內容不變。不同語言產出的兩份報表，排除
+    `<html lang>` 後內容一致。
+- **成功指標「報表重現為純函式」**：改為「同 JSON、同語言兩次產出內容一致（排除 generated_at）」。
+- **不把語言寫進 ScanResult 的理由**：語言是呈現選擇，不是掃描結果；寫進去會讓同一次掃描因
+  呈現語言不同而產生兩份不同的稽核資料，並觸發 schema 升版。

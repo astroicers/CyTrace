@@ -49,7 +49,7 @@ pub fn render_with_template(result: &ScanResult, template: &str, lang: &str) -> 
             "template must contain exactly one {HTML_LANG_MARKER}"
         )));
     }
-    let code = cytrace_i18n::lang_code(lang).unwrap_or("zh-TW");
+    let code = cytrace_i18n::lang_code(lang).unwrap_or(cytrace_i18n::DEFAULT_LANG);
     let template = template.replacen(HTML_LANG_MARKER, &format!("<html lang=\"{code}\">"), 1);
     let json = serde_json::to_string(result)
         .map_err(|e| CytraceError::Parse(format!("scan-result serialize: {e}")))?;
@@ -118,6 +118,19 @@ mod tests {
         assert_eq!(html_lang(&render(&sample(), "").unwrap()), "zh-TW");
         let html = render(&sample(), "en-US").unwrap();
         assert_eq!(html.matches("<html").count(), 1, "根元素只能有一個");
+    }
+
+    /// 先替換根元素、後注入資料（ADR-009 修訂 T918）。順序一旦對調，資料裡出現同樣字串
+    /// 就會讓計數變 2、報表產生失敗——上傳型 job 的元件名來自上傳內容，等於外部可觸發。
+    #[test]
+    fn marker_inside_scan_data_does_not_break_rendering() {
+        let mut r = sample();
+        r.findings[0].component = "<html lang=\"zh-TW\">".into();
+        let html = render(&r, "en-US").expect("資料含標記字串不得讓產生失敗");
+        assert_eq!(html_lang(&html), "en-US");
+        // 資料原樣保留（經 JSON 序列化；不含 `</`，不受跳脫影響）
+        let data = html.split("type=\"application/json\">").nth(1).unwrap();
+        assert!(data.contains(r#"<html lang=\"zh-TW\">"#), "資料應原樣保留");
     }
 
     #[test]

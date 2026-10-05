@@ -197,8 +197,10 @@ ScanResult {
   - 正規化共用 `cytrace_i18n::lang_code`：`en*` → en-US、`zh*` → zh-TW，不分大小寫；
   - 優先序最高、有給值的來源不受支援時，以兩種語言各印一行警告後退回 zh-TW，不往下一個來源找；
     空白的環境變數視同未設；
-  - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言。
+  - serve 的啟動錯誤、關閉訊息、執行期警告都用操作者語言；
+  - CLI 產出的報表（`report`／`run`／`batch`）也以操作者語言開啟（T918，見 §7「開啟語言」）。
 - **API 回應的語言**不受操作者語言影響，依 ADR-011 §7 每個請求各自協商：`?lang=` > `Accept-Language` > zh-TW。
+  Web 服務產出的報表以**送出掃描那次請求**協商出的語言開啟（T918）。
 - **`--help` 與用法錯誤**（T914，`cytrace-cli/src/help.rs`）：
   - 語言在解析之前決定：先從 argv 預掃 `--lang`，再看 `CYTRACE_LANG`；
   - 說明文字住在 locale 的 `cli.help.*`，鍵由子命令名與參數 id 推導；以 clap builder 注入，區段標題、
