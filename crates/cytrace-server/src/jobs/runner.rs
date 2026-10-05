@@ -109,24 +109,13 @@ pub fn spawn_with_cleanup(
 ///   而 catalog 裡也根本沒有 `server.err.cbom` 這個鍵（前端會顯示裸鍵）。
 /// - `detail`：**不可翻譯**的部分（路徑、秒數、子程序訊息）。走
 ///   [`CytraceError::untranslatable_detail`] 單一出口，不用 `to_string()`
-///   ——後者會帶上本型別的中文前綴，且 `Cbom` 的 `Display` 是「鍵：細節」，
+///   ——後者會帶上本型別的分類前綴（T912 前為中文），且 `Cbom` 的 `Display` 是「鍵: 細節」，
 ///   等於把裸鍵送出 API。
 fn job_error_of(e: &CytraceError) -> JobError {
-    let kind = match e {
-        CytraceError::Engine(_) => "engine",
-        CytraceError::Parse(_) => "parse",
-        CytraceError::Io(_) => "io",
-        CytraceError::Config(_) => "config",
-        CytraceError::DbMissing(_) => "db_missing",
-        CytraceError::Cbom { .. } => "cbom",
-    };
-    let i18n_key = match e {
-        CytraceError::Cbom { key, .. } => (*key).to_string(),
-        _ => format!("server.err.{kind}"),
-    };
+    // 分類與鍵的對應住在 core（CLI 終端訊息用同一份；T912）
     JobError {
-        kind: kind.into(),
-        i18n_key,
+        kind: e.kind().into(),
+        i18n_key: e.i18n_key().into(),
         detail: e.untranslatable_detail().unwrap_or_default(),
     }
 }
@@ -177,7 +166,7 @@ fn run_pipeline(
             .map_err(|e| CytraceError::Parse(format!("scan-result serialize: {e}")))?,
     )?;
 
-    // `{e}` 會帶出 CytraceError 的 Display——每個變體都有中文前綴（「設定錯誤：…」），
+    // `{e}` 會帶出 CytraceError 的 Display——每個變體都有分類前綴（T912 前為中文「設定錯誤：…」），
     // 只換外層前綴等於沒修（T909 完整性批判抓到的漏網）。取不翻譯的內文。
     // 這是**防禦性**修改：樣板以 include_str! 內嵌且 CI 驗過含 sentinel、ScanResult 序列化不會
     // 失敗，此分支目前從任何輸入都進不來，也沒有測試能讓它轉紅（第二輪完整性批判更正

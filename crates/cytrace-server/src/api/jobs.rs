@@ -13,7 +13,8 @@ use serde::Deserialize;
 use serde_json::json;
 use std::io::Write;
 
-const VALID_FAIL_ON: [&str; 6] = ["critical", "high", "medium", "low", "negligible", "unknown"];
+/// 與 CLI 共用同一份（`cytrace_core::failon::FAIL_ON_LEVELS`）。
+const VALID_FAIL_ON: [&str; 6] = cytrace_core::failon::FAIL_ON_LEVELS;
 
 #[derive(Deserialize)]
 pub struct CreateJobBody {

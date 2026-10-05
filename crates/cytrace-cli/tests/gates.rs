@@ -28,7 +28,27 @@ fn cytrace_bin() -> PathBuf {
     p.join("cytrace")
 }
 
+/// 寫可執行檔（shim）與產生子程序互斥（T912 複審 newgates#6）。
+///
+/// fork 出的子程序在 exec 之前帶著父行程當下所有開著的 fd——包括另一條測試執行緒正在寫的
+/// shim。這時去 exec 那個 shim，核心回 ETXTBSY（"Text file busy"）；複審實測 400 次約 2 次。
+/// 寫 shim 取寫鎖、產生子程序取讀鎖：寫入期間沒有人 fork。
+static SPAWN: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+fn writing() -> std::sync::RwLockWriteGuard<'static, ()> {
+    SPAWN
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn spawning() -> std::sync::RwLockReadGuard<'static, ()> {
+    SPAWN
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn write_shim(path: &Path, fixture: &str) {
+    let _w = writing();
     fs::write(path, format!("#!/bin/sh\ncat {FIXTURES}/{fixture}\n")).expect("寫入 shim");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("chmod");
 }
@@ -51,11 +71,14 @@ impl Env {
 
     /// 以受控 PATH 執行：只含 shim 與系統目錄，**刻意不含 cbomkit-theia**。
     fn run(&self, args: &[&str]) -> i32 {
-        let out = Command::new(cytrace_bin())
-            .args(args)
-            .env("PATH", format!("{}/bin:/usr/bin:/bin", self.dir.display()))
-            .output()
-            .expect("執行 cytrace");
+        let out = {
+            let _g = spawning();
+            Command::new(cytrace_bin())
+                .args(args)
+                .env("PATH", format!("{}/bin:/usr/bin:/bin", self.dir.display()))
+                .output()
+                .expect("執行 cytrace")
+        };
         out.status.code().expect("退出碼")
     }
 

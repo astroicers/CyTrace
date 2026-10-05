@@ -1,11 +1,14 @@
 //! CyTrace CLI（SDS §2）：`cytrace run|scan|report`。
 //!
 //! 退出碼語意（ADR-006 / SDS §5）：`0` 正常 / `2` `--fail-on` 觸發 / 其他非 0 為錯誤。
+//! 參數用法錯誤也是 `1`——clap 預設的 `2` 會與 `--fail-on` 撞號（T912）。
+//!
+//! 終端訊息（含錯誤）一律以操作者語言輸出：`--lang` > `CYTRACE_LANG` > zh-TW（SDS §6）。
 
 use clap::{Parser, Subcommand};
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
-use cytrace_core::{engine, failon, parse};
-use cytrace_i18n::Catalog;
+use cytrace_core::{engine, failon, parse, CytraceError};
+use cytrace_i18n::{Catalog, Localized};
 use cytrace_types::{Meta, Severity};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -18,9 +21,9 @@ const EXIT_ERR: u8 = 1;
 #[derive(Parser, Debug)]
 #[command(name = "cytrace", version, about)]
 struct Cli {
-    /// 介面語言（zh-TW | en-US）。
-    #[arg(long, global = true, default_value = "zh-TW")]
-    lang: String,
+    /// 介面語言（zh-TW | en-US；未給時讀 CYTRACE_LANG，皆無則 zh-TW）。
+    #[arg(long, global = true)]
+    lang: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -32,7 +35,7 @@ enum Command {
         /// 掃描目標（目錄/容器映像/檔案系統）。
         target: String,
         /// 達指定嚴重度即以退出碼 2 結束（critical|high|medium|low|negligible|unknown）。
-        #[arg(long)]
+        #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
         /// 報表輸出路徑（預設 ./<basename>.report.html）。
         #[arg(long, short)]
@@ -48,7 +51,7 @@ enum Command {
     Batch {
         /// 一或多個掃描目標。
         targets: Vec<String>,
-        #[arg(long)]
+        #[arg(long, value_parser = fail_on_parser(), ignore_case = true)]
         fail_on: Option<String>,
         /// 報表輸出目錄（預設目前目錄）。
         #[arg(long, short)]
@@ -106,23 +109,111 @@ enum Command {
     },
 }
 
+/// `--fail-on` 只收已知嚴重度：打錯字是用法錯誤（退出碼 1），不是「以 unknown 為門檻」。
+fn fail_on_parser() -> clap::builder::PossibleValuesParser {
+    clap::builder::PossibleValuesParser::new(failon::FAIL_ON_LEVELS)
+}
+
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    let cat = Catalog::load(&cli.lang);
-    match run(&cli, &cat) {
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(e) => {
+            // clap 的錯誤與 help 文字是函式庫內建英文（help 在地化另見 T914）。
+            // 退出碼自己決定：help／version 為 0，其餘為 1——clap 預設的 2 是 --fail-on 的語意
+            let _ = e.print();
+            return ExitCode::from(if e.use_stderr() { EXIT_ERR } else { EXIT_OK });
+        }
+    };
+    let env_lang = std::env::var_os("CYTRACE_LANG").map(|v| v.to_string_lossy().into_owned());
+    let (lang, unsupported) = resolve_lang(cli.lang.as_deref(), env_lang.as_deref());
+    if let Some(raw) = unsupported {
+        // 要的語言不支援，也就不知道操作者讀哪一種——兩種都印
+        for code in ["zh-TW", "en-US"] {
+            eprintln!(
+                "{}",
+                Catalog::load(code).t("cli.lang_unsupported", &[("value", &raw)])
+            );
+        }
+    }
+    let cat = Catalog::load(lang);
+    match run(&cli, lang, &cat) {
         Ok(code) => ExitCode::from(code),
         Err(e) => {
-            eprintln!("錯誤 / error: {e}");
+            eprintln!(
+                "{}",
+                cat.t("cli.err.prefix", &[("message", &render_error(&e, &cat))])
+            );
             ExitCode::from(EXIT_ERR)
         }
     }
 }
 
-fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
+/// 介面語言：`--lang` > `CYTRACE_LANG` > zh-TW，所有子命令一致（SDS §6）。
+///
+/// 以**優先序最高、有給值**的來源判定；它不受支援時退回 zh-TW 並回傳原值供警告——
+/// 不往下一個來源找：明確給了 `--lang` 卻悄悄改用環境變數，比退回預設更難察覺。
+/// 空白的環境變數視同未設（容器常以 `CYTRACE_LANG=` 清除）。
+fn resolve_lang(flag: Option<&str>, env: Option<&str>) -> (&'static str, Option<String>) {
+    match flag.or(env.filter(|v| !v.trim().is_empty())) {
+        None => (cytrace_i18n::DEFAULT_LANG, None),
+        Some(raw) => match cytrace_i18n::lang_code(raw) {
+            Some(code) => (code, None),
+            None => (cytrace_i18n::DEFAULT_LANG, Some(raw.to_string())),
+        },
+    }
+}
+
+/// 終端錯誤 → 操作者語言。認得的型別依 catalog 渲染；其餘（第三方函式庫的錯誤）原樣附上
+/// ——那是函式庫或系統的診斷，不是我們的散文（定位同 API 的 `detail`）。
+fn render_error(e: &anyhow::Error, cat: &Catalog) -> String {
+    if let Some(l) = e.downcast_ref::<Localized>() {
+        return l.render(cat);
+    }
+    if let Some(c) = e.downcast_ref::<CytraceError>() {
+        return render_core_error(c, cat);
+    }
+    e.to_string()
+}
+
+/// `CytraceError` → 操作者語言：分類走 i18n 鍵（與 server 的 job 錯誤同一組），
+/// 不可翻譯的細節（路徑、子程序訊息）插值。不用 `Display`——那是語系中立的診斷。
+fn render_core_error(e: &CytraceError, cat: &Catalog) -> String {
+    match e {
+        CytraceError::Cbom { key, detail } => cat.render_cbom(key, detail.as_deref()),
+        other => {
+            let what = cat.t(other.i18n_key(), &[]);
+            match other.untranslatable_detail().filter(|d| !d.is_empty()) {
+                Some(detail) => cat.t(
+                    "cli.err.with_detail",
+                    &[("what", &what), ("detail", &detail)],
+                ),
+                None => what,
+            }
+        }
+    }
+}
+
+/// 帶路徑的 I/O／解析失敗：系統或函式庫訊息當細節，前後文走 i18n 鍵。
+fn path_err(key: &'static str, path: &Path, e: impl std::fmt::Display) -> Localized {
+    Localized::new(key)
+        .var("path", path.display().to_string())
+        .var("detail", e.to_string())
+}
+
+fn write_file(path: &Path, contents: impl AsRef<[u8]>) -> Result<(), Localized> {
+    std::fs::write(path, contents).map_err(|e| path_err("cli.err.write_failed", path, e))
+}
+
+fn run(cli: &Cli, lang: &str, cat: &Catalog) -> anyhow::Result<u8> {
+    // 只有 serve 需要語系碼本身（其餘子命令用 cat）；純 CLI 建置下沒有 serve
+    #[cfg(not(feature = "server"))]
+    let _ = lang;
     match &cli.command {
         Command::Report { input, out } => {
-            let json = std::fs::read_to_string(input)?;
-            let result: cytrace_types::ScanResult = serde_json::from_str(&json)?;
+            let json = std::fs::read_to_string(input)
+                .map_err(|e| path_err("cli.err.read_failed", input, e))?;
+            let result: cytrace_types::ScanResult = serde_json::from_str(&json)
+                .map_err(|e| path_err("cli.err.parse_failed", input, e))?;
             // 檔案來自更新版 CyTrace → serde 會靜默丟棄未知欄位，必須顯性警告
             if let Some(key) = cytrace_core::schema_warning(result.schema_version) {
                 eprintln!(
@@ -138,7 +229,7 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             }
             let html = cytrace_report::render(&result)?;
             let path = out.clone().unwrap_or_else(|| default_report_path(input));
-            std::fs::write(&path, html)?;
+            write_file(&path, html)?;
             println!(
                 "{}",
                 cat.t(
@@ -157,12 +248,12 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
             println!("{}", cat.t("cli.scanning", &[("target", target)]));
             let sbom = engine::sbom(target)?;
             let grype = engine::vuln(&sbom)?;
-            std::fs::write(dir.join("sbom.cdx.json"), &sbom)?;
-            std::fs::write(dir.join("grype.json"), &grype)?;
+            write_file(&dir.join("sbom.cdx.json"), &sbom)?;
+            write_file(&dir.join("grype.json"), &grype)?;
             if *cbom {
                 // 原樣落地（ADR-013 決策 5）；失敗只警示，不影響 SBOM/CVE 產物
                 match engine::cbom(target) {
-                    Ok(Some(out)) => std::fs::write(dir.join("cbom.cdx.json"), &out.json)?,
+                    Ok(Some(out)) => write_file(&dir.join("cbom.cdx.json"), &out.json)?,
                     Ok(None) => eprintln!("{}", cat.t("cli.cbom.engine_absent", &[])),
                     Err(e) => eprintln!(
                         "{}",
@@ -224,9 +315,9 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
                     tls_cert: tls_cert.clone(),
                     tls_key: tls_key.clone(),
                 },
-                std::env::vars().collect(),
+                cytrace_server::config::Env::from_process(),
             )?;
-            cytrace_server::serve(cfg, &cli.lang)?;
+            cytrace_server::serve(cfg, lang)?;
             Ok(EXIT_OK)
         }
         #[cfg(feature = "server")]
@@ -234,13 +325,16 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
         #[cfg(feature = "server")]
         Command::Health { bind } => {
             // health 只需 bind 解析；不要求 admin hash（可在 provision 前檢查存活）
-            let bind_raw = bind
-                .clone()
-                .or_else(|| std::env::var("CYTRACE_BIND").ok())
-                .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string());
-            let target: std::net::SocketAddr = bind_raw
-                .parse()
-                .map_err(|_| anyhow::anyhow!("位址不合法 / invalid address: {bind_raw}"))?;
+            let bind_raw = match bind.clone() {
+                Some(b) => b,
+                None => cytrace_server::config::Env::from_process()
+                    .get("CYTRACE_BIND")?
+                    .cloned()
+                    .unwrap_or_else(|| cytrace_server::config::DEFAULT_BIND.to_string()),
+            };
+            let target: std::net::SocketAddr = bind_raw.parse().map_err(|_| {
+                Localized::new("cli.err.invalid_address").var("value", bind_raw.as_str())
+            })?;
             let addr = target.to_string();
             match std::net::TcpStream::connect_timeout(&target, std::time::Duration::from_secs(3)) {
                 Ok(_) => {
@@ -256,17 +350,26 @@ fn run(cli: &Cli, cat: &Catalog) -> anyhow::Result<u8> {
     }
 }
 
+/// 讀不到密碼（沒有 tty：管線、容器未加 `-t`）。系統訊息只說 "No such device or address"，
+/// 補上前後文與處置。
+#[cfg(feature = "server")]
+fn password_input_err(e: std::io::Error) -> Localized {
+    Localized::new("cli.err.password_input").var("detail", e.to_string())
+}
+
 /// 互動式讀密碼兩次（隱藏輸入）→ 輸出 argon2id PHC 字串。
 #[cfg(feature = "server")]
 fn hash_password_interactive(cat: &Catalog) -> anyhow::Result<u8> {
     use cytrace_server::auth::{hash_password, MIN_PASSWORD_LEN};
     let min = MIN_PASSWORD_LEN.to_string();
-    let pw = rpassword::prompt_password(cat.t("cli.hashpw.prompt", &[("min", &min)]))?;
+    let pw = rpassword::prompt_password(cat.t("cli.hashpw.prompt", &[("min", &min)]))
+        .map_err(password_input_err)?;
     if pw.chars().count() < MIN_PASSWORD_LEN {
         eprintln!("{}", cat.t("cli.hashpw.too_short", &[("min", &min)]));
         return Ok(EXIT_ERR);
     }
-    let confirm = rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[]))?;
+    let confirm =
+        rpassword::prompt_password(cat.t("cli.hashpw.confirm", &[])).map_err(password_input_err)?;
     if pw != confirm {
         eprintln!("{}", cat.t("cli.hashpw.mismatch", &[]));
         return Ok(EXIT_ERR);
@@ -347,7 +450,7 @@ fn run_one(
     );
     let html = cytrace_report::render(&result)?;
     let path = out.unwrap_or_else(|| PathBuf::from(format!("{}.report.html", sanitize(target))));
-    std::fs::write(&path, html)?;
+    write_file(&path, html)?;
     let risk = result.summary.overall_risk;
     println!(
         "{}",
@@ -407,12 +510,14 @@ struct CbomOpts {
 ///
 /// 直接用 `e.to_string()` 會印出鍵本身（`cbom.err.empty_output`），
 /// 使用者看不懂、且 `--lang en-US` 也不會變英文。
-fn render_cbom_error(e: &cytrace_core::CytraceError, cat: &Catalog) -> String {
+///
+/// 非 CBOM 變體（theia 無法執行、暫存目錄建立失敗）與 run／batch 的 `collect_cbom` 一致，
+/// 以通用鍵 `cbom.err.engine` 承接。T912 前這裡印 `Display`，`scan --cbom --lang en-US`
+/// 實測印出「CBOM inventory failed: 引擎子程序錯誤：cbomkit-theia: …」。
+fn render_cbom_error(e: &CytraceError, cat: &Catalog) -> String {
     match e {
-        cytrace_core::CytraceError::Cbom { key, detail } => {
-            render_cbom_key(key, detail.as_deref(), cat)
-        }
-        other => other.to_string(),
+        CytraceError::Cbom { key, detail } => render_cbom_key(key, detail.as_deref(), cat),
+        other => cat.render_cbom("cbom.err.engine", other.untranslatable_detail().as_deref()),
     }
 }
 
@@ -587,6 +692,142 @@ mod tests {
         );
     }
 
+    // ── T912：語言來源與終端錯誤渲染 ──
+
+    #[test]
+    fn resolve_lang_precedence_and_fallback() {
+        assert_eq!(resolve_lang(None, None), ("zh-TW", None));
+        assert_eq!(resolve_lang(None, Some("en-US")), ("en-US", None));
+        assert_eq!(resolve_lang(Some("zh-TW"), Some("en-US")), ("zh-TW", None));
+        assert_eq!(resolve_lang(None, Some(" ")), ("zh-TW", None));
+        assert_eq!(resolve_lang(Some("en_US.UTF-8"), None), ("en-US", None));
+        // 不支援：退回 zh-TW 並回傳原值；旗標不支援時不往下找環境變數
+        assert_eq!(
+            resolve_lang(Some("fr"), Some("en-US")),
+            ("zh-TW", Some("fr".to_string()))
+        );
+        assert_eq!(
+            resolve_lang(None, Some("de")),
+            ("zh-TW", Some("de".to_string()))
+        );
+    }
+
+    fn cjk(s: &str) -> bool {
+        s.chars()
+            .any(|c| matches!(c as u32, 0x3000..=0x303F | 0x4E00..=0x9FFF | 0xFF00..=0xFFEF))
+    }
+
+    #[test]
+    fn core_errors_render_in_the_operator_language() {
+        let samples = [
+            CytraceError::Engine("syft: not found".into()),
+            CytraceError::Parse("grype: expected value".into()),
+            CytraceError::Io(std::io::Error::other("disk full")),
+            CytraceError::Config("x".into()),
+            CytraceError::DbMissing("/db".into()),
+            CytraceError::Engine(String::new()),
+        ];
+        for lang in ["zh-TW", "en-US"] {
+            let cat = Catalog::load(lang);
+            for e in &samples {
+                let out = render_core_error(e, &cat);
+                let detail = e.untranslatable_detail().unwrap_or_default();
+                assert!(out.contains(&detail), "{lang} {e:?}：{out}");
+                assert!(!out.contains(e.i18n_key()), "{lang} 裸鍵：{out}");
+                // `render_core_error` 以 `t(other.i18n_key(), &[])` 渲染——鍵不是字面值，
+                // 插值對帳比不到（T912 複審 newgates#3）
+                assert!(!out.contains("{{"), "{lang} 殘留佔位符：{out}");
+                assert!(
+                    !out.ends_with(": ") && !out.ends_with('：'),
+                    "{lang} 空細節：{out}"
+                );
+                assert_eq!(lang == "zh-TW", cjk(&out), "{lang} 語言不符：{out}");
+            }
+        }
+        // anyhow 包裝後同樣認得（main 的出口）
+        let en = Catalog::load("en-US");
+        let wrapped = anyhow::Error::from(CytraceError::Engine("syft: boom".into()));
+        assert_eq!(
+            render_error(&wrapped, &en),
+            "Engine subprocess error: syft: boom"
+        );
+        let wrapped =
+            anyhow::Error::from(Localized::new("cli.err.invalid_address").var("value", "x"));
+        assert!(render_error(&wrapped, &en).starts_with("Invalid address: x"));
+    }
+
+    #[cfg(feature = "server")]
+    #[test]
+    fn password_input_error_renders_with_its_detail() {
+        // 系統訊息（ENXIO）原樣帶出；兩語都不得殘留佔位符
+        let e = std::io::Error::from_raw_os_error(6);
+        let detail = e.to_string();
+        for lang in ["zh-TW", "en-US"] {
+            let out = password_input_err(std::io::Error::from_raw_os_error(6))
+                .render(&Catalog::load(lang));
+            assert!(out.contains(&detail), "{lang}：{out}");
+            assert!(
+                !out.contains("{{") && !out.contains("cli.err.password_input"),
+                "{lang}：{out}"
+            );
+            assert_eq!(lang == "zh-TW", cjk(&out), "{lang}：{out}");
+        }
+    }
+
+    #[test]
+    fn fail_on_accepts_known_levels_in_any_case_and_rejects_typos() {
+        let cli = Cli::try_parse_from(["cytrace", "run", "x", "--fail-on", "HIGH"]).unwrap();
+        match cli.command {
+            // 原樣保留；`Severity::from_grype_str` 不分大小寫
+            Command::Run { fail_on, .. } => assert_eq!(fail_on.as_deref(), Some("HIGH")),
+            _ => panic!("expected run"),
+        }
+        for bad in ["hgih", "", "severe"] {
+            for sub in ["run", "batch"] {
+                let err = Cli::try_parse_from(["cytrace", sub, "x", "--fail-on", bad]).unwrap_err();
+                assert_eq!(
+                    err.kind(),
+                    clap::error::ErrorKind::InvalidValue,
+                    "{sub} {bad:?}"
+                );
+            }
+        }
+        // 每個合法值都要能被 Severity 認得（否則 clap 收了、門檻卻落到 unknown）
+        for level in failon::FAIL_ON_LEVELS {
+            assert_eq!(
+                Severity::from_grype_str(level).i18n_key(),
+                format!("severity.{level}")
+            );
+        }
+    }
+
+    /// `cli.done` 以 `t(risk.i18n_key(), &[])` 渲染風險等級——鍵不是字面值，插值對帳比不到，
+    /// 在此逐等級驗（T912 複審 newgates#3）。
+    #[test]
+    fn every_severity_label_renders_without_variables() {
+        for level in failon::FAIL_ON_LEVELS {
+            let key = Severity::from_grype_str(level).i18n_key();
+            for lang in ["zh-TW", "en-US"] {
+                let m = Catalog::load(lang).t(key, &[]);
+                assert!(m != key && !m.contains("{{"), "{lang} {key}：{m}");
+            }
+        }
+    }
+
+    #[test]
+    fn scan_cbom_fallback_never_prints_the_display() {
+        // T912 前 `other => other.to_string()`：--lang en-US 實測印出中文前綴
+        let en = Catalog::load("en-US");
+        for e in [
+            CytraceError::Engine("cbomkit-theia: Permission denied (os error 13)".into()),
+            CytraceError::Io(std::io::Error::other("tmp")),
+        ] {
+            let out = render_cbom_error(&e, &en);
+            assert!(out.starts_with("Engine error"), "{out}");
+            assert!(!cjk(&out) && !out.contains("engine: "), "{out}");
+        }
+    }
+
     // ── 單一目標內的雙閘門彙整（複審 finding：fail_on 先行 return 會遮蔽量子 exit 1）──
 
     #[test]
@@ -658,7 +899,8 @@ mod tests {
     fn parses_report_subcommand() {
         let cli = Cli::try_parse_from(["cytrace", "report", "scan.json"]).unwrap();
         assert!(matches!(cli.command, Command::Report { .. }));
-        assert_eq!(cli.lang, "zh-TW");
+        // 沒給就是沒給——預設值由 resolve_lang 決定，才分得出「沒給」與「給了 zh-TW」
+        assert_eq!(cli.lang, None);
     }
 
     #[test]
@@ -682,7 +924,7 @@ mod tests {
             }
             _ => panic!("expected run"),
         }
-        assert_eq!(cli.lang, "en-US");
+        assert_eq!(cli.lang.as_deref(), Some("en-US"));
     }
 
     #[test]

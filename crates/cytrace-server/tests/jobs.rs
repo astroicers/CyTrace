@@ -1269,6 +1269,12 @@ async fn job_error_message_follows_shared_fallback_fixture() {
                 !want.is_empty() && want != c["expect"]["key"].as_str().unwrap_or(""),
                 "{name}: 預期文字無效"
             );
+            // 預期值也是 `t(k, &[])` 算的：鍵若需要變數，兩邊同帶 `{{…}}` 仍相等——得另外擋
+            // （tests/i18n_call_vars.rs 的 NONLITERAL 以本測試涵蓋 render_job_error；第三輪複審）
+            assert!(
+                !want.contains("{{"),
+                "{name}/{lang}：退回鏈的鍵不得需要變數：{want}"
+            );
             let req = Request::get(format!("/api/v1/jobs/{}?lang={lang}", id_of(i)))
                 .header(header::COOKIE, &cookie)
                 .body(Body::empty())

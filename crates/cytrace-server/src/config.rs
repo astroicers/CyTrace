@@ -1,10 +1,13 @@
 //! 服務設定。來源優先序：CLI 旗標 > 環境變數 > 預設（SDS §6 慣例）。
 //!
-//! `resolve` 是純函式（env 以 `HashMap` 傳入）——可單元測試且無測試間 env 競態。
+//! `resolve` 是純函式（env 以 [`Env`] 傳入，`HashMap` 可直接轉換）——可單元測試且無測試間 env 競態。
+//! 錯誤以 [`Localized`] 回傳（`server.startup.*`），由呼叫端以操作者語言渲染（T912）。
 
 use crate::auth;
-use cytrace_core::error::{CytraceError, Result};
-use std::collections::HashMap;
+use crate::error::Lang;
+use cytrace_i18n::Localized;
+use std::collections::{BTreeSet, HashMap};
+use std::ffi::OsString;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -59,98 +62,161 @@ pub struct ServerConfig {
     pub max_upload_bytes: u64,
     /// 總解壓量上限 bytes（`CYTRACE_MAX_EXTRACT_MB`，預設 min(10×上傳, 4GB)）。
     pub max_extract_bytes: u64,
+    /// 操作者語言：終端機訊息（啟動、job 隔離／落盤失敗）用。`resolve` 給 zh-TW，
+    /// 由 `serve` 依 CLI 的 `--lang`／`CYTRACE_LANG` 覆寫。與 API 回應的語言（每個請求各自協商）無關。
+    pub lang: Lang,
+}
+
+/// 解析用的環境變數。值不是合法 UTF-8 的變數只記名字，**讀到它時**才報錯。
+///
+/// 為什麼延後：
+/// - 不能在收集時就報錯——旗標已覆寫的變數（`--data-dir` 配上壞掉的 `CYTRACE_DATA_DIR`）、
+///   不經 `resolve` 讀取的變數（`CYTRACE_LANG` 由 CLI 以 lossy 讀、`CYTRACE_CBOM_TIMEOUT_SECS`
+///   由引擎讀，壞值皆退回預設）都會擋下啟動
+///   （T912 第三輪複審）；
+/// - 也不能以替代字元帶過——路徑類變數會悄悄改用另一個目錄（`d\xff` 寫進 `d\u{FFFD}/jobs`，
+///   第二輪複審 newcode#0）；
+/// - `std::env::vars()` 遇到任一非 UTF-8 變數直接 panic（第一輪複審 cli#4）。
+#[derive(Debug, Clone, Default)]
+pub struct Env {
+    vars: HashMap<String, String>,
+    not_utf8: BTreeSet<String>,
+}
+
+impl Env {
+    /// 由任意 (名稱, 值) 建立。名稱不是 UTF-8 的略過（我方不讀這種名稱）。
+    pub fn from_os(pairs: impl IntoIterator<Item = (OsString, OsString)>) -> Self {
+        let mut env = Env::default();
+        for (k, v) in pairs {
+            let Ok(k) = k.into_string() else { continue };
+            match v.into_string() {
+                Ok(v) => {
+                    env.vars.insert(k, v);
+                }
+                Err(_) => {
+                    env.not_utf8.insert(k);
+                }
+            }
+        }
+        env
+    }
+
+    /// 目前行程的環境。
+    pub fn from_process() -> Self {
+        Self::from_os(std::env::vars_os())
+    }
+
+    /// 讀一個變數；值不是 UTF-8 → 指名該變數的錯誤。
+    pub fn get(&self, name: &str) -> Result<Option<&String>, Localized> {
+        if self.not_utf8.contains(name) {
+            return Err(Localized::new("server.startup.env_not_utf8").var("name", name));
+        }
+        Ok(self.vars.get(name))
+    }
+}
+
+impl From<HashMap<String, String>> for Env {
+    fn from(vars: HashMap<String, String>) -> Self {
+        Env {
+            vars,
+            not_utf8: BTreeSet::new(),
+        }
+    }
 }
 
 impl ServerConfig {
-    /// 由 CLI 旗標與環境變數解析設定。
-    pub fn resolve(flags: CliFlags, env: HashMap<String, String>) -> Result<Self> {
-        let bind_raw = flags
-            .bind
-            .or_else(|| env.get("CYTRACE_BIND").cloned())
-            .unwrap_or_else(|| DEFAULT_BIND.to_string());
-        let bind: SocketAddr = bind_raw
-            .parse()
-            .map_err(|_| CytraceError::Config(format!("CYTRACE_BIND 不是合法位址：{bind_raw}")))?;
+    /// 由 CLI 旗標與環境變數解析設定。旗標有值時不讀對應的環境變數（旗標 > 環境變數 > 預設）。
+    pub fn resolve(flags: CliFlags, env: impl Into<Env>) -> Result<Self, Localized> {
+        let env: Env = env.into();
+        // 錯誤訊息指名值的實際來源（旗標或環境變數），操作者才知道要改哪裡
+        let (bind_source, bind_raw) = match flags.bind {
+            Some(v) => ("--bind", v),
+            None => match env.get("CYTRACE_BIND")? {
+                Some(v) => ("CYTRACE_BIND", v.clone()),
+                None => ("--bind", DEFAULT_BIND.to_string()),
+            },
+        };
+        let bind: SocketAddr = bind_raw.parse().map_err(|_| {
+            Localized::new("server.startup.bind_invalid")
+                .var("source", bind_source)
+                .var("value", bind_raw.as_str())
+        })?;
 
-        let data_dir = flags
-            .data_dir
-            .or_else(|| env.get("CYTRACE_DATA_DIR").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR));
+        let data_dir = match flags.data_dir {
+            Some(d) => d,
+            None => env
+                .get("CYTRACE_DATA_DIR")?
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_DATA_DIR)),
+        };
 
-        let db_cache_dir = env.get("GRYPE_DB_CACHE_DIR").map(PathBuf::from);
+        let db_cache_dir = env.get("GRYPE_DB_CACHE_DIR")?.map(PathBuf::from);
 
-        let admin_password_hash =
-            env.get("CYTRACE_ADMIN_PASSWORD_HASH")
-                .cloned()
-                .ok_or_else(|| {
-                    CytraceError::Config(
-                        "缺少 CYTRACE_ADMIN_PASSWORD_HASH（以 `cytrace hash-password` 產生）"
-                            .into(),
-                    )
-                })?;
+        let admin_password_hash = env
+            .get("CYTRACE_ADMIN_PASSWORD_HASH")?
+            .cloned()
+            .ok_or_else(|| Localized::new("server.startup.admin_hash_missing"))?;
         if !auth::is_valid_phc(&admin_password_hash) {
-            return Err(CytraceError::Config(
-                "CYTRACE_ADMIN_PASSWORD_HASH 不是合法 PHC 字串（以 `cytrace hash-password` 產生）"
-                    .into(),
-            ));
+            return Err(Localized::new("server.startup.admin_hash_invalid"));
         }
 
         let admin_user = env
-            .get("CYTRACE_ADMIN_USER")
+            .get("CYTRACE_ADMIN_USER")?
             .cloned()
             .unwrap_or_else(|| "admin".into());
 
-        let ttl_hours = match env.get("CYTRACE_SESSION_TTL_HOURS") {
-            Some(raw) => raw.parse::<u64>().map_err(|_| {
-                CytraceError::Config(format!("CYTRACE_SESSION_TTL_HOURS 不是整數：{raw}"))
-            })?,
+        let not_integer = |name: &'static str, raw: &str| {
+            Localized::new("server.startup.not_integer")
+                .var("name", name)
+                .var("value", raw)
+        };
+        let ttl_hours = match env.get("CYTRACE_SESSION_TTL_HOURS")? {
+            Some(raw) => raw
+                .parse::<u64>()
+                .map_err(|_| not_integer("CYTRACE_SESSION_TTL_HOURS", raw))?,
             None => DEFAULT_SESSION_TTL_HOURS,
         };
         let session_ttl = Duration::from_secs(ttl_hours * 3600);
 
-        let tls_cert = flags
-            .tls_cert
-            .or_else(|| env.get("CYTRACE_TLS_CERT").map(PathBuf::from));
-        let tls_key = flags
-            .tls_key
-            .or_else(|| env.get("CYTRACE_TLS_KEY").map(PathBuf::from));
+        let flag_or_env =
+            |flag: Option<PathBuf>, name: &str| -> Result<Option<PathBuf>, Localized> {
+                match flag {
+                    Some(p) => Ok(Some(p)),
+                    None => Ok(env.get(name)?.map(PathBuf::from)),
+                }
+            };
+        let tls_cert = flag_or_env(flags.tls_cert, "CYTRACE_TLS_CERT")?;
+        let tls_key = flag_or_env(flags.tls_key, "CYTRACE_TLS_KEY")?;
         let tls = match (tls_cert, tls_key) {
             (Some(cert), Some(key)) => Some(TlsPaths { cert, key }),
             (None, None) => None,
-            _ => {
-                return Err(CytraceError::Config(
-                    "TLS 憑證與金鑰必須成對設定（CYTRACE_TLS_CERT + CYTRACE_TLS_KEY）".into(),
-                ))
-            }
+            _ => return Err(Localized::new("server.startup.tls_unpaired")),
         };
 
-        let scan_roots = match env.get("CYTRACE_SCAN_ROOTS") {
-            Some(raw) => crate::targets::parse_roots(raw)
-                .map_err(|e| CytraceError::Config(format!("CYTRACE_SCAN_ROOTS：{e}")))?,
+        let scan_roots = match env.get("CYTRACE_SCAN_ROOTS")? {
+            Some(raw) => crate::targets::parse_roots(raw)?,
             None => Vec::new(),
         };
 
-        let parse_usize = |key: &str, default: usize| -> Result<usize> {
-            match env.get(key) {
-                Some(raw) => raw
-                    .parse::<usize>()
-                    .map_err(|_| CytraceError::Config(format!("{key} 不是整數：{raw}"))),
+        let parse_usize = |key: &'static str, default: usize| -> Result<usize, Localized> {
+            match env.get(key)? {
+                Some(raw) => raw.parse::<usize>().map_err(|_| not_integer(key, raw)),
                 None => Ok(default),
             }
         };
         let max_concurrent_scans = parse_usize("CYTRACE_MAX_CONCURRENT_SCANS", 2)?.max(1);
         let max_queued = parse_usize("CYTRACE_MAX_QUEUED", 32)?.max(1);
         let keep_input = env
-            .get("CYTRACE_KEEP_INPUT")
+            .get("CYTRACE_KEEP_INPUT")?
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
         let max_upload_bytes = parse_usize("CYTRACE_MAX_UPLOAD_MB", 512)? as u64 * 1024 * 1024;
-        let max_extract_bytes = match env.get("CYTRACE_MAX_EXTRACT_MB") {
+        let max_extract_bytes = match env.get("CYTRACE_MAX_EXTRACT_MB")? {
             Some(raw) => {
-                (raw.parse::<u64>().map_err(|_| {
-                    CytraceError::Config(format!("CYTRACE_MAX_EXTRACT_MB 不是整數：{raw}"))
-                })?) * 1024
+                raw.parse::<u64>()
+                    .map_err(|_| not_integer("CYTRACE_MAX_EXTRACT_MB", raw))?
+                    * 1024
                     * 1024
             }
             None => (max_upload_bytes.saturating_mul(10)).min(4 * 1024 * 1024 * 1024),
@@ -170,6 +236,7 @@ impl ServerConfig {
             keep_input,
             max_upload_bytes,
             max_extract_bytes,
+            lang: Lang::ZhTw,
         })
     }
 
@@ -187,6 +254,18 @@ impl ServerConfig {
 mod tests {
     use super::*;
     use std::sync::LazyLock;
+
+    /// 以兩種語言渲染：不得殘留佔位符，且必須帶出實際的值。
+    fn assert_renders(err: &Localized, must_contain: &str) {
+        for lang in [Lang::ZhTw, Lang::EnUs] {
+            let out = err.render(lang.catalog());
+            assert!(!out.contains("{{"), "{lang:?} 殘留佔位符：{out}");
+            assert!(
+                out.contains(must_contain),
+                "{lang:?} 應含 {must_contain}：{out}"
+            );
+        }
+    }
 
     /// 測試用 PHC（argon2 hash 一次 ~100ms，全部測試共用）。
     pub(crate) static TEST_PHC: LazyLock<String> =
@@ -239,25 +318,42 @@ mod tests {
             env(&[]),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.bind_invalid");
+        assert_eq!(
+            err.vars,
+            vec![
+                ("source", "--bind".to_string()),
+                ("value", "not-an-addr".to_string())
+            ]
+        );
+
+        // 值來自環境變數時，訊息指名環境變數
+        let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_BIND", "x:y")]))
+            .unwrap_err();
+        assert_eq!(
+            err.vars,
+            vec![
+                ("source", "CYTRACE_BIND".to_string()),
+                ("value", "x:y".to_string())
+            ]
+        );
     }
 
     #[test]
     fn admin_hash_required_and_validated() {
         // 缺失 → 拒絕啟動
         let err = ServerConfig::resolve(CliFlags::default(), HashMap::new()).unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.admin_hash_missing");
         // 非 PHC → 拒絕啟動
         let err = ServerConfig::resolve(
             CliFlags::default(),
-            [(
+            HashMap::from([(
                 "CYTRACE_ADMIN_PASSWORD_HASH".to_string(),
                 "plaintext-password".to_string(),
-            )]
-            .into(),
+            )]),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.admin_hash_invalid");
     }
 
     #[test]
@@ -270,7 +366,7 @@ mod tests {
             env(&[]),
         )
         .unwrap_err();
-        assert!(matches!(err, CytraceError::Config(_)));
+        assert_eq!(err.key, "server.startup.tls_unpaired");
 
         let c = ServerConfig::resolve(
             CliFlags::default(),
@@ -293,5 +389,90 @@ mod tests {
         )
         .unwrap();
         assert!(!c.db_present());
+    }
+
+    #[test]
+    fn integer_and_scan_root_errors_name_the_variable() {
+        for name in [
+            "CYTRACE_SESSION_TTL_HOURS",
+            "CYTRACE_MAX_CONCURRENT_SCANS",
+            "CYTRACE_MAX_QUEUED",
+            "CYTRACE_MAX_UPLOAD_MB",
+            "CYTRACE_MAX_EXTRACT_MB",
+        ] {
+            let err =
+                ServerConfig::resolve(CliFlags::default(), env(&[(name, "12x")])).unwrap_err();
+            assert_eq!(err.key, "server.startup.not_integer", "{name}");
+            assert_eq!(
+                err.vars,
+                vec![("name", name.to_string()), ("value", "12x".to_string())]
+            );
+            assert_renders(&err, name);
+            assert_renders(&err, "12x");
+        }
+
+        let err = ServerConfig::resolve(CliFlags::default(), env(&[("CYTRACE_SCAN_ROOTS", "bad")]))
+            .unwrap_err();
+        assert_eq!(err.key, "server.startup.scan_roots_format");
+        assert_eq!(err.vars, vec![("item", "bad".to_string())]);
+        assert_renders(&err, "bad");
+        let err = ServerConfig::resolve(
+            CliFlags::default(),
+            env(&[("CYTRACE_SCAN_ROOTS", "t=relative/p")]),
+        )
+        .unwrap_err();
+        assert_eq!(err.key, "server.startup.scan_roots_not_absolute");
+        assert_eq!(err.vars, vec![("item", "t=relative/p".to_string())]);
+        assert_renders(&err, "t=relative/p");
+    }
+
+    #[test]
+    fn non_utf8_env_errors_only_when_read() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = |k: &str| (OsString::from(k), OsString::from_vec(b"/d\xff".to_vec()));
+        let ok = |k: &str, v: &str| (OsString::from(k), OsString::from(v));
+        let phc = ok("CYTRACE_ADMIN_PASSWORD_HASH", TEST_PHC.as_str());
+
+        // 讀到才報錯，且指名變數
+        let err = ServerConfig::resolve(
+            CliFlags::default(),
+            Env::from_os([phc.clone(), bad("CYTRACE_DATA_DIR")]),
+        )
+        .unwrap_err();
+        assert_eq!(err.key, "server.startup.env_not_utf8");
+        assert_eq!(err.vars, vec![("name", "CYTRACE_DATA_DIR".to_string())]);
+        assert_renders(&err, "CYTRACE_DATA_DIR");
+
+        // 旗標已覆寫、或不經 resolve 讀取：不報錯。四個有旗標的變數都要驗
+        let c = ServerConfig::resolve(
+            CliFlags {
+                bind: Some("127.0.0.1:1".into()),
+                data_dir: Some("/srv".into()),
+                tls_cert: Some("/c.crt".into()),
+                tls_key: Some("/c.key".into()),
+            },
+            Env::from_os([
+                phc.clone(),
+                bad("CYTRACE_BIND"),
+                bad("CYTRACE_DATA_DIR"),
+                bad("CYTRACE_TLS_CERT"),
+                bad("CYTRACE_TLS_KEY"),
+                bad("CYTRACE_LANG"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(c.data_dir, PathBuf::from("/srv"));
+        assert_eq!(c.tls.unwrap().cert, PathBuf::from("/c.crt"));
+
+        // 只給一半的 TLS 旗標：另一半要讀環境變數，壞掉就指名它
+        let err = ServerConfig::resolve(
+            CliFlags {
+                tls_cert: Some("/c.crt".into()),
+                ..Default::default()
+            },
+            Env::from_os([phc.clone(), bad("CYTRACE_TLS_KEY")]),
+        )
+        .unwrap_err();
+        assert_eq!(err.vars, vec![("name", "CYTRACE_TLS_KEY".to_string())]);
     }
 }

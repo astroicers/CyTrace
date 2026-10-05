@@ -62,14 +62,14 @@ cargo build --release
 | `cytrace hash-password` | 離線產生管理密碼 argon2id hash |
 
 - **目標格式**：`dir:/路徑`、`映像:標籤`（容器）、檔案系統
-- **語言**：`--lang zh-TW｜en-US`
-- **退出碼**：`0` 正常／`2` 達 `--fail-on` 門檻／`1` 錯誤
+- **語言**：`--lang zh-TW｜en-US`（全域旗標，可放在子命令後）；未給時讀環境變數 `CYTRACE_LANG`，皆無則 zh-TW。執行訊息與錯誤訊息亦依此語言；`--help` 與參數用法錯誤尚未在地化（T914）
+- **退出碼**：`0` 正常／`2` 達 `--fail-on` 門檻／`1` 錯誤（含參數打錯）
 
 ### 容器（Web 服務模式）
 
 ```bash
 # 產管理密碼 hash，起站，瀏覽器登入操作
-docker run --rm ghcr.io/astroicers/cytrace:latest hash-password
+docker run --rm -it ghcr.io/astroicers/cytrace:latest hash-password
 docker run -d --read-only --tmpfs /tmp -p 8443:8443 \
   -v ./data:/data -v ./db:/db:ro \
   -e CYTRACE_ADMIN_PASSWORD_HASH='<hash>' \

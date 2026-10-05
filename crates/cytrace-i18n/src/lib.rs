@@ -17,11 +17,72 @@ pub struct Catalog {
     is_en: bool,
 }
 
+/// 支援的語系碼正規化：`en…` → `en-US`、`zh…` → `zh-TW`，其餘（含空字串）→ `None`。
+///
+/// CLI（`--lang`／`CYTRACE_LANG`）、[`Catalog::load`] 與 server 的 `Lang` 共用這一份規則；
+/// 不支援時各自決定退回方式（CLI 印警告後用 zh-TW；API 協商依 ADR-011 §7 退回 zh-TW）。
+/// 前綴判斷是既有行為（`--lang en`、`en_US.UTF-8` 一直可用）。T912 前 `Catalog::load` 與
+/// server 的 `Lang::from_code` 各寫一份，T912 收成這一份（CLI 的 `resolve_lang` 也用它），不收緊。
+pub fn lang_code(raw: &str) -> Option<&'static str> {
+    let l = raw.trim().to_ascii_lowercase();
+    if l.starts_with("en") {
+        Some("en-US")
+    } else if l.starts_with("zh") {
+        Some("zh-TW")
+    } else {
+        None
+    }
+}
+
+/// 預設語系（fallback）。
+pub const DEFAULT_LANG: &str = "zh-TW";
+
+/// 「純 i18n 鍵 + 不可翻譯參數」的錯誤：在**輸出的那一端**依語系渲染。
+///
+/// 產生錯誤的地方（設定解析、TLS 載入、讀寫檔）通常拿不到語系；把說明句寫死在那裡，
+/// `--lang en-US` 下就會吐中文（T912 實測：serve 的 8 處設定錯誤、TLS、資料目錄全是如此）。
+/// 參數只放路徑、環境變數名、使用者輸入值、系統錯誤訊息這類**不可翻譯的資料**。
+///
+/// `Display` 以預設語系渲染，只作沒有 downcast 時的最後防線；正常路徑由呼叫端以
+/// [`Localized::render`] 依操作員語系渲染。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Localized {
+    pub key: &'static str,
+    pub vars: Vec<(&'static str, String)>,
+}
+
+impl Localized {
+    pub fn new(key: &'static str) -> Self {
+        Localized {
+            key,
+            vars: Vec::new(),
+        }
+    }
+
+    /// 加一個插值參數（值為不可翻譯的資料）。
+    pub fn var(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.vars.push((name, value.into()));
+        self
+    }
+
+    pub fn render(&self, cat: &Catalog) -> String {
+        let vars: Vec<(&str, &str)> = self.vars.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        cat.t(self.key, &vars)
+    }
+}
+
+impl std::fmt::Display for Localized {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&Catalog::load(DEFAULT_LANG)))
+    }
+}
+
+impl std::error::Error for Localized {}
+
 impl Catalog {
-    /// 依語言碼載入（"en-US"/"en" → 英文，其餘 → zh-TW）。fallback 永遠是 zh-TW。
+    /// 依語言碼載入（見 [`lang_code`]；不支援的值 → zh-TW）。fallback 永遠是 zh-TW。
     pub fn load(lang: &str) -> Self {
-        let l = lang.to_ascii_lowercase();
-        let is_en = l.starts_with("en");
+        let is_en = lang_code(lang) == Some("en-US");
         let primary = if is_en { EN_US } else { ZH_TW };
         Catalog {
             lang: serde_json::from_str(primary).expect("內嵌 locale 應為合法 JSON"),

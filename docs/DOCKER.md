@@ -16,7 +16,7 @@ CyTrace 容器跑 `cytrace serve` Web 服務模式（登入控制台 + 掃描/�
 
 ```bash
 # 1) 產生管理密碼 hash（不收明文）
-docker run --rm ghcr.io/astroicers/cytrace:latest hash-password
+docker run --rm -it ghcr.io/astroicers/cytrace:latest hash-password
 # 輸出 $argon2id$... 字串
 
 # 2) 起站（最小；HTTP 明文，內網測試用）
@@ -59,6 +59,7 @@ docker compose up -d
 | `CYTRACE_MAX_UPLOAD_MB` | 512 | 上傳大小上限 |
 | `CYTRACE_MAX_CONCURRENT_SCANS` | 2 | 同時掃描上限 |
 | `CYTRACE_KEEP_INPUT` | false | 掃後是否保留上傳原檔 |
+| `CYTRACE_LANG` | `zh-TW` | 容器日誌（啟動錯誤、job 隔離與落盤警告）的語言：`zh-TW`／`en-US`。**不影響** console 與 API 的語言（依瀏覽器各自協商） |
 
 離線鐵則（`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`、
 `SYFT/GRYPE_CHECK_FOR_APP_UPDATE=false` 等）已烤進映像，無需設定。
