@@ -38,6 +38,7 @@ CyTrace {tag} — 雙平台執行檔（ADR-010）＋容器映像（ADR-012）
 | `cytrace-x86_64-windows.exe` | Windows x86_64，msvc 靜態 CRT，免 VC++ 可轉散發套件 |
 | `cbomkit-theia-windows-amd64.exe` | CBOM 引擎 Windows 版（自源碼交叉編譯；放到 `dist\\cbomkit-theia.exe` 供 `package.ps1` 打包，見 docs/DELIVERY_SOP.md §2） |
 | `SHA256SUMS` | 執行檔校驗（`sha256sum -c SHA256SUMS`） |
+| `SHA256SUMS.minisig` | `SHA256SUMS` 的 minisign 簽章：發布後由交付工作站以受管金鑰簽章附上（`minisign -Vm SHA256SUMS -P <公鑰>`；公鑰見 README，金鑰 ID `055ACC6F1822B10E`） |
 | `cytrace-*-image.tar` | 容器映像（由 Docker workflow 另掛；離線搬運見 docs/DELIVERY_SOP.md §7） |
 | `SHA256SUMS-image` | 映像校驗（`sha256sum -c SHA256SUMS-image`；與執行檔的 `SHA256SUMS` 是兩份） |
 | `IMAGE_DIGEST.txt` | 映像 digest（與 GHCR 上的映像比對） |

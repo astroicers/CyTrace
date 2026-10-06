@@ -69,6 +69,8 @@ CBOM 引擎比對 SHA256）與 grype DB 快照 → 產自產 SBOM → 寫 NOTICE
   `CYTRACE_MINISIGN_SECKEY=~/.minisign/cytrace.key scripts/package.sh`
   （Windows：`$env:CYTRACE_MINISIGN_SECKEY=...` 後跑 `package.ps1`）。產出 `SHA256SUMS.minisig`。
   已有的檔案也可手動簽：`minisign -Sm SHA256SUMS -s ~/.minisign/cytrace.key`。
+- **GitHub Release 的 `SHA256SUMS`**（自 v0.5.0 起）：發布後在交付工作站下載、簽章、附回 Release：
+  `gh release download vX.Y.Z -p SHA256SUMS && minisign -Sm SHA256SUMS -s ~/.minisign/cytrace.key && gh release upload vX.Y.Z SHA256SUMS.minisig`。
 - **離線信任錨**：把上方公鑰字串與金鑰 ID **抄在交付驗收單上**（紙本即帶外管道），與交付媒體分開遞交；
   目標機驗收者以驗收單上的字串驗章，不使用交付媒體內附的任何公鑰。
 - 目標機驗證：

@@ -1,7 +1,7 @@
 {
   "name": "cytrace-report-viewer",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "CyTrace 報表檢視器（visual-web-stack DOM 子集；build 成單檔內嵌進 binary）",
   "scripts": {

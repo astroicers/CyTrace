@@ -12,7 +12,7 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 - **命令列**：單一靜態 binary，跑完即產出**離線單檔 HTML 報表**；可接 CI（退出碼閘門）。
 - **Web 服務模式**（`cytrace serve`）：場域內集中掃描伺服器，瀏覽器登入控制台送掃描、看報表；以容器交付。
 
-目前版本：**v0.4.0**（變更見 [CHANGELOG.md](CHANGELOG.md)）。
+目前版本：**v0.5.0**（變更見 [CHANGELOG.md](CHANGELOG.md)）。
 
 ## 報表範例
 
@@ -45,7 +45,7 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 
 掃描另需 Syft／Grype 引擎與 grype DB 快照；`--cbom` 另需 CBOMkit-theia。場域交付請用離線安裝包或容器（見下方）。
 
-離線安裝包的 `SHA256SUMS` 以 minisign 簽章（`SHA256SUMS.minisig`）。交付公鑰（金鑰 ID `055ACC6F1822B10E`，即 `keys/cytrace.pub`）：
+以 minisign 簽章（`SHA256SUMS.minisig`）的有兩處：自 v0.5.0 起，本 Release 的 `SHA256SUMS`（上列執行檔）由交付工作站於發布後簽章附上；離線安裝包的 `SHA256SUMS` 則在交付端打包時簽（DELIVERY_SOP §3）。兩者用同一把交付公鑰（金鑰 ID `055ACC6F1822B10E`，即 `keys/cytrace.pub`）：
 
 ```
 RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX
