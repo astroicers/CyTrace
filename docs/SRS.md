@@ -47,7 +47,7 @@ Grype（比對 CVE）與 CBOMkit-theia（密碼學資產盤點），對指定目
 | **FR-005** | 提供 `--fail-on <severity>` 閘門；達門檻以**退出碼 2** 結束，正常為 0（供 CI/批次）。錯誤（含參數打錯）為 1。 | ADR-006 | M2 | 已實作 |
 | **FR-006** | 產出**自包含離線單檔 HTML** 報表，含：機關識別、風險總評、弱點明細、軟體產品文件表、DB 快照時效；零外連。 | ADR-005 | M3 | 已實作（另含密碼學資產區段，FR-011） |
 | **FR-007** | 全產品（報表 + 控制台 + CLI 輸出與 `--help`）走 i18n，支援 zh-TW（fallback）與 en-US，禁止硬編碼。 | ADR-004 | M0/M3 | 已實作（v0.4.0 起含終端訊息與 `--help`） |
-| **FR-008** | 提供離線安裝包：靜態 binary + 釘選 Syft/Grype/CBOMkit-theia + grype DB 快照 + SHA256SUMS/簽章。 | ADR-007/003/013 | M4 | 已實作（Linux／Windows）；**簽章執行待 T402** |
+| **FR-008** | 提供離線安裝包：靜態 binary + 釘選 Syft/Grype/CBOMkit-theia + grype DB 快照 + SHA256SUMS/簽章。 | ADR-007/003/013 | M4 | 已實作（Linux／Windows）；minisign 簽章（交付公鑰 ID `055ACC6F1822B10E`，T402），v0.5.0 起 Release 附 `SHA256SUMS.minisig` |
 | **FR-009** | dogfooding：對 CyTrace 自身產出 SBOM 並隨安裝包附上。 | ADR-007/003 | M4 | 已實作 |
 | **FR-010** | 支援多目標批次掃描與 CI 閘門整合範例。 | ADR-006/007 | M5 | 已實作（`batch`） |
 | **FR-011** | 選用（`--cbom`）盤點檔案系統／映像層的密碼學資產，輸出 CycloneDX CBOM，報表列量子脆弱、弱金鑰、憑證到期；未掃描項目分類揭露，不含金鑰內容。 | ADR-013 | M9 | 已實作 |
