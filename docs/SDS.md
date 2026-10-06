@@ -49,6 +49,16 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   SBOM 與漏洞結果照常產出。
 - 終端訊息與 API 回應的語言分屬兩套規則（§6、§10）。
 
+**互動式元件總覽**：[`docs/architecture/cytrace-arch.html`](architecture/cytrace-arch.html)（離線單檔，用瀏覽器開啟）。
+上圖是管線視角；那份圖另外畫出 Web 控制台、認證層、工作目錄與 volume、上傳型目標掃完即刪，
+並標出場域邊界與單一 binary 邊界。各節點附原始碼連結，釘在 commit `59f0e92`。
+
+- 圖由 archify 依 [`cytrace-arch.json`](architecture/cytrace-arch.json) 產生：
+  `archify deliver architecture cytrace-arch.json cytrace-arch.html --quality showcase --repo-root <CyTrace checkout>`。
+- 產生後須刪除 Google Fonts 的 `<link>`，以符合零外連。字型會改用系統 monospace。
+  刪完以 `bash scripts/console-egress-check.sh docs/architecture` 自檢。
+- 這張圖是文件快照，不由 CI 檢查。架構有變動時，改 JSON 後重新產生。
+
 ## 2. Workspace crate 切分
 
 | crate | 職責 | 主要依賴 |

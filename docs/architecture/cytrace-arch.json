@@ -1,0 +1,449 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CyTrace 系統架構",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/astroicers/CyTrace",
+      "revision": "59f0e923d39354e448eaf61c54ea5a2ee9b6103d"
+    }
+  },
+  "components": [
+    {
+      "id": "targets",
+      "type": "external",
+      "label": "掛載目標（serve）",
+      "sublabel": "/scan-targets 白名單",
+      "pos": [
+        870,
+        30
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "目錄 / tar / OCI",
+      "sources": [
+        {
+          "path": "crates/cytrace-server/src/targets.rs",
+          "label": "掛載白名單"
+        }
+      ]
+    },
+    {
+      "id": "console",
+      "type": "frontend",
+      "label": "Web 控制台",
+      "sublabel": "React SPA（瀏覽器）",
+      "pos": [
+        40,
+        380
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "tag": "rust-embed 內嵌",
+      "sources": [
+        {
+          "path": "frontend/src/console/App.tsx",
+          "label": "控制台 App"
+        },
+        {
+          "path": "crates/cytrace-server/src/static_files.rs",
+          "label": "rust-embed"
+        }
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "frontend",
+      "label": "cytrace CLI",
+      "sublabel": "run / batch / scan / report",
+      "pos": [
+        320,
+        170
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "操作者終端機",
+      "sources": [
+        {
+          "path": "crates/cytrace-cli/src/main.rs",
+          "label": "子命令"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "type": "security",
+      "label": "認證層（單一管理者）",
+      "sublabel": "argon2id · Session · CSRF",
+      "pos": [
+        320,
+        380
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "Cookie HttpOnly",
+      "sources": [
+        {
+          "path": "crates/cytrace-server/src/auth.rs",
+          "label": "argon2id / CSRF"
+        },
+        {
+          "path": "crates/cytrace-server/src/session.rs",
+          "label": "Session"
+        },
+        {
+          "path": "crates/cytrace-server/src/config.rs",
+          "line": 45,
+          "label": "管理者密碼雜湊"
+        }
+      ]
+    },
+    {
+      "id": "server",
+      "type": "backend",
+      "label": "cytrace-server",
+      "sublabel": "serve · axum · /api/v1",
+      "pos": [
+        600,
+        380
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "Semaphore 工作佇列",
+      "sources": [
+        {
+          "path": "crates/cytrace-server/src/router.rs",
+          "label": "路由"
+        },
+        {
+          "path": "crates/cytrace-server/src/api/jobs.rs",
+          "line": 111,
+          "label": "上傳 input/"
+        },
+        {
+          "path": "crates/cytrace-server/src/jobs/runner.rs",
+          "line": 54,
+          "label": "spawn_blocking"
+        }
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "cytrace-core 掃描管線",
+      "sublabel": "parse · 風險 · 量子 · fail-on",
+      "pos": [
+        860,
+        260
+      ],
+      "size": [
+        190,
+        70
+      ],
+      "tag": "ScanResult v2",
+      "sources": [
+        {
+          "path": "crates/cytrace-core/src/engine.rs",
+          "label": "引擎呼叫"
+        }
+      ]
+    },
+    {
+      "id": "report",
+      "type": "backend",
+      "label": "cytrace-report",
+      "sublabel": "內嵌樣板 + 資料注入",
+      "pos": [
+        870,
+        480
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "render()",
+      "sources": [
+        {
+          "path": "crates/cytrace-report/src/lib.rs",
+          "label": "render"
+        }
+      ]
+    },
+    {
+      "id": "syft",
+      "type": "external",
+      "label": "Syft",
+      "sublabel": "子行程 · CycloneDX / SPDX",
+      "pos": [
+        1150,
+        140
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "SBOM",
+      "sources": [
+        {
+          "path": "crates/cytrace-core/src/engine.rs",
+          "line": 62,
+          "label": "Command syft"
+        }
+      ]
+    },
+    {
+      "id": "theia",
+      "type": "external",
+      "label": "CBOMkit-theia",
+      "sublabel": "子行程 · CBOM（選用）",
+      "pos": [
+        1150,
+        263
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "密碼學資產",
+      "sources": [
+        {
+          "path": "crates/cytrace-core/src/engine.rs",
+          "line": 510,
+          "label": "Command theia"
+        }
+      ]
+    },
+    {
+      "id": "grype",
+      "type": "external",
+      "label": "Grype",
+      "sublabel": "子行程 · CVE → grype.json",
+      "pos": [
+        1150,
+        386
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "sbom:<path>",
+      "sources": [
+        {
+          "path": "crates/cytrace-core/src/engine.rs",
+          "line": 111,
+          "end_line": 115,
+          "label": "Command grype"
+        }
+      ]
+    },
+    {
+      "id": "grypedb",
+      "type": "database",
+      "label": "grype DB 快照",
+      "sublabel": "不自動更新 · 不驗時效",
+      "pos": [
+        1150,
+        540
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "GRYPE_DB_CACHE_DIR",
+      "sources": [
+        {
+          "path": "Dockerfile",
+          "line": 98,
+          "label": "容器 /db"
+        },
+        {
+          "path": "docker-compose.yml",
+          "line": 25,
+          "label": "唯讀掛載"
+        }
+      ]
+    },
+    {
+      "id": "jobs",
+      "type": "database",
+      "label": "工作目錄",
+      "sublabel": "/data/jobs/<id>",
+      "pos": [
+        600,
+        620
+      ],
+      "size": [
+        170,
+        64
+      ],
+      "tag": "job.json · 產物 · input/",
+      "sources": [
+        {
+          "path": "crates/cytrace-server/src/jobs/registry.rs",
+          "line": 119,
+          "label": "job.json 原子寫入"
+        },
+        {
+          "path": "crates/cytrace-server/src/jobs/runner.rs",
+          "line": 95,
+          "end_line": 96,
+          "label": "刪除 input/"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "目標場域（離線 · 零外連）",
+      "wraps": [
+        "targets",
+        "console",
+        "cli",
+        "auth",
+        "server",
+        "core",
+        "report",
+        "syft",
+        "grype",
+        "theia",
+        "grypedb",
+        "jobs"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "cytrace 單一靜態 binary",
+      "wraps": [
+        "cli",
+        "auth",
+        "server",
+        "core",
+        "report"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "from": "console",
+      "to": "auth",
+      "label": "HTTP(S) + Cookie",
+      "variant": "security"
+    },
+    {
+      "from": "auth",
+      "to": "server",
+      "label": "已驗證",
+      "variant": "emphasis"
+    },
+    {
+      "from": "server",
+      "to": "core",
+      "label": "spawn_blocking",
+      "variant": "emphasis"
+    },
+    {
+      "from": "cli",
+      "to": "core",
+      "label": "直接呼叫",
+      "variant": "emphasis"
+    },
+    {
+      "from": "targets",
+      "to": "core",
+      "label": "本機路徑",
+      "labelAt": [
+        955,
+        177
+      ]
+    },
+    {
+      "from": "core",
+      "to": "syft"
+    },
+    {
+      "from": "core",
+      "to": "grype"
+    },
+    {
+      "from": "core",
+      "to": "theia",
+      "label": "選用",
+      "variant": "dashed",
+      "labelAt": [
+        1127,
+        295
+      ]
+    },
+    {
+      "from": "grype",
+      "to": "grypedb",
+      "label": "離線讀取",
+      "labelAt": [
+        1235,
+        495
+      ]
+    },
+    {
+      "from": "core",
+      "to": "report",
+      "label": "ScanResult v2 → render",
+      "variant": "emphasis",
+      "labelAt": [
+        955,
+        405
+      ]
+    },
+    {
+      "from": "server",
+      "to": "jobs",
+      "label": "上傳解壓 input/ · 產物",
+      "labelAt": [
+        685,
+        532
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "信任邊界",
+      "items": [
+        "零外連：報表以 CSP 鎖死（connect-src 'none'）",
+        "serve：掛載限 CYTRACE_SCAN_ROOTS、上傳解壓至 input/；CLI 不限路徑",
+        "input/ 掃描結束後預設刪除（取消／重啟例外：#39）"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "產出物",
+      "items": [
+        "run／batch：<target>.report.html（--cbom 併入報表）",
+        "scan：sbom.cdx.json · grype.json（--spdx、--cbom 另落檔）",
+        "serve：report.html · scan-result.json · SPDX 一律產出"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "交付形態",
+      "items": [
+        "單一靜態 binary：內嵌控制台、報表樣板與 cytrace-i18n 雙語字串",
+        "CLI／server 編排管線後呼叫 report 渲染（core → report 為資料流）",
+        "安裝包含三引擎與 DB 快照；容器 distroless、/db 唯讀；minisign 簽 SHA256SUMS"
+      ]
+    }
+  ]
+}
