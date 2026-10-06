@@ -11,7 +11,7 @@ use cytrace_core::error::Result as CoreResult;
 use cytrace_server::auth::{hash_password, CSRF_HEADER};
 use cytrace_server::config::{CliFlags, ServerConfig};
 use cytrace_server::router::build_router_with_state;
-use cytrace_server::state::AppState;
+use cytrace_server::state::{AppState, Hooks};
 use http_body_util::BodyExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -119,6 +119,25 @@ fn build_env_seeded(
     extra_env: &[(&str, &str)],
     seed: &[serde_json::Value],
 ) -> TestEnv {
+    build_env_full(
+        engine,
+        db_present,
+        max_concurrent,
+        extra_env,
+        seed,
+        Hooks::default(),
+    )
+}
+
+/// 同 [`build_env_seeded`]，另注入競態測試用的時間點 hook。
+fn build_env_full(
+    engine: Arc<dyn ScanEngine>,
+    db_present: bool,
+    max_concurrent: usize,
+    extra_env: &[(&str, &str)],
+    seed: &[serde_json::Value],
+    hooks: Hooks,
+) -> TestEnv {
     let base = std::env::temp_dir().join(format!(
         "cytrace-jobs-test-{}-{}",
         std::process::id(),
@@ -172,7 +191,9 @@ fn build_env_seeded(
             std::fs::write(dir.join("input/extracted/secret.txt"), b"classified").unwrap();
         }
     }
-    let state = AppState::with_engine(cfg, engine).unwrap();
+    let state = AppState::with_engine(cfg, engine)
+        .unwrap()
+        .with_hooks(hooks);
     TestEnv {
         app: build_router_with_state(state),
         base,
@@ -631,6 +652,41 @@ async fn canceling_queued_upload_removes_its_input() {
         .join(&id)
         .join("job.json")
         .exists());
+}
+
+/// #42：DELETE 讀到 queued 之後、嘗試取消之前，runner 搶先開始掃描——取消必然失敗。
+/// 此時不得回 204 謊稱已取消，應回 409；正在被掃描的 input/ 也不得刪。
+#[tokio::test]
+async fn delete_conflicts_when_runner_starts_before_the_cancel() {
+    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let fired_in_hook = fired.clone();
+    let hooks = Hooks {
+        before_cancel: Some(Arc::new(move |app: &AppState, id: &str| {
+            assert!(
+                app.jobs.start_if_queued(id),
+                "前提：hook 模擬 runner 在這個空檔搶先開始掃描"
+            );
+            fired_in_hook.store(true, Ordering::SeqCst);
+        })),
+    };
+    let env = build_env_full(Arc::new(SlowEngine), true, 1, &[], &[], hooks);
+    let cookie = login(&env.app).await;
+    let id = queued_upload(&env, &cookie).await;
+    let input = env.base.join("data/jobs").join(&id).join("input");
+
+    assert_eq!(
+        delete_job(&env, &cookie, &id).await,
+        StatusCode::CONFLICT,
+        "取消沒有成功（job 已開始掃描），卻回報成功（#42）"
+    );
+    // 若 DELETE 時 job 已因其他原因是 running，handler 會直接走 running 分支而不經 hook，
+    // 測試照樣綠卻沒驗到競態——斷言 hook 確實被呼叫
+    assert!(
+        fired.load(Ordering::SeqCst),
+        "hook 未被呼叫：DELETE 沒有走到 queued 分支，本測試未驗到 #42 的競態"
+    );
+    assert_eq!(get_job(&env.app, &cookie, &id).await["status"], "running");
+    assert!(input.exists(), "正在被掃描的 input/ 不得被刪");
 }
 
 /// `CYTRACE_KEEP_INPUT=true` 是操作者明示要保留：取消時也不得刪。

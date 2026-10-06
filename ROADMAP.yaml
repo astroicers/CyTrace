@@ -1372,6 +1372,42 @@ milestones:
           獨立複審一輪（NEEDS_WORK：上述競態、`.corrupt` 遺留、insert 失敗不清理、刪除失敗靜默、
           架構圖仍寫例外、掛載型缺測試）後修正。
 
+      - id: T923
+        title: "DELETE 取消失敗回 409（#42）；runner 取票單一入口的防退化檢查（#43）"
+        type: BUGFIX
+        priority: 2
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T922]
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T922（#41）第二輪獨立複審的 Info 項 → issue #42、#43"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-06"
+        description: |
+          - #42：DELETE 讀到 queued 後、取消前，runner 可能搶先開始掃描，`cancel_if_queued` 因而失敗，
+            handler 卻仍回 204，呼叫端會以為已取消。
+          - #43：runner 取票必須經 `start_if_queued`（與取消互斥），但若改回 get + update 兩步寫法，
+            沒有任何測試會轉紅，T922 修掉的競態會無聲地回來。
+
+          **結案（2026-10-06）**：
+          - #42：取消失敗時回 409（與讀到 running 同一錯誤，console 已會處理），input/ 不刪。
+            `AppState` 新增測試用時間點注入 `Hooks`（生產環境為空，同 `with_engine` 的引擎注入），
+            以 `before_cancel` 在 DELETE 讀到 queued 之後、取消之前模擬 runner 搶先，使競態可穩定重現。
+          - #43：新增 `tests/job_state_transitions.rs`，以 syn 掃描生產碼：「值的位置」出現名稱為 `Running`
+            的路徑（任何前綴、別名、glob 匯入後的裸名；賦值、結構字面值、函式參數、if 分支值、
+            mem::replace、先存變數皆算）只能在 `start_if_queued` 內；`==`／`!=` 比較、pattern、cfg(test)
+            模組與函式不算。附 10 個必紅、7 個必綠樣本與反空轉（合法入口須恰好偵測到一處）。
+            已知盲點（寫在測試檔頭）：巨集內容不展開；不經名稱建構 running（反序列化字串、transmute）。
+          - #42 測試在 hook 內記錄已被呼叫並於最後斷言，避免 DELETE 走到 running 分支時假綠。
+          反向實測（對 cargo fmt 後的 staged 版本）：handler 忽略取消結果 → #42 測試紅（204 ≠ 409）；
+          runner 改回兩步寫法、或改用通用 setter 傳入 Running → 結構檢查紅並指出 `runner.rs` 的
+          `spawn_with_cleanup`；偵測器失效 → 必紅樣本與反空轉皆紅。
+          獨立複審一輪（NEEDS_WORK：盲點清單不完整、setter 間接寫法抓不到；突變輸出行號與 fmt 後版本不符）後修正。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

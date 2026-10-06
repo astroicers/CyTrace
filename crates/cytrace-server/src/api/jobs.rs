@@ -356,7 +356,8 @@ fn render_job_error(lang: Lang, e: &JobError) -> String {
     c.t("server.err.internal", &[])
 }
 
-/// `DELETE /api/v1/jobs/{id}`：queued → 取消；終態 → 刪除；running → 409。
+/// `DELETE /api/v1/jobs/{id}`：queued → 取消；終態 → 刪除；running → 409
+/// （含讀到 queued 之後、取消之前才被 runner 搶先開始者）。
 pub async fn delete(
     State(app): State<AppState>,
     lang: Lang,
@@ -368,8 +369,15 @@ pub async fn delete(
         .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
     match record.status {
         JobStatus::Queued => {
-            // 只在真的取消成功時刪 input/：若 runner 已搶先轉 running，那份輸入正在被掃描
-            if app.jobs.cancel_if_queued(&id) && !app.cfg.keep_input {
+            if let Some(hook) = &app.hooks.before_cancel {
+                hook(&app, &id);
+            }
+            // 讀到 queued 之後 runner 仍可能搶先開始掃描：取消失敗時與讀到 running 同樣回 409，
+            // 不得回 204 謊稱已取消（#42）；那份 input/ 正在被掃描，也不得刪
+            if !app.jobs.cancel_if_queued(&id) {
+                return Err(ApiError::new(lang, ErrorKind::Conflict));
+            }
+            if !app.cfg.keep_input {
                 app.jobs.remove_input(&id);
             }
             Ok(StatusCode::NO_CONTENT)
