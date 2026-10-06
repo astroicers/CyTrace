@@ -34,19 +34,11 @@ pub fn spawn_with_cleanup(
             Ok(p) => p,
             Err(_) => return, // semaphore closed（服務關閉中）
         };
-        // 取到票才轉 running；期間可能已被取消
-        if app
-            .jobs
-            .get(&job_id)
-            .map(|r| r.status != JobStatus::Queued)
-            .unwrap_or(true)
-        {
+        // 取到票才轉 running；期間可能已被取消。檢查與轉移須在同一把鎖內完成，
+        // 否則取消可能落在兩者之間：input/ 已被刪，這裡卻照樣開始掃描（#39 複審）
+        if !app.jobs.start_if_queued(&job_id) {
             return;
         }
-        app.jobs.update(&job_id, |r| {
-            r.status = JobStatus::Running;
-            r.started_at = Some(super::now_iso());
-        });
 
         let engine = app.engine.clone();
         let job_dir = app.jobs.job_dir(&job_id);
@@ -93,7 +85,7 @@ pub fn spawn_with_cleanup(
             }
         }
         if cleanup_input {
-            let _ = std::fs::remove_dir_all(app.jobs.job_dir(&job_id).join("input"));
+            app.jobs.remove_input(&job_id);
         }
         drop(permit);
     });

@@ -1327,6 +1327,51 @@ milestones:
           與 `artifacts` 欄位；README scan 列；ADR-011 修訂節補 job 目錄產物與端點種類）。DOCKER.md 不改：
           SPDX 暫存檔與 SBOM 同量級且用完即刪，1 GB tmpfs 足夠。
 
+      - id: T922
+        title: "上傳型 job 排隊中取消或重啟中斷時，刪除 input/（#39）"
+        type: BUGFIX
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: NFR-09
+        depends_on: []
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "架構圖獨立複審（2026-10-06）→ issue #39"
+        triggered_by: review
+        sla_hours: 72
+        imported_at: "2026-10-06"
+        description: |
+          上傳型 job 的 `input/`（上傳原檔與解壓內容）只在 runner 跑完管線後才刪。另有兩條路徑會漏刪，
+          機密原檔一直留到有人手動 DELETE，牴觸 NFR-09「掃描完成後預設刪除」的意圖：
+          - 排隊中被取消：`cancel_if_queued` 只改狀態；runner 取票後見非 queued 即提前 return，跳過清理。
+          - 伺服器重啟：非終態轉 interrupted，不清理。
+
+          **結案（2026-10-06）**：
+          - DELETE 取消排隊中的 job 時，只有 `cancel_if_queued` 真的成功才刪 `input/`。
+          - runner 取票改用 `start_if_queued`，與 `cancel_if_queued` 在同一把寫鎖內檢查並轉移，兩者互斥。
+            原本先 `get` 檢查 queued、再 `update` 轉 running，取消若落在兩者之間，input/ 被刪後 runner
+            仍會照樣掃描（第一輪複審查出，這是本修正若只做取消刪除就會新造成的失敗形態）。
+          - 啟動時 `purge_inputs` 清掉所有 job 殘留的 `input/`，含隔離成 `.corrupt` 的目錄（上傳途中重啟、
+            尚未寫出 job.json 者；隔離目錄本身保留）。此時沒有 job 在執行（非終態已全部轉成 interrupted），
+            所以安全；修正前就已遺留的殘留也一併清掉。
+          - 上傳流程最後的 registry insert 失敗時，比照其他失敗分支清掉 job 目錄。
+          - 刪除失敗仍不擋流程，但改為以操作者語言印出 `server.runtime.input_remove_failed`（原本靜默）。
+          - 三處都尊重 `CYTRACE_KEEP_INPUT=true`。runner 原本內聯的刪除改用同一個 `remove_input`。
+
+          測試：
+          - 整合（走真的 API 與重啟恢復路徑）：取消後 input/ 立即消失、job.json 仍在；重啟後 queued、
+            running、canceled 三種殘留都被清掉且狀態正確，掛載型 job 的掃描目標不受影響；
+            KEEP_INPUT=true 時取消與重啟都保留。
+          - registry 單元：取票與取消互斥（雙向）；input/ 不存在不算錯、刪不掉要回報、告警兩語渲染；
+            `.corrupt` 隔離目錄裡的 input/ 被清掉。
+          反向實測：還原成 main 版取消與重啟路徑，兩支 #39 測試轉紅；取票不檢查 queued、吞掉刪除錯誤、
+          跳過 `.corrupt`、拿掉任一處 keep_input 判斷，各自有測試轉紅。
+          文件：DOCKER.md 的 `CYTRACE_KEEP_INPUT` 說明改列三個刪除時機；架構圖信任邊界卡片移除「#39 例外」。
+          獨立複審一輪（NEEDS_WORK：上述競態、`.corrupt` 遺留、insert 失敗不清理、刪除失敗靜默、
+          架構圖仍寫例外、掛載型缺測試）後修正。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

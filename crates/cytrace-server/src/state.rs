@@ -30,6 +30,9 @@ impl AppState {
     pub fn with_engine(cfg: ServerConfig, engine: Arc<dyn ScanEngine>) -> Result<Self, Localized> {
         let sessions = Arc::new(SessionStore::new(cfg.session_ttl));
         let jobs = Arc::new(JobRegistry::open(&cfg.data_dir, cfg.lang)?);
+        if !cfg.keep_input {
+            jobs.purge_inputs();
+        }
         let scan_semaphore = Arc::new(Semaphore::new(cfg.max_concurrent_scans));
         Ok(AppState {
             cfg: Arc::new(cfg),

@@ -168,7 +168,8 @@
       "job_quarantined_missing": "job 目錄缺少 job.json，已隔離至 {{to}}",
       "job_quarantined_corrupt": "job.json 損毀，已隔離至 {{to}}：{{detail}}",
       "job_quarantine_failed": "job 記錄損毀但隔離失敗，留在原處 {{path}}（下次啟動會再試）：{{detail}}",
-      "job_persist_failed": "job.json 落盤失敗（{{id}}）：{{detail}}"
+      "job_persist_failed": "job.json 落盤失敗（{{id}}）：{{detail}}",
+      "input_remove_failed": "上傳原檔刪除失敗，仍留在磁碟上（{{id}}）：{{detail}}"
     }
   },
   "console": {

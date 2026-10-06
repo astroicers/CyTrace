@@ -64,7 +64,7 @@ docker compose up -d
 | `CYTRACE_MAX_CONCURRENT_SCANS` | 2 | 同時掃描上限 |
 | `CYTRACE_MAX_QUEUED` | 32 | 佇列上限（排隊中與執行中的任務總數；滿了回 429） |
 | `CYTRACE_DATA_DIR` | `/data` | 資料目錄（容器內通常不改，改掛 volume） |
-| `CYTRACE_KEEP_INPUT` | false | 掃後是否保留上傳原檔 |
+| `CYTRACE_KEEP_INPUT` | false | 是否保留上傳原檔。為 false 時，掃描結束、排隊中被取消、伺服器重啟這三個時機都會刪除 |
 | `CYTRACE_LANG` | `zh-TW` | 容器日誌（啟動錯誤、job 隔離與落盤警告）的語言：`zh-TW`／`en-US`。**不影響** console 與 API 的語言（依瀏覽器各自協商） |
 
 離線鐵則（`GRYPE_DB_CACHE_DIR=/db`、`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`、

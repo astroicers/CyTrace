@@ -177,6 +177,65 @@ impl JobRegistry {
         true
     }
 
+    /// 僅當 job 仍為 queued 時轉 running（runner 取票後用）。與 `cancel_if_queued` 在同一把
+    /// 寫鎖內檢查並轉移，兩者互斥：取消成功的 job 不會被掃描，開始掃描的 job 不會被取消（#39 複審）。
+    pub fn start_if_queued(&self, id: &str) -> bool {
+        let Ok(mut map) = self.inner.write() else {
+            return false;
+        };
+        let Some(record) = map.get_mut(id) else {
+            return false;
+        };
+        if record.status != JobStatus::Queued {
+            return false;
+        }
+        record.status = JobStatus::Running;
+        record.started_at = Some(super::now_iso());
+        let snapshot = record.clone();
+        drop(map);
+        if let Err(e) = self.persist_to(&self.job_dir(id), &snapshot) {
+            self.report(
+                &Localized::new("server.runtime.job_persist_failed")
+                    .var("id", id)
+                    .var("detail", e.to_string()),
+            );
+        }
+        true
+    }
+
+    /// 刪除 job 的上傳輸入 `input/`（只有上傳型 job 有；不存在即無事）。
+    /// 刪除失敗不擋流程（與掃描結束後的清理同一取捨），但要告知操作者：機密原檔仍留在磁碟上。
+    pub fn remove_input(&self, id: &str) {
+        if let Err(e) = remove_input_at(&self.job_dir(id)) {
+            self.report(&input_remove_failed(id, &e));
+        }
+    }
+
+    /// 清掉所有 job 殘留的 `input/`（#39：重啟中斷、或修正前取消而遺留的），
+    /// 含隔離成 `.corrupt` 的目錄（上傳途中重啟、尚未寫出 job.json 者）；隔離目錄本身保留。
+    /// 只在啟動時、沒有 job 執行中時呼叫：`open` 完成後非終態已全部轉成 interrupted。
+    pub fn purge_inputs(&self) {
+        let ids: Vec<String> = self
+            .inner
+            .read()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        for id in ids {
+            self.remove_input(&id);
+        }
+        let Ok(entries) = std::fs::read_dir(&self.jobs_dir) else {
+            return;
+        };
+        for dir in entries.flatten().map(|e| e.path()) {
+            if dir.is_dir() && dir.extension().is_some_and(|e| e == "corrupt") {
+                if let Err(e) = remove_input_at(&dir) {
+                    let name = dir.file_name().unwrap_or_default().to_string_lossy();
+                    self.report(&input_remove_failed(&name, &e));
+                }
+            }
+        }
+    }
+
     /// 刪除終態 job（目錄 + 索引）。running/queued 不可刪（呼叫端把關）。
     pub fn remove(&self, id: &str) -> anyhow::Result<()> {
         let dir = self.job_dir(id);
@@ -216,6 +275,20 @@ impl JobRegistry {
             .map(|m| m.values().filter(|r| !r.status.is_terminal()).count())
             .unwrap_or(0)
     }
+}
+
+/// 刪 `<job_dir>/input`；不存在視為成功（掛載型 job 沒有 input/）。
+fn remove_input_at(job_dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(job_dir.join("input")) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+fn input_remove_failed(id: &str, e: &std::io::Error) -> Localized {
+    Localized::new("server.runtime.input_remove_failed")
+        .var("id", id)
+        .var("detail", e.to_string())
 }
 
 #[cfg(test)]
@@ -386,6 +459,82 @@ mod tests {
         assert!(reg.cancel_if_queued(&id));
         assert!(!reg.cancel_if_queued(&id)); // 已 canceled
         assert_eq!(reg.get(&id).unwrap().status, JobStatus::Canceled);
+    }
+
+    /// #39 複審：runner 取票轉 running 與 DELETE 取消必須互斥（同一把寫鎖內檢查並轉移）。
+    /// 否則取消可能落在「檢查 queued」與「轉 running」之間：input/ 被刪，runner 卻照樣掃描。
+    #[test]
+    fn start_and_cancel_are_mutually_exclusive() {
+        let dir = tmpdir("reg10");
+        let reg = JobRegistry::open(&dir, Lang::ZhTw).unwrap();
+        let mut a = JobRecord::new("upload:a".into(), None).unwrap();
+        let mut b = JobRecord::new("upload:b".into(), None).unwrap();
+        a.id = "1700000000-0000000a".into();
+        b.id = "1700000000-0000000b".into();
+        reg.insert(a).unwrap();
+        reg.insert(b).unwrap();
+
+        // 先取消 → 取票失敗，狀態維持 canceled
+        assert!(reg.cancel_if_queued("1700000000-0000000a"));
+        assert!(
+            !reg.start_if_queued("1700000000-0000000a"),
+            "已取消的 job 不得被 runner 撿走"
+        );
+        assert_eq!(
+            reg.get("1700000000-0000000a").unwrap().status,
+            JobStatus::Canceled
+        );
+
+        // 先取票 → 取消失敗（input 正被掃描，不得刪）
+        assert!(reg.start_if_queued("1700000000-0000000b"));
+        let r = reg.get("1700000000-0000000b").unwrap();
+        assert_eq!(r.status, JobStatus::Running);
+        assert!(r.started_at.is_some());
+        assert!(!reg.cancel_if_queued("1700000000-0000000b"));
+    }
+
+    /// 刪 input/：不存在不算錯（掛載型 job 的常態）；真的刪不掉要回報，不得吞掉。
+    #[test]
+    fn remove_input_at_ignores_missing_and_surfaces_real_failures() {
+        let dir = tmpdir("reg11");
+        let job = dir.join("j");
+        std::fs::create_dir_all(&job).unwrap();
+        assert!(remove_input_at(&job).is_ok(), "沒有 input/ 不是錯誤");
+
+        std::fs::create_dir_all(job.join("input/extracted")).unwrap();
+        std::fs::write(job.join("input/extracted/f"), b"x").unwrap();
+        assert!(remove_input_at(&job).is_ok());
+        assert!(!job.join("input").exists());
+
+        // input 被一般檔案佔住 → 不是目錄、刪不掉（不依賴權限，root 執行亦然）
+        std::fs::write(job.join("input"), b"").unwrap();
+        assert!(remove_input_at(&job).is_err());
+
+        // 告警以兩種語言渲染、帶 job id
+        assert_renders(
+            &input_remove_failed("1700000000-0000000c", &std::io::Error::other("boom")),
+            "1700000000-0000000c",
+        );
+    }
+
+    /// #39 複審：上傳途中重啟留下的目錄沒有 job.json，啟動時被隔離成 `.corrupt`；
+    /// 其中的 input/ 也要清掉，否則機密原檔會永久留存。
+    #[test]
+    fn purge_inputs_also_clears_quarantined_dirs() {
+        let dir = tmpdir("reg12");
+        let half = dir.join("jobs").join("1700000000-deadbeef");
+        std::fs::create_dir_all(half.join("input/original")).unwrap();
+        std::fs::write(half.join("input/original/s.zip"), b"classified").unwrap();
+
+        let reg = JobRegistry::open(&dir, Lang::ZhTw).unwrap();
+        let quarantined = dir.join("jobs").join("1700000000-deadbeef.corrupt");
+        assert!(
+            quarantined.join("input").exists(),
+            "前提：隔離目錄帶著 input/"
+        );
+        reg.purge_inputs();
+        assert!(!quarantined.join("input").exists());
+        assert!(quarantined.exists(), "隔離目錄本身保留給操作者檢查");
     }
 
     #[test]
