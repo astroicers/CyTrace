@@ -240,9 +240,11 @@ pub async fn upload(
     // 補齊 record（target 描述 + fail_on）並 insert registry。
     record.target = format!("upload:{original_name}");
     record.fail_on = fail_on;
-    app.jobs
-        .insert(record.clone())
-        .map_err(|e| ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()))?;
+    if let Err(e) = app.jobs.insert(record.clone()) {
+        // 與上方各失敗分支一致：不留下帶著上傳原檔的孤兒目錄
+        cleanup(&job_dir);
+        return Err(ApiError::new(lang, ErrorKind::Io).with_detail(e.to_string()));
+    }
     runner::spawn_with_cleanup(
         app.clone(),
         record.id.clone(),
@@ -366,7 +368,10 @@ pub async fn delete(
         .ok_or_else(|| ApiError::new(lang, ErrorKind::NotFound))?;
     match record.status {
         JobStatus::Queued => {
-            app.jobs.cancel_if_queued(&id);
+            // 只在真的取消成功時刪 input/：若 runner 已搶先轉 running，那份輸入正在被掃描
+            if app.jobs.cancel_if_queued(&id) && !app.cfg.keep_input {
+                app.jobs.remove_input(&id);
+            }
             Ok(StatusCode::NO_CONTENT)
         }
         JobStatus::Running => Err(ApiError::new(lang, ErrorKind::Conflict)),

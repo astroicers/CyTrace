@@ -163,6 +163,14 @@ fn build_env_seeded(
         let dir = base.join("data/jobs").join(rec["id"].as_str().unwrap());
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("job.json"), rec.to_string()).unwrap();
+        // 上傳型 job 在磁碟上一定帶著 input/（由 upload handler 建立），植入時照實際形狀補上
+        if rec["target"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("upload:"))
+        {
+            std::fs::create_dir_all(dir.join("input/extracted")).unwrap();
+            std::fs::write(dir.join("input/extracted/secret.txt"), b"classified").unwrap();
+        }
     }
     let state = AppState::with_engine(cfg, engine).unwrap();
     TestEnv {
@@ -561,6 +569,133 @@ async fn upload_zip_scans_and_produces_report() {
 
     // input 掃後預設刪除（keep_input=false）
     assert!(!env.base.join("data/jobs").join(&id).join("input").exists());
+}
+
+/// 併發 1 + 慢引擎佔住唯一名額，讓一筆上傳停在 queued，回傳其 job id。
+async fn queued_upload(env: &TestEnv, cookie: &str) -> String {
+    let (_, blocker) = create_job(&env.app, cookie, "app", None).await;
+    let bid = blocker["id"].as_str().unwrap().to_string();
+    for _ in 0..30 {
+        if get_job(&env.app, cookie, &bid).await["status"] == "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        get_job(&env.app, cookie, &bid).await["status"],
+        "running",
+        "前提：blocker 佔住唯一的掃描名額"
+    );
+    let zip = make_zip_bytes(&[("secret.txt", b"classified")]);
+    let boundary = "----cytracequeued";
+    let (status, v) = upload_scan(
+        &env.app,
+        cookie,
+        multipart_body(boundary, "s.zip", &zip, None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(get_job(&env.app, cookie, &id).await["status"], "queued");
+    id
+}
+
+async fn delete_job(env: &TestEnv, cookie: &str, id: &str) -> StatusCode {
+    let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/{id}")))
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap();
+    env.app.clone().oneshot(req).await.unwrap().status()
+}
+
+/// #39：排隊中被取消的上傳 job，`input/` 要在取消當下刪除（不是等到有人手動 DELETE）。
+#[tokio::test]
+async fn canceling_queued_upload_removes_its_input() {
+    let env = build_env(Arc::new(SlowEngine), true, 1);
+    let cookie = login(&env.app).await;
+    let id = queued_upload(&env, &cookie).await;
+    let input = env.base.join("data/jobs").join(&id).join("input");
+    assert!(input.exists(), "前提：排隊中的上傳 job 帶著 input/");
+
+    assert_eq!(delete_job(&env, &cookie, &id).await, StatusCode::NO_CONTENT);
+    assert_eq!(get_job(&env.app, &cookie, &id).await["status"], "canceled");
+    assert!(
+        !input.exists(),
+        "取消後 input/ 仍在——上傳的機密原檔會留到有人手動刪除（#39）"
+    );
+    // 只刪 input/，job 記錄仍在（canceled 狀態要查得到）
+    assert!(env
+        .base
+        .join("data/jobs")
+        .join(&id)
+        .join("job.json")
+        .exists());
+}
+
+/// `CYTRACE_KEEP_INPUT=true` 是操作者明示要保留：取消時也不得刪。
+#[tokio::test]
+async fn canceling_queued_upload_keeps_input_when_keep_input_is_set() {
+    let env = build_env_with(
+        Arc::new(SlowEngine),
+        true,
+        1,
+        &[("CYTRACE_KEEP_INPUT", "true")],
+    );
+    let cookie = login(&env.app).await;
+    let id = queued_upload(&env, &cookie).await;
+    assert_eq!(delete_job(&env, &cookie, &id).await, StatusCode::NO_CONTENT);
+    assert!(env.base.join("data/jobs").join(&id).join("input").exists());
+}
+
+/// #39：重啟時，上傳 job 留下的 input/ 一律清掉——含被中斷的（queued/running → interrupted）
+/// 與修正前就已取消、殘留至今的。job 記錄（job.json）保留；掛載型 job 的掃描目標本身不得被碰。
+#[tokio::test]
+async fn restart_purges_leftover_upload_inputs() {
+    let rec = |i: u32, status: &str| {
+        serde_json::json!({ "id": format!("1700000000-0000000{i}"), "status": status,
+            "target": "upload:s.zip", "created_at": "2026-01-01T00:00:00Z" })
+    };
+    let seed = [rec(1, "queued"), rec(2, "running"), rec(3, "canceled")];
+    let mounted = serde_json::json!({ "id": "1700000000-00000004", "status": "running",
+        "target": "mounted:targets/app", "created_at": "2026-01-01T00:00:00Z" });
+    let all: Vec<_> = seed.iter().cloned().chain([mounted]).collect();
+    let env = build_env_seeded(Arc::new(FakeEngine), true, 2, &[], &all);
+    assert!(
+        env.base.join("scan-targets/app/bin").exists(),
+        "掛載型 job 的掃描目標不得被重啟清理刪到"
+    );
+    let cookie = login(&env.app).await;
+    for (rec, want) in seed.iter().zip(["interrupted", "interrupted", "canceled"]) {
+        let id = rec["id"].as_str().unwrap();
+        let dir = env.base.join("data/jobs").join(id);
+        assert_eq!(get_job(&env.app, &cookie, id).await["status"], want);
+        assert!(
+            !dir.join("input").exists(),
+            "{id}（{want}）重啟後 input/ 仍在（#39）"
+        );
+        assert!(dir.join("job.json").exists());
+    }
+}
+
+/// 重啟清理同樣尊重 `CYTRACE_KEEP_INPUT=true`。
+#[tokio::test]
+async fn restart_keeps_upload_inputs_when_keep_input_is_set() {
+    let seed = [
+        serde_json::json!({ "id": "1700000000-00000009", "status": "running",
+        "target": "upload:s.zip", "created_at": "2026-01-01T00:00:00Z" }),
+    ];
+    let env = build_env_seeded(
+        Arc::new(FakeEngine),
+        true,
+        2,
+        &[("CYTRACE_KEEP_INPUT", "true")],
+        &seed,
+    );
+    assert!(env
+        .base
+        .join("data/jobs/1700000000-00000009/input/extracted/secret.txt")
+        .exists());
 }
 
 #[tokio::test]

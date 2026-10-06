@@ -168,7 +168,8 @@
       "job_quarantined_missing": "Job directory has no job.json; quarantined to {{to}}",
       "job_quarantined_corrupt": "Corrupt job.json; quarantined to {{to}}: {{detail}}",
       "job_quarantine_failed": "Corrupt job record could not be quarantined and was left at {{path}} (will retry on next start): {{detail}}",
-      "job_persist_failed": "Failed to persist job.json ({{id}}): {{detail}}"
+      "job_persist_failed": "Failed to persist job.json ({{id}}): {{detail}}",
+      "input_remove_failed": "Failed to delete uploaded input; it remains on disk ({{id}}): {{detail}}"
     }
   },
   "console": {
