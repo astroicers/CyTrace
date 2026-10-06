@@ -134,7 +134,7 @@
       "rate_limited": "Too many login attempts; try again later",
       "validation": "Invalid request",
       "forbidden_path": "Scan path not allowed",
-      "conflict": "Job is running; cancel or wait before deleting",
+      "conflict": "The job is already running and cannot be canceled or deleted; wait for it to finish",
       "queue_full": "Scan queue is full; try again later",
       "payload_too_large": "Upload or extracted content exceeds size limit",
       "unsupported_archive": "Unsupported archive format (zip / tar / tar.gz only)",

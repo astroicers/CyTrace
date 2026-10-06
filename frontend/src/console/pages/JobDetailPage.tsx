@@ -1,7 +1,8 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { describeJobError } from '../jobError'
 import { api, artifactUrl } from '../api/client'
-import type { ArtifactKind, JobRecord } from '../api/types'
+import { ApiError, type ArtifactKind, type JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
 import { StatusBadge } from '../components/StatusBadge'
 import { SeverityBadge } from '../../components/ui'
@@ -27,6 +28,10 @@ function interval(job: JobRecord | null): number {
 export function JobDetailPage({ id }: { id: string }) {
   const { t, i18n } = useTranslation()
   const { data: job, error } = usePolling(() => api.getJob(id), interval)
+  // 取消／刪除失敗時 server 回的訊息（例如已開始掃描時取消得到 409，#46），連同失敗的是哪個操作
+  const [actionError, setActionError] = useState<{ msg: string; op: 'cancel' | 'delete' } | null>(
+    null,
+  )
 
   if (error && !job) {
     return (
@@ -53,13 +58,20 @@ export function JobDetailPage({ id }: { id: string }) {
   const hasReport = job.status === 'done'
 
   const remove = async () => {
+    const op = canCancel ? 'cancel' : 'delete'
+    setActionError(null)
     try {
       await api.deleteJob(id)
       navigate({ page: 'dashboard' })
-    } catch {
-      /* 401 由 client 攔截；其餘忽略（列表頁會反映） */
+    } catch (err) {
+      // 401 由 client 攔截（導回登入）；其餘把 server 的訊息顯示出來，與新掃描頁的做法相同
+      const msg = err instanceof ApiError ? t(err.message) : t('console.common.error')
+      setActionError({ msg, op })
     }
   }
+  // 取消失敗的提示只在 job 尚未結束時有意義：掃描完成後「刪除」鈕出現，「請等掃描完成」已過時。
+  // 刪除失敗（對已結束的 job）的提示則照常顯示，不能一律以 terminal 隱藏
+  const shownError = actionError && !(actionError.op === 'cancel' && terminal) ? actionError.msg : null
 
   return (
     <section>
@@ -187,6 +199,13 @@ export function JobDetailPage({ id }: { id: string }) {
             {t(canCancel ? 'console.job.cancel' : 'console.job.delete')}
           </button>
         </div>
+      )}
+      {/* 放在按鈕區塊之外：取消失敗多半是 job 剛開始掃描，下一次輪詢讀到 running 後按鈕會消失，
+          訊息要留著說明原因 */}
+      {shownError && (
+        <p role="alert" className="mt-2 text-sm text-sev-critical">
+          {shownError}
+        </p>
       )}
     </section>
   )
