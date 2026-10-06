@@ -344,7 +344,7 @@ milestones:
   - id: M4
     title: "離線封裝交付（Offline Packaging & Delivery）"
     target_date: 2026-09-02
-    status: in_progress
+    status: completed
     tasks:
       - id: T401
         title: "musl 靜態 build + 釘選引擎/DB 快照打包"
@@ -372,7 +372,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T401]
-        status: in_progress
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: ""
@@ -387,7 +387,12 @@ milestones:
           存於 `~/.minisign/cytrace.key`，不進 repo 與 CI；公鑰提交為 `keys/cytrace.pub`（金鑰 ID
           055ACC6F1822B10E），SOP §3 與 README 抄錄公鑰字串，帶外管道為交付驗收單（紙本）。
           `scripts/pubkey-check.py` 在 lint／CI 對帳公鑰檔格式與文件抄錄（含 7 例自測）。簽章路徑已由 T920
-          在 CI 以拋棄式金鑰實測。**剩餘**：以受管金鑰正式簽第一個交付包（需人輸入私鑰密碼）。
+          在 CI 以拋棄式金鑰實測。
+
+          **結案（2026-10-06）**：v0.5.0 發布後，使用者在交付工作站以受管金鑰（ID 055ACC6F1822B10E）
+          簽 Release 的 `SHA256SUMS`，`SHA256SUMS.minisig` 已附在 GitHub Release v0.5.0。實測：從 Release
+          重新下載，以 README 抄錄的公鑰字串 `minisign -Vm` 驗章通過、`sha256sum -c` 三項皆 OK，
+          竄改 `SHA256SUMS` 後驗章失敗。離線安裝包則於交付端打包時以同一把金鑰簽（DELIVERY_SOP §3）。
       - id: T403
         title: "dogfooding 自產 SBOM 隨附 + 離線 DB 更新 SOP"
         type: NEW_FEATURE
