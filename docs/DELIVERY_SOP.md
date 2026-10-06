@@ -1,6 +1,7 @@
 # CyTrace 離線交付與更新 SOP
 
 > 對應 ADR-003（離線漏洞 DB）、ADR-007（封裝/簽章/信任錨）。場域：軍用地端、無網際網路。
+> 在目標機上逐項驗收（驗章 → 安裝 → 掃描 → 報表）請用 [FIELD_ACCEPTANCE.md](FIELD_ACCEPTANCE.md)。
 
 ## 1. 安裝包內容（單一可攜目錄）
 
