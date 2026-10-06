@@ -8,6 +8,8 @@
 
 ### 新增
 
+- 交付簽章公鑰發布為 `keys/cytrace.pub`（金鑰 ID `055ACC6F1822B10E`），公鑰字串同時寫在交付 SOP §3
+  與 README，場域以交付驗收單上抄錄的字串驗章（T402）。
 - SBOM 可另以 SPDX 2.3 格式輸出（T919）：`cytrace scan --spdx` 另寫 `sbom.spdx.json`（預設關閉）。
   Web 控制台的掃描一律附上 SPDX，任務詳情頁可下載 SBOM（CycloneDX、SPDX）、弱點比對結果與 CBOM。
   兩種格式出自同一次掃描，套件名稱與版本一致。SPDX 產出失敗時整次掃描失敗，不會只交出一半的 SBOM。

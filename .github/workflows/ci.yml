@@ -45,6 +45,9 @@ jobs:
       # 給了 body 就取代），而 release.yml 又把「已知限制」寫死成上一版的內容。
       - name: Release 說明單一來源（CHANGELOG → release.yml；別的 workflow 不得寫 body）
         run: python3 scripts/release-notes.py check
+      # 場域驗章用的是驗收單上帶外抄錄的公鑰字串；文件抄錯一個字元，驗章就必然失敗（T402）
+      - name: 交付簽章公鑰與文件一致（T402）
+        run: python3 scripts/pubkey-check.py
 
   real-engine:
     name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013；SPDX，FR-001）
