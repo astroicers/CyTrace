@@ -134,7 +134,7 @@
       "rate_limited": "登入嘗試過於頻繁，請稍後再試",
       "validation": "請求格式錯誤",
       "forbidden_path": "不允許的掃描路徑",
-      "conflict": "job 執行中，無法刪除（可等完成或先取消）",
+      "conflict": "job 已開始掃描，無法取消或刪除；請等掃描完成",
       "queue_full": "掃描佇列已滿，請稍後再送出",
       "payload_too_large": "上傳或解壓內容超過大小上限",
       "unsupported_archive": "不支援的壓縮格式（僅 zip / tar / tar.gz）",

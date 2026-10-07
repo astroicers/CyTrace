@@ -689,6 +689,44 @@ async fn delete_conflicts_when_runner_starts_before_the_cancel() {
     assert!(input.exists(), "正在被掃描的 input/ 不得被刪");
 }
 
+/// #46：409 只在「job 已開始掃描」時出現，而 console 上遇到它的情境是按了「取消」。
+/// 訊息必須說明已無法取消（running 本來就不能取消），不得再建議「先取消」。
+#[tokio::test]
+async fn conflict_message_says_a_running_job_cannot_be_canceled() {
+    let env = build_env(Arc::new(SlowEngine), true, 1);
+    let cookie = login(&env.app).await;
+    let (_, job) = create_job(&env.app, &cookie, "app", None).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    for _ in 0..30 {
+        if get_job(&env.app, &cookie, &id).await["status"] == "running" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(get_job(&env.app, &cookie, &id).await["status"], "running");
+
+    for (lang, must_say) in [("zh-TW", "無法取消"), ("en-US", "cannot be canceled")] {
+        let req = with_csrf_and(Request::delete(format!("/api/v1/jobs/{id}")))
+            .header(header::COOKIE, &cookie)
+            .header(header::ACCEPT_LANGUAGE, lang)
+            .body(Body::empty())
+            .unwrap();
+        let (status, v) = send_json(&env.app, req).await;
+        let msg = assert_api_error(
+            "delete running",
+            lang,
+            status,
+            &v,
+            StatusCode::CONFLICT,
+            "server.err.conflict",
+        );
+        assert!(
+            msg.contains(must_say),
+            "{lang}: 409 訊息須說明已無法取消：{msg}"
+        );
+    }
+}
+
 /// `CYTRACE_KEEP_INPUT=true` 是操作者明示要保留：取消時也不得刪。
 #[tokio::test]
 async fn canceling_queued_upload_keeps_input_when_keep_input_is_set() {

@@ -1408,6 +1408,41 @@ milestones:
           `spawn_with_cleanup`；偵測器失效 → 必紅樣本與反空轉皆紅。
           獨立複審一輪（NEEDS_WORK：盲點清單不完整、setter 間接寫法抓不到；突變輸出行號與 fmt 後版本不符）後修正。
 
+      - id: T924
+        title: "console 取消／刪除失敗時顯示原因；409 訊息改為同時適用取消與刪除（#46）"
+        type: BUGFIX
+        priority: 2
+        adr: ADR-011
+        spec: null
+        srs_ref: FR-013
+        depends_on: [T923]
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T923（#44）複審的 Info 項 → issue #46"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-06"
+        description: |
+          job 詳情頁的 `remove()` 以空 catch 吞掉錯誤：按「取消」遇到 409（job 已開始掃描）時畫面毫無提示，
+          只靠輪詢稍後把狀態更新成 running。409 訊息（`server.err.conflict`）又寫著「可等完成或先取消」，
+          而 running 本來就不能取消，在按「取消」的情境下會誤導。
+
+          **結案（2026-10-06）**：
+          - console：失敗時以 `role="alert"` 顯示 server 的訊息（比照新掃描頁的 `t(err.message)`）。訊息放在
+            按鈕區塊之外：輪詢讀到 running 後按鈕會消失，訊息須留著說明原因。同時記下失敗的是取消還是刪除：
+            取消失敗的提示在 job 進入終態後消失（此時「刪除」鈕出現，「請等掃描完成」已過時）；刪除失敗的提示
+            照常顯示，不以終態一律隱藏。
+          - `server.err.conflict` 兩語改為「已開始掃描，無法取消或刪除；請等掃描完成」。此鍵只有 DELETE 的兩條
+            路徑在用。locales 與 console 原始碼皆改，報表樣板與 console 內嵌產物隨之重建。
+          測試：
+          - server 整合測試：DELETE 執行中的 job，兩語訊息須說明已無法取消（修正前紅，訊息為「…或先取消」）。
+          - 端到端（本機，未入 CI）：真的 `cytrace serve` 與登入，攔截該 job 的 GET／DELETE，兩語驗證提示出現、
+            停留原頁；輪詢轉 running 後取消鈕消失而提示仍在；再轉 done 後刪除鈕出現、過時提示消失；已完成 job
+            刪除失敗（500）時提示顯示。修正前兩語皆紅；三個突變各自轉紅：提示只在按鈕區塊存在時顯示、提示一律
+            顯示、終態一律隱藏。
+          獨立複審一輪（NEEDS_WORK：取消失敗的提示在掃描完成後仍留著，與出現的刪除鈕矛盾）後修正。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01
