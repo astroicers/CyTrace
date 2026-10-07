@@ -1555,7 +1555,11 @@ milestones:
           - 掛載：檔案不加前綴；OCI layout 目錄給 oci-dir:，與 cbom_target 一致。
           真實端到端（釘選三引擎、真實 DB、帶 CBOM）：CLI、上傳 tar、上傳 tar.gz、掛載 tar 四條路徑都是 96 元件、30 弱點、
           CBOM 2904 項。多映像、zip 包的映像、子目錄裡的映像、掛載 gzip 映像、掛載已解開的匯出目錄列為已知限制（ADR-011 修訂）。
-          獨立複審兩輪。第二輪的 low finding「預期失敗的路徑錯誤訊息不帶成因」由使用者裁定另開 #51。
+          獨立複審三輪（/asp:review-work）：
+          - 第一輪 NEEDS_WORK，9 項 finding，含 Cargo.lock 未提交、gunzip 上限未計檔頭、zip 與掛載 OCI 目錄的文件與實作不符。
+          - 第二輪 NEEDS_WORK：CI 結論行待補、扁平 OCI layout 以 dir: 掃描的實測原文待補；low finding「預期失敗的路徑錯誤訊息
+            不帶成因」由使用者裁定另開 #51。
+          - 第三輪 PASS（15 項正面證據、0 項反面證據；CI 真引擎 job 18 passed）。
 
       - id: T928
         title: "軟體產品文件表與 ScanResult 排除 Syft 的 file 類元件"
