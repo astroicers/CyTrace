@@ -338,12 +338,21 @@
       "cvss": "CVSS",
       "component": "Component",
       "fixed": "Fixed in",
-      "source": "Source",
+      "source": "Advisory",
       "name": "Name",
       "version": "Version",
       "type": "Type",
-      "licenses": "Licenses"
-    }
+      "licenses": "Licenses",
+      "location": "Location"
+    },
+    "more_locations": "{{n}} more",
+    "fewer_locations": "Show less",
+    "provenance": {
+      "sbom": "Source: Syft {{version}}",
+      "findings": "Source: Grype {{version}}, vulnerability database {{db}}",
+      "crypto": "Source: CBOMkit-theia {{version}}"
+    },
+    "db_label": "{{version}} ({{built}})"
   },
   "crypto": {
     "quantum": {

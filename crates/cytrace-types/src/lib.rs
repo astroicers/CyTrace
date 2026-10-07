@@ -68,6 +68,15 @@ pub struct Component {
     pub kind: String,
     #[serde(default)]
     pub licenses: Vec<String>,
+    /// CycloneDX `bom-ref`（v3；弱點對應元件時的精確鍵）。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub bom_ref: Option<String>,
+    /// Package URL（v3）。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub purl: Option<String>,
+    /// 元件被找到的位置（v3）：Syft `syft:location:N:path` 依 N 排序，路徑相對於掃描根目錄。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub locations: Vec<String>,
 }
 
 /// 單一弱點（CVE 比對結果）。
@@ -80,7 +89,17 @@ pub struct Vulnerability {
     pub component: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub fixed_version: Option<String>,
+    /// 漏洞公告來源（Grype `dataSource` 網址）；不是元件位置。
     pub source: String,
+    /// 受影響元件的版本（v3；Grype `artifact.version`）。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub component_version: Option<String>,
+    /// 受影響元件的 purl（v3；Grype `artifact.purl`）。
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub component_purl: Option<String>,
+    /// 受影響元件所在位置（v3）；對應規則見 ADR-009「修訂：schema v3」。
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub locations: Vec<String>,
 }
 
 /// 漏洞 DB 離線快照資訊（ADR-003；報表須揭露時效）。
@@ -248,8 +267,9 @@ pub struct ScanResult {
     pub crypto: Option<CryptoInventory>,
 }
 
-/// 目前的 ScanResult schema 版本（ADR-009 相容政策；v2 起含 `crypto`，見 ADR-013）。
-pub const SCHEMA_VERSION: u32 = 2;
+/// 目前的 ScanResult schema 版本（ADR-009 相容政策；v2 起含 `crypto`，見 ADR-013；
+/// v3 起元件與弱點帶來源欄位，見 ADR-009「修訂：schema v3」）。
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[cfg(test)]
 mod tests {
@@ -309,8 +329,108 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_2() {
-        assert_eq!(SCHEMA_VERSION, 2);
+    fn schema_version_is_3() {
+        assert_eq!(SCHEMA_VERSION, 3);
+    }
+
+    // ── T925：schema v3 來源欄位（ADR-009 修訂：schema v3）──
+
+    /// v2 形狀的元件與弱點（無來源欄位）——v3 須可讀入，新欄位視為空。
+    #[test]
+    fn v2_component_and_finding_without_provenance_still_deserialize() {
+        let c: Component = serde_json::from_str(
+            r#"{"name":"lodash","version":"4.17.20","type":"library","licenses":["MIT"]}"#,
+        )
+        .expect("v2 元件須可讀入");
+        assert_eq!(c.bom_ref, None);
+        assert_eq!(c.purl, None);
+        assert!(c.locations.is_empty());
+
+        let v: Vulnerability = serde_json::from_str(
+            r#"{"id":"CVE-2021-23337","severity":"High","component":"lodash","source":"https://x"}"#,
+        )
+        .expect("v2 弱點須可讀入");
+        assert_eq!(v.component_version, None);
+        assert_eq!(v.component_purl, None);
+        assert!(v.locations.is_empty());
+    }
+
+    /// 空的來源欄位不輸出：沒有來源資訊的元件，序列化結果與 v2 完全相同（不出現 null 或 []）。
+    #[test]
+    fn empty_provenance_fields_are_omitted() {
+        let c = Component {
+            name: "x".into(),
+            version: "1".into(),
+            kind: "library".into(),
+            licenses: vec![],
+            bom_ref: None,
+            purl: None,
+            locations: vec![],
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        let keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["licenses", "name", "type", "version"]);
+
+        let v = Vulnerability {
+            id: "CVE-1".into(),
+            severity: Severity::Low,
+            cvss: None,
+            component: "x".into(),
+            fixed_version: None,
+            source: "s".into(),
+            component_version: None,
+            component_purl: None,
+            locations: vec![],
+        };
+        let json = serde_json::to_value(&v).unwrap();
+        let keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["component", "id", "severity", "source"]);
+    }
+
+    /// 來源欄位的 JSON 名稱是報表前端的契約（frontend/src/types.ts）。
+    #[test]
+    fn provenance_fields_roundtrip_with_frontend_names() {
+        let c = Component {
+            name: "lodash".into(),
+            version: "4.17.20".into(),
+            kind: "library".into(),
+            licenses: vec![],
+            bom_ref: Some("pkg:npm/lodash@4.17.20?package-id=ab".into()),
+            purl: Some("pkg:npm/lodash@4.17.20".into()),
+            locations: vec!["/package-lock.json".into(), "/web/package-lock.json".into()],
+        };
+        let json = serde_json::to_value(&c).unwrap();
+        assert_eq!(json["bom_ref"], "pkg:npm/lodash@4.17.20?package-id=ab");
+        assert_eq!(json["purl"], "pkg:npm/lodash@4.17.20");
+        assert_eq!(json["locations"][1], "/web/package-lock.json");
+        assert_eq!(serde_json::from_value::<Component>(json).unwrap(), c);
+
+        let v = Vulnerability {
+            id: "CVE-2021-23337".into(),
+            severity: Severity::High,
+            cvss: Some(7.2),
+            component: "lodash".into(),
+            fixed_version: Some("4.17.21".into()),
+            source: "https://x".into(),
+            component_version: Some("4.17.20".into()),
+            component_purl: Some("pkg:npm/lodash@4.17.20".into()),
+            locations: vec!["/package-lock.json".into()],
+        };
+        let json = serde_json::to_value(&v).unwrap();
+        assert_eq!(json["component_version"], "4.17.20");
+        assert_eq!(json["component_purl"], "pkg:npm/lodash@4.17.20");
+        assert_eq!(json["locations"][0], "/package-lock.json");
+        assert_eq!(serde_json::from_value::<Vulnerability>(json).unwrap(), v);
     }
 
     #[test]

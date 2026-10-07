@@ -31,7 +31,12 @@ export interface Vulnerability {
   cvss?: number | null
   component: string
   fixed_version?: string | null
+  /** 漏洞公告來源（Grype `dataSource` 網址）；不是元件位置。 */
   source: string
+  /** v3：受影響元件的版本與 purl、所在位置（ADR-009「修訂：schema v3」）。舊版 JSON 無此欄位。 */
+  component_version?: string | null
+  component_purl?: string | null
+  locations?: string[]
 }
 
 export interface Component {
@@ -39,6 +44,10 @@ export interface Component {
   version: string
   type: string
   licenses: string[]
+  /** v3：CycloneDX bom-ref、purl、被找到的位置（相對於掃描根目錄）。舊版 JSON 無此欄位。 */
+  bom_ref?: string | null
+  purl?: string | null
+  locations?: string[]
 }
 
 // ── CBOM 密碼學資產（ADR-013）──

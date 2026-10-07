@@ -10,7 +10,7 @@
 | **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
 
 > **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
-> 現已對齊三引擎（加入 CBOM 引擎 cbomkit-theia，ADR-013）、`ScanResult` schema v2（ADR-009 修訂節）、
+> 現已對齊三引擎（加入 CBOM 引擎 cbomkit-theia，ADR-013）、`ScanResult` schema v3（ADR-009 修訂節）、
 > Web 服務模式（ADR-011／012）與操作者終端 i18n（T912）。
 > 本文描述**設計與契約**；細部行為以程式碼的文件註解為準，各節會指出位置。
 
@@ -40,7 +40,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
  │        → fail-on／量子閘門                                 │
  └───────────────────────────┬─────────────────────────────┘
                              ▼
-                 ScanResult（schema v2，ADR-009）
+                 ScanResult（schema v3，ADR-009）
                              ▼
  cytrace-report（內嵌單檔樣板 → 注入資料 → *.report.html）
 ```
@@ -135,19 +135,21 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 
 子程序找不到、非零退出、輸出不合法，一律回 `CytraceError`（§5）。CLI 對應退出碼 1，與門檻觸發的 2 區隔。
 
-## 4. 資料模型（`ScanResult` schema v2）
+## 4. 資料模型（`ScanResult` schema v3）
 
 ```
 ScanResult {
-  schema_version: u32                       // 目前為 2（cytrace_types::SCHEMA_VERSION）
+  schema_version: u32                       // 目前為 3（cytrace_types::SCHEMA_VERSION）
   meta: {
     target, generated_at,
     tool_versions { syft, grype, theia? },  // theia 僅在 CBOM 完成時填
     db_snapshot { version, built },         // grype db status 真值；取不到為 "unavailable"
     scan_identity?                          // 執行掃描的身分（ADR-013 決策 10）
   }
-  components: [ Component { name, version, type, licenses[] } ]   // → 軟體產品文件表
-  findings:   [ Vulnerability { id, severity, cvss?, component, fixed_version?, source } ]
+  components: [ Component { name, version, type, licenses[],       // → 軟體產品文件表
+                           bom_ref?, purl?, locations[] } ]      // v3：來源（ADR-009 修訂）
+  findings:   [ Vulnerability { id, severity, cvss?, component, fixed_version?, source,
+                                component_version?, component_purl?, locations[] } ]
   summary:    { counts_by_severity, overall_risk }                // overall_risk = 最高等級
   crypto?: CryptoInventory {                                     // v1 檔無此欄位 → None
     status: NotRequested | EngineAbsent | Completed
@@ -169,8 +171,15 @@ ScanResult {
 - **信任邊界**（NFR-09）：`assets` 只記存在、型別、長度、路徑等中繼資料，**不含金鑰內容**。
   約束範圍包含 `ScanResult`、報表、日誌，以及原樣落地的 `cbom.cdx.json`（ADR-013 決策 8）。
 - **相容政策**（ADR-009）：
-  - 新版 `cytrace report` 必須能重建舊版 JSON（v1 缺 `crypto` → `None`，由回歸測試釘住）；
+  - 新版 `cytrace report` 必須能重建舊版 JSON（v1 缺 `crypto` → `None`；v1、v2 缺 v3 的來源欄位 → 視為空，
+    軟體產品文件表的位置欄以「—」呈現、弱點列不顯示位置行；皆由回歸測試釘住）；
   - 讀到比本版新的 `schema_version` 時會警告（`cli.schema_ahead`），因為 serde 會略過未知欄位。
+- **來源欄位**（v3，ADR-009 修訂）：
+  - `Component.locations` 取自 Syft 的 `syft:location:N:path`，依 N 排序，路徑相對於掃描根目錄。
+  - `Vulnerability.locations` 依序取：Grype `artifact.locations` → `artifact.id` 等於元件的 `bom_ref`（命中即停）
+    → 同 `purl` 的元件位置聯集（比對前做 percent-decode；artifact 帶 purl 時到此為止，避免混入其他生態系的同名套件）
+    → artifact 沒有 purl 時才以同「名稱＋版本」的元件位置聯集；都對不到時留空，不猜測。
+  - 報表各區段的「資料來源」列由 `meta.tool_versions` 與 `meta.db_snapshot` 組出，不另存欄位。
 - **非決定性欄位**：`meta.generated_at` 等欄位在比對 golden baseline 前正規化（§9、ADR-008）。
 
 ## 5. 錯誤處理

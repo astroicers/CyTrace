@@ -338,12 +338,21 @@
       "cvss": "CVSS",
       "component": "元件",
       "fixed": "修補版本",
-      "source": "來源",
+      "source": "公告來源",
       "name": "名稱",
       "version": "版本",
       "type": "類型",
-      "licenses": "授權"
-    }
+      "licenses": "授權",
+      "location": "位置"
+    },
+    "more_locations": "另 {{n}} 處",
+    "fewer_locations": "收合",
+    "provenance": {
+      "sbom": "資料來源：Syft {{version}}",
+      "findings": "資料來源：Grype {{version}}，漏洞資料庫 {{db}}",
+      "crypto": "資料來源：CBOMkit-theia {{version}}"
+    },
+    "db_label": "{{version}}（{{built}}）"
   },
   "crypto": {
     "quantum": {

@@ -461,7 +461,8 @@ fn run_one(
     let sbom = engine::sbom(target)?;
     let grype = engine::vuln(&sbom)?;
     let components = parse::parse_cyclonedx(&sbom)?;
-    let findings = parse::parse_grype(&grype)?;
+    // 弱點對應元件位置要用同一次掃描的元件清單（ADR-009「修訂：schema v3」）
+    let findings = parse::parse_grype_for(&grype, &components)?;
     // CBOM 失敗只影響 crypto 區段，不中止主流程（ADR-013 決策 4）
     let crypto = opts
         .enabled

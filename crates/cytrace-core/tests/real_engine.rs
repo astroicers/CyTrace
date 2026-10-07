@@ -780,3 +780,45 @@ fn spdx_and_cyclonedx_describe_the_same_packages() {
     assert_eq!(libs, pkgs, "兩種格式的套件（名稱與版本）應一致");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// T925：釘選版 syft 的 CycloneDX 經 `parse_cyclonedx` 後，元件須帶 purl 與位置（ADR-009「修訂：schema v3」）。
+///
+/// fixture 是手寫的 Syft 形狀；這支確認**實際出貨的那支** syft 真的輸出 `purl` 與 `syft:location:N:path`。
+/// 若某次升級引擎改了屬性名稱，報表的位置欄會整欄變成「—」，而 fixture 測試全都看不出來。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_components_carry_purl_and_locations() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("provenance");
+    fs::create_dir_all(dir.join("svc")).unwrap();
+    fs::write(dir.join("requirements.txt"), "requests==2.31.0\n").unwrap();
+    // 同一套件出現在兩個檔案：位置須分別對得上
+    fs::write(dir.join("svc/requirements.txt"), "requests==2.31.0\n").unwrap();
+
+    let sbom = RealEngine
+        .sbom(&format!("dir:{}", dir.display()))
+        .expect("syft 應產出 CycloneDX");
+    let comps = cytrace_core::parse::parse_cyclonedx(&sbom).unwrap();
+    let requests: Vec<_> = comps.iter().filter(|c| c.name == "requests").collect();
+    assert!(!requests.is_empty(), "應抓到 requests：{comps:?}");
+    for c in &requests {
+        assert_eq!(c.purl.as_deref(), Some("pkg:pypi/requests@2.31.0"), "{c:?}");
+        assert!(c.bom_ref.is_some(), "{c:?}");
+    }
+    let mut locs: Vec<&str> = requests
+        .iter()
+        .flat_map(|c| c.locations.iter().map(String::as_str))
+        .collect();
+    locs.sort();
+    assert_eq!(
+        locs,
+        ["/requirements.txt", "/svc/requirements.txt"],
+        "位置須相對於掃描根目錄"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

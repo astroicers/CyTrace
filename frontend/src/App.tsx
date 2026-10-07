@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { loadScanResult } from './data'
 import { SEVERITY_ORDER, type CryptoInventory, type Severity } from './types'
@@ -11,10 +12,13 @@ const result = loadScanResult()
 function Section({
   id,
   title,
+  source,
   children,
 }: {
   id: string
   title: string
+  /** 產生本區段資料的工具與版本（ADR-009「修訂：schema v3」）。 */
+  source?: string
   children: React.ReactNode
 }) {
   return (
@@ -22,8 +26,50 @@ function Section({
       <h2 className="mb-3 border-b border-gray-200 pb-1 text-lg font-bold dark:border-gray-700">
         {title}
       </h2>
+      {source && <p className="-mt-2 mb-3 text-xs text-gray-500">{source}</p>}
       {children}
     </section>
+  )
+}
+
+/** 弱點資料庫快照的顯示字串；'unavailable'（v2 sentinel）與 'snapshot'（v1 假值）不得渲染成像真值。
+ *  括號依語言（中文全形、英文半形），由 `report.db_label` 決定。 */
+function dbLabel(t: TFunction): string {
+  const db = result.meta.db_snapshot
+  return db.version === 'unavailable' || db.version === 'snapshot'
+    ? t('report.db_unavailable')
+    : t('report.db_label', { version: db.version, built: db.built })
+}
+
+/**
+ * 位置清單：先列 `limit` 處，其餘按需展開。展開前不渲染其餘位置，控制長清單的 DOM 與列印篇幅；
+ * 完整清單仍在 ScanResult 與 SBOM JSON（ADR-009「修訂：schema v3」）。
+ */
+function Locations({ paths, limit }: { paths?: string[]; limit: number }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const all = paths ?? []
+  if (all.length === 0) return <span className="text-gray-500">—</span>
+  const shown = open ? all : all.slice(0, limit)
+  const rest = all.length - limit
+  return (
+    <div className="text-xs">
+      {shown.map((p, i) => (
+        <div key={i} className="font-mono break-all">
+          {p}
+        </div>
+      ))}
+      {rest > 0 && (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="mt-0.5 text-gray-500 underline hover:text-gray-700 dark:hover:text-gray-300"
+        >
+          {open ? t('report.fewer_locations') : t('report.more_locations', { n: rest })}
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -41,14 +87,7 @@ function Cover() {
       : []),
     // "unavailable" 是 core 的 fail-closed sentinel（grype db status 取不到時）；
     // 原樣印英文 sentinel 對操作員無意義，譯為明確的「無法取得」訊息（NFR-03/NFR-06）
-    [
-      t('report.meta.db'),
-      // 'unavailable' 是 v2 的顯性 sentinel；'snapshot' 是 v1 時期的硬編碼假值
-      // （不具稽核效力，ADR-009 修訂節）——舊 JSON 重建時同樣不得渲染成像真值
-      m.db_snapshot.version === 'unavailable' || m.db_snapshot.version === 'snapshot'
-        ? t('report.db_unavailable')
-        : `${m.db_snapshot.version}（${m.db_snapshot.built}）`,
-    ],
+    [t('report.meta.db'), dbLabel(t)],
     [t('report.meta.generated_at'), m.generated_at],
   ]
   return (
@@ -118,7 +157,14 @@ function Findings({ filter }: { filter: Severity | null }) {
     [filter],
   )
   return (
-    <Section id="findings" title={t('report.findings')}>
+    <Section
+      id="findings"
+      title={t('report.findings')}
+      source={t('report.provenance.findings', {
+        version: result.meta.tool_versions.grype,
+        db: dbLabel(t),
+      })}
+    >
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
@@ -140,19 +186,25 @@ function Findings({ filter }: { filter: Severity | null }) {
                 </td>
               </tr>
             )}
-            {rows.map((f) => (
-              <tr
-                key={f.id + f.component}
-                className="border-b border-gray-100 dark:border-gray-800"
-              >
+            {rows.map((f, i) => (
+              // 同一 CVE 可能命中同名元件的多個實例，id＋名稱會撞號
+              <tr key={`${f.id}-${i}`} className="border-b border-gray-100 dark:border-gray-800">
                 <td className="py-1 pr-3">
                   <SeverityBadge severity={f.severity} />
                 </td>
                 <td className="py-1 pr-3 font-mono">{f.id}</td>
                 <td className="py-1 pr-3 font-mono">{f.cvss ?? '—'}</td>
-                <td className="py-1 pr-3 font-mono">{f.component}</td>
+                <td className="py-1 pr-3">
+                  <div className="font-mono">
+                    {f.component}
+                    {f.component_version ? ` ${f.component_version}` : ''}
+                  </div>
+                  {f.locations && f.locations.length > 0 && (
+                    <Locations paths={f.locations} limit={1} />
+                  )}
+                </td>
                 <td className="py-1 pr-3 font-mono">{f.fixed_version ?? '—'}</td>
-                <td className="py-1 pr-3 text-gray-500">{f.source}</td>
+                <td className="py-1 pr-3 break-all text-gray-500">{f.source}</td>
               </tr>
             ))}
           </tbody>
@@ -165,12 +217,16 @@ function Findings({ filter }: { filter: Severity | null }) {
 function Sbom() {
   const { t } = useTranslation()
   return (
-    <Section id="sbom" title={t('report.sbom')}>
+    <Section
+      id="sbom"
+      title={t('report.sbom')}
+      source={t('report.provenance.sbom', { version: result.meta.tool_versions.syft })}
+    >
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-gray-300 text-left dark:border-gray-600">
-              {(['name', 'version', 'type', 'licenses'] as const).map((c) => (
+              {(['name', 'version', 'type', 'licenses', 'location'] as const).map((c) => (
                 <th key={c} scope="col" className="py-1 pr-3">
                   {t(`report.col.${c}`)}
                 </th>
@@ -178,15 +234,19 @@ function Sbom() {
             </tr>
           </thead>
           <tbody>
-            {result.components.map((c) => (
-              <tr
-                key={c.name + c.version}
-                className="border-b border-gray-100 dark:border-gray-800"
-              >
-                <td className="py-1 pr-3 font-mono">{c.name}</td>
+            {result.components.map((c, i) => (
+              // 同一 name@version 出現在多份 lockfile 時是不同元件；以 bom-ref 為鍵，舊版 JSON 以索引補位
+              <tr key={c.bom_ref ?? `i${i}`} className="border-b border-gray-100 dark:border-gray-800">
+                <td className="py-1 pr-3">
+                  <div className="font-mono">{c.name}</div>
+                  {c.purl && <div className="font-mono text-xs break-all text-gray-500">{c.purl}</div>}
+                </td>
                 <td className="py-1 pr-3 font-mono">{c.version}</td>
                 <td className="py-1 pr-3 text-gray-500">{c.type}</td>
                 <td className="py-1 pr-3 font-mono">{c.licenses.join(', ') || '—'}</td>
+                <td className="py-1 pr-3">
+                  <Locations paths={c.locations} limit={2} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -240,7 +300,16 @@ function Crypto() {
   }, [assets])
 
   return (
-    <Section id="crypto" title={t('report.crypto.title')}>
+    <Section
+      id="crypto"
+      title={t('report.crypto.title')}
+      // 只在盤點完成時標來源：未執行、引擎缺席、失敗時沒有由該工具產出的資料
+      source={
+        !status && result.meta.tool_versions.theia
+          ? t('report.provenance.crypto', { version: result.meta.tool_versions.theia })
+          : undefined
+      }
+    >
       {status ? (
         <div className="text-sm text-gray-500">
           <p>{t(status.key)}</p>

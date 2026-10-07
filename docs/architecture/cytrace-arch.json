@@ -151,7 +151,7 @@
         190,
         70
       ],
-      "tag": "ScanResult v2",
+      "tag": "ScanResult v3",
       "sources": [
         {
           "path": "crates/cytrace-core/src/engine.rs",
@@ -400,7 +400,7 @@
     {
       "from": "core",
       "to": "report",
-      "label": "ScanResult v2 → render",
+      "label": "ScanResult v3 → render",
       "variant": "emphasis",
       "labelAt": [
         955,
