@@ -77,6 +77,25 @@ impl ScanEngine for SlowEngine {
     }
 }
 
+/// 記錄 sbom 收到的目標字串（#49：目標形態決定 Syft 掃不掃得到映像）。
+#[derive(Default)]
+struct RecordingEngine {
+    targets: std::sync::Mutex<Vec<String>>,
+}
+impl ScanEngine for RecordingEngine {
+    fn sbom(&self, target: &str) -> CoreResult<String> {
+        self.targets.lock().unwrap().push(target.to_string());
+        Ok(CYCLONEDX.into())
+    }
+    fn sbom_with_spdx(&self, target: &str) -> CoreResult<(String, Option<String>)> {
+        self.targets.lock().unwrap().push(target.to_string());
+        Ok((CYCLONEDX.into(), Some(SPDX.into())))
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+}
+
 /// syft 失敗：job 以 `server.err.engine` 失敗（查詢時渲染 message 的測試用）。
 struct FailingSbomEngine;
 impl ScanEngine for FailingSbomEngine {
@@ -652,6 +671,111 @@ async fn canceling_queued_upload_removes_its_input() {
         .join(&id)
         .join("job.json")
         .exists());
+}
+
+/// #49：掛載目標是檔案（例如映像 tar）時不加 `dir:`，交給 Syft 自動辨識（實測可認出 docker-archive）；
+/// 目錄維持 `dir:`。原本一律 `dir:`，掛載的映像 tar 會讓 Syft 以 not a directory 失敗。
+#[tokio::test]
+async fn mounted_file_target_is_not_forced_to_dir() {
+    let engine = Arc::new(RecordingEngine::default());
+    let env = build_env(engine.clone(), true, 2);
+    let cookie = login(&env.app).await;
+    for path in ["app/bin", "app"] {
+        let (status, job) = create_job(&env.app, &cookie, path, None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+        wait_terminal(&env.app, &cookie, job["id"].as_str().unwrap()).await;
+    }
+    let targets = engine.targets.lock().unwrap().clone();
+    let file = env
+        .base
+        .join("scan-targets/app/bin")
+        .canonicalize()
+        .unwrap();
+    let dir = env.base.join("scan-targets/app").canonicalize().unwrap();
+    assert!(
+        targets.contains(&file.display().to_string()),
+        "檔案目標不得加 dir:：{targets:?}"
+    );
+    assert!(
+        targets.contains(&format!("dir:{}", dir.display())),
+        "目錄目標維持 dir:：{targets:?}"
+    );
+}
+
+/// #49：掛載的 OCI layout 目錄以 `oci-dir:` 掃描，與 CBOM 的 `cbom_target` 對它走 theia image 模式一致；
+/// Docker 匯出的巢狀 index 因此明確失敗，而不是以 `dir:` 靜默得 0（真引擎實測見 cytrace-core real_engine）。
+#[tokio::test]
+async fn mounted_oci_layout_dir_is_scanned_as_oci_dir() {
+    let engine = Arc::new(RecordingEngine::default());
+    let env = build_env(engine.clone(), true, 2);
+    let layout = env.base.join("scan-targets/oci");
+    std::fs::create_dir_all(layout.join("blobs/sha256")).unwrap();
+    std::fs::write(
+        layout.join("oci-layout"),
+        br#"{"imageLayoutVersion":"1.0.0"}"#,
+    )
+    .unwrap();
+    std::fs::write(layout.join("index.json"), b"{}").unwrap();
+    let cookie = login(&env.app).await;
+    let (status, job) = create_job(&env.app, &cookie, "oci", None).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    wait_terminal(&env.app, &cookie, job["id"].as_str().unwrap()).await;
+    let targets = engine.targets.lock().unwrap().clone();
+    assert_eq!(
+        targets,
+        [format!(
+            "oci-dir:{}",
+            layout.canonicalize().unwrap().display()
+        )]
+    );
+}
+
+/// #49：上傳 docker save 的映像 tar，引擎收到的是 `docker-archive:<原始 tar>`，不是解開後的目錄。
+#[tokio::test]
+async fn uploaded_docker_save_is_scanned_as_docker_archive() {
+    let engine = Arc::new(RecordingEngine::default());
+    let env = build_env(engine.clone(), true, 2);
+    let cookie = login(&env.app).await;
+    let mut tarball = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut tarball);
+        for (name, data) in [
+            (
+                "manifest.json",
+                br#"[{"Config":"c.json","RepoTags":["x:1"],"Layers":["l.tar"]}]"#.as_slice(),
+            ),
+            ("c.json", b"{}".as_slice()),
+            ("l.tar", b"layer".as_slice()),
+        ] {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, name, data).unwrap();
+        }
+        b.finish().unwrap();
+    }
+    let boundary = "----cytraceimage";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "img.tar", &tarball, None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{v}");
+    let id = v["id"].as_str().unwrap().to_string();
+    wait_terminal(&env.app, &cookie, &id).await;
+    let targets = engine.targets.lock().unwrap().clone();
+    let original = env
+        .base
+        .join("data/jobs")
+        .join(&id)
+        .join("input/original/img.tar");
+    assert_eq!(
+        targets,
+        vec![format!("docker-archive:{}", original.display())]
+    );
 }
 
 /// T925：server 管線同樣要把弱點對應到元件位置（ADR-009「修訂：schema v3」）。

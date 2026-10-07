@@ -11,3 +11,8 @@ cytrace-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+# 真引擎測試以手工構造最小映像 tar（#49）
+tar = { workspace = true }
+sha2 = { workspace = true }
