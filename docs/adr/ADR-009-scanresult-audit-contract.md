@@ -108,3 +108,48 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - **成功指標「報表重現為純函式」**：改為「同 JSON、同語言兩次產出內容一致（排除 generated_at）」。
 - **不把語言寫進 ScanResult 的理由**：語言是呈現選擇，不是掃描結果；寫進去會讓同一次掃描因
   呈現語言不同而產生兩份不同的稽核資料，並觸發 schema 升版。
+
+## 修訂：schema v3——來源標記（2026-10-07，T925）
+
+**裁定來源**：使用者於 2026-10-07 核准實作計畫「報表來源標記」。範圍有三項：
+- 逐筆元件的位置與 purl
+- 弱點對應到元件的版本與位置
+- 各區段標明產生資料的工具與版本
+
+一個元件有多個位置時，報表精簡顯示，JSON 保留全部。
+
+起因：報表只在封面列出工具版本。軟體產品文件表看不出元件來自哪個檔案。弱點的 `source`
+是 Grype 的漏洞公告網址，不是元件位置，弱點也沒有元件版本。這些資料 Syft 與 Grype 的原始輸出都有，
+只是解析時被丟掉。
+
+- `schema_version`: **2 → 3**。新欄位一律 `#[serde(default)]`，空值不輸出。
+- `Component` 新增三個欄位：
+  - `bom_ref?`：CycloneDX `bom-ref`
+  - `purl?`
+  - `locations[]`：Syft 的 `syft:location:N:path` 依 N 排序，路徑相對於掃描根目錄
+- `Vulnerability` 新增三個欄位：
+  - `component_version?`
+  - `component_purl?`
+  - `locations[]`
+
+  `component` 仍為元件名稱，語意不變。
+- **弱點 → 元件位置的對應**採退路鏈，依序取第一個有結果的：
+  1. Grype `artifact.locations`
+  2. `artifact.id` 等於某元件的 `bom_ref`。命中即停：該元件沒有位置時留空，不退到 purl 聯集
+     （否則會把同 purl 其他實例的位置掛到這筆弱點上）
+  3. 同 `purl` 的所有元件位置聯集（比對前兩側先做 percent-decode：Syft 把 scoped npm 套件寫成 `%40babel`，
+     Grype 重新序列化時可能寫成 `@babel`）。artifact 帶有 purl 時以此為準，對不到也不往下退：同名同版的套件
+     可能屬於別的生態系（例如 npm 與 PyPI 都有 lodash），混進來就是猜測
+  4. artifact 沒有 purl 時，才以同「名稱＋版本」的所有元件位置聯集
+  5. 都對不到時留空，不猜測。
+
+  Grype 自 SBOM 讀入時是否保留 id 與位置，在無漏洞 DB 的環境無法實測。若第 1、2 段都不成立，
+  就由第 3 段接手：同 purl 出現在多處時取聯集（精準度較低）；purl 字串若有 percent-decode 之外的差異
+  （例如 qualifiers 順序、大小寫），位置會留空（fail-closed，不猜測）。
+  **後續驗證**：以含漏洞 DB 的 Grype 對真實 SBOM 實測 `artifact.id` 與 `artifact.locations` 是否保留。
+- **區段來源**不新增欄位，報表由既有的 `meta.tool_versions` 與 `meta.db_snapshot` 組出。
+- **信任邊界（NFR-09）**：位置是相對於掃描目標根目錄的路徑，與 CBOM 資產的 `location` 同性質。
+  只記路徑，不含檔案內容。
+- **向後相容政策不變**：v3 的 `cytrace report` 讀 v1、v2 JSON 須可重建。新欄位缺漏時視為空，
+  報表的軟體產品文件表位置欄以「—」呈現，弱點列不顯示位置行。由回歸測試釘住。
+- 讀到 v3 JSON 的舊版 CyTrace（v2）會略過未知欄位並警告 `cli.schema_ahead`；這是既有機制，行為不變。

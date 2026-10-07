@@ -1443,6 +1443,62 @@ milestones:
             顯示、終態一律隱藏。
           獨立複審一輪（NEEDS_WORK：取消失敗的提示在掃描完成後仍留著，與出現的刪除鈕矛盾）後修正。
 
+      - id: T925
+        title: "報表來源標記：元件位置／purl、弱點對應元件版本與位置、各區段工具來源（ScanResult schema v3）"
+        type: NEW_FEATURE
+        priority: 2
+        adr: ADR-009
+        spec: null
+        srs_ref: FR-006
+        depends_on: []
+        status: completed
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "使用者 2026-10-07 詢問產出是否標記 SBOM／CBOM 內容來源；核准實作計畫"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-07"
+        description: |
+          報表只在封面列工具版本；軟體產品文件表看不出元件來自哪個檔案；弱點的「來源」是 Grype 的公告網址，
+          且沒有元件版本。Syft／Grype 原始輸出其實都有 bom-ref、purl 與位置，只是解析時被丟掉。
+          範圍與裁定見 ADR-009「修訂：schema v3」。
+
+          **結案（2026-10-07）**：
+          - schema v3：`Component` 加 `bom_ref`／`purl`／`locations`；`Vulnerability` 加 `component_version`／
+            `component_purl`／`locations`。新欄位皆 serde default、空值不輸出，v1／v2 JSON 照樣可重建。
+          - 解析：`parse_cyclonedx` 讀 bom-ref、purl 與依 N 排序的 `syft:location:N:path`；新增
+            `parse_grype_for(json, &components)` 做弱點→元件位置對應（Grype 自帶位置 → id＝bom-ref（命中即停）→ 同 purl 聯集，
+            比對前 percent-decode、有 purl 即到此為止 → 無 purl 時才用名稱＋版本 → 留空）。CLI `run_one` 與
+            server `run_pipeline` 改用它。
+          - 報表：三個區段標題下各有「資料來源」列；軟體產品文件表名稱下列 purl、新增位置欄（前 2 處，其餘
+            「另 N 處」按需展開）；弱點的元件欄顯示版本與第一個位置；原「來源」欄改名「公告來源」；列 key 改用
+            bom-ref（舊 JSON 以索引補位）。locales 新增鍵，報表樣板與 console 內嵌產物隨之重建。
+          - 文件：ADR-009 修訂節、SDS §4、UIUX_SPEC §2。
+          測試：
+          - types：v3 欄位往返與前端名稱、空值不輸出、v2 形狀可讀。
+          - parse：位置排序／缺號／非數字索引、空字串視同沒有、purl percent-decode（含不合法序列與非 UTF-8 的退回）、
+            對應鏈各段（bom-ref 命中即停、跨生態系同名套件不混入、Grype 空字串路徑濾掉）。
+          - CLI 與 server 管線各一支（fixture 的 Grype 不帶位置，須經對應鏈；驗的是管線有做對應，不驗走哪一段）。
+            CLI 以 v1、v2 ScanResult 經 `report` 重建。golden 重產，diff 只多新欄位。
+          - 報表注入：資料段在結束標籤前須完整含元件名與位置的跳脫結果。
+          - 真引擎（CI，釘選 syft；於 PR 的 CI 驗證，本機僅以非釘選版預跑）：同一套件在兩個檔案，元件須帶 purl
+            與兩個相對路徑。
+          - 端到端（本機）：真的 `cytrace report` 產 v3／v2 報表，兩語 42 項檢查：三區段來源列、purl、位置欄與
+            「另 N 處」展開、弱點的版本與位置、公告來源表頭、同名同版與同 CVE 多筆皆列出、v2 位置欄「—」、
+            無 CBOM 時不顯示 CBOM 來源列、依語言的 DB 標籤。
+          - 列 key 唯一性由程式碼構造保證（SBOM 以 bom_ref 為鍵、舊 JSON 以索引補位；弱點以 id＋索引）。React 的
+            key 撞號警告只在開發建置出現，正式建置的報表觀察不到（突變實測不轉紅），故不設端到端檢查。
+          反向實測，各自轉紅：parse 不讀位置、拿掉 purl 段、拿掉 serde default、報表不顯示來源列、位置一律全列、
+          purl 改回逐字比對、bom-ref 命中後仍往下退、注入不跳脫、CBOM 來源列不論狀態一律顯示。
+          待驗：以含漏洞 DB 的 Grype 實測 artifact.id／locations 是否保留（見 ADR-009 修訂節「後續驗證」）。
+          過程中查出並修正：
+          - 原本 artifact 帶 purl 卻對不到時會退到名稱＋版本，可能混入其他生態系的同名套件（拿掉 purl 段的突變
+            一開始沒有轉紅而查出）。
+          - 兩支端到端檢查一度沒有咬到：CBOM 來源列的負向檢查因前綴帶尾空白而永遠比對不到（已修正）；
+            key 撞號檢查在正式建置下不可觀察（已移除，改由程式碼構造保證）。
+          獨立複審兩輪：第一輪 NEEDS_WORK（bom-ref 命中但元件無位置時會退到 purl 聯集、ADR 對第 1、2 段影響的
+          說法不實、CBOM 來源列與列 key 缺證據、斷言名實不符、英文報表的 DB 標籤用全形括號、文件殘留 schema v2）
+          後修正；第二輪 NEEDS_WORK 僅本結案記錄與證據不符，已更正。
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01

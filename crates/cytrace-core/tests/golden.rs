@@ -32,7 +32,7 @@ fn fixed_meta() -> Meta {
 #[test]
 fn scanresult_matches_golden_baseline() {
     let components = parse::parse_cyclonedx(CYCLONEDX).unwrap();
-    let findings = parse::parse_grype(GRYPE).unwrap();
+    let findings = parse::parse_grype_for(GRYPE, &components).unwrap();
     let result = assemble(fixed_meta(), components, findings);
     let actual = serde_json::to_string_pretty(&result).unwrap();
 
@@ -65,7 +65,7 @@ fn scanresult_with_crypto_matches_golden_baseline() {
     use cytrace_types::{CbomStatus, CryptoInventory};
 
     let components = parse::parse_cyclonedx(CYCLONEDX).unwrap();
-    let findings = parse::parse_grype(GRYPE).unwrap();
+    let findings = parse::parse_grype_for(GRYPE, &components).unwrap();
     let assets = parse::parse_cbom(CBOM).unwrap();
     let mut meta = fixed_meta();
     meta.tool_versions.theia = Some("1.1.2".into());

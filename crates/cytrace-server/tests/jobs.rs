@@ -654,6 +654,47 @@ async fn canceling_queued_upload_removes_its_input() {
         .exists());
 }
 
+/// T925：server 管線同樣要把弱點對應到元件位置（ADR-009「修訂：schema v3」）。
+/// fixture 的 Grype artifact 不帶位置，必須經對應鏈才拿得到；各段的取捨由 parse.rs 的單元測試釘住。
+#[tokio::test]
+async fn scan_result_links_findings_to_component_locations() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (_, job) = create_job(&env.app, &cookie, "app", None).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_terminal(&env.app, &cookie, &id).await["status"],
+        "done"
+    );
+
+    let req = Request::get(format!("/api/v1/jobs/{id}/result"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (status, v) = send_json(&env.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(v["schema_version"], 3);
+    let loc = |cve: &str| {
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == cve)
+            .unwrap_or_else(|| panic!("找不到 {cve}"))["locations"]
+            .clone()
+    };
+    assert_eq!(
+        loc("CVE-2024-1111"),
+        serde_json::json!(["/var/lib/dpkg/status"]),
+        "libfoo 應以 purl 對到位置"
+    );
+    assert_eq!(
+        loc("CVE-2024-2222"),
+        serde_json::json!(["/package-lock.json", "/web/package-lock.json"]),
+        "barlib 應對到位置（fixture 的 id 與 purl 都對得上：這支驗的是管線有做對應，不驗走哪一段）"
+    );
+}
+
 /// #42：DELETE 讀到 queued 之後、嘗試取消之前，runner 搶先開始掃描——取消必然失敗。
 /// 此時不得回 204 謊稱已取消，應回 409；正在被掃描的 input/ 也不得刪。
 #[tokio::test]

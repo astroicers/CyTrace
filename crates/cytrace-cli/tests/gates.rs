@@ -186,3 +186,87 @@ fn db_snapshot_is_sentinel_when_grype_cannot_report_status() {
          db_snapshot 必須收斂到顯性 sentinel，而非假值或缺欄"
     );
 }
+
+/// 報表內嵌的 ScanResult（`<script id="cytrace-data">`；注入時 `</` 跳脫為 `<\/`）。
+fn embedded_scanresult(html: &str) -> serde_json::Value {
+    let start = r#"<script id="cytrace-data" type="application/json">"#;
+    let from = html.find(start).expect("報表應內嵌 ScanResult") + start.len();
+    let to = from + html[from..].find("</script>").expect("資料區塊應結束");
+    serde_json::from_str(&html[from..to].replace("<\\/", "</")).expect("內嵌資料為 JSON")
+}
+
+/// T925：`run` 走的管線要把弱點對應到元件位置（ADR-009「修訂：schema v3」）。
+/// fixture 的 Grype artifact 不帶位置，必須經對應鏈才拿得到；各段的取捨由 parse.rs 的單元測試釘住。
+#[test]
+fn run_links_findings_to_component_locations() {
+    let e = Env::new("provenance");
+    let out_html = e.out("r.html");
+    assert_eq!(e.run(&["run", &e.target(), "--out", &out_html]), 0);
+    let v = embedded_scanresult(&fs::read_to_string(&out_html).expect("讀報表"));
+
+    assert_eq!(v["schema_version"], 3);
+    let comps = v["components"].as_array().unwrap();
+    assert_eq!(
+        comps[1]["locations"],
+        serde_json::json!(["/package-lock.json", "/web/package-lock.json"])
+    );
+    assert_eq!(comps[1]["purl"], "pkg:npm/barlib@1.4.0");
+
+    let loc = |id: &str| {
+        v["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == id)
+            .unwrap_or_else(|| panic!("找不到 {id}"))["locations"]
+            .clone()
+    };
+    assert_eq!(
+        loc("CVE-2024-1111"),
+        serde_json::json!(["/var/lib/dpkg/status"]),
+        "libfoo 應以 purl 對到位置"
+    );
+    assert_eq!(
+        loc("CVE-2024-2222"),
+        serde_json::json!(["/package-lock.json", "/web/package-lock.json"]),
+        "barlib 應對到位置（fixture 的 id 與 purl 都對得上：這支驗的是管線有做對應，不驗走哪一段）"
+    );
+}
+
+/// ADR-009 相容政策：v3 的 `cytrace report` 必須能重建 v1、v2 的 ScanResult（缺來源欄位視為空）。
+/// v2 檔取自 schema v3 之前的 golden baseline（真正由 v2 產出）。
+#[test]
+fn report_rebuilds_v1_and_v2_scanresults() {
+    let e = Env::new("oldschema");
+    let v1 = r#"{
+        "schema_version": 1,
+        "meta": {
+            "target": "dir:/tmp/x",
+            "tool_versions": {"syft": "1.45.1", "grype": "0.114.0"},
+            "db_snapshot": {"version": "5", "built": "2026-07-01T00:00:00Z"},
+            "generated_at": "2026-07-01T00:00:00Z"
+        },
+        "components": [{"name": "libfoo", "version": "3.0.1", "type": "library", "licenses": []}],
+        "findings": [{"id": "CVE-1", "severity": "High", "component": "libfoo", "source": "nvd"}],
+        "summary": {"counts_by_severity": {"High": 1}, "overall_risk": "High"}
+    }"#;
+    let v1_path = e.out("v1.json");
+    fs::write(&v1_path, v1).expect("寫 v1");
+    let v2_path = format!("{FIXTURES}/scanresult-v2.json");
+
+    for (label, input, version) in [("v1", v1_path.as_str(), 1), ("v2", v2_path.as_str(), 2)] {
+        let out_html = e.out(&format!("{label}.html"));
+        assert_eq!(
+            e.run(&["report", input, "--out", &out_html]),
+            0,
+            "{label} 應可重建報表"
+        );
+        let v = embedded_scanresult(&fs::read_to_string(&out_html).expect("讀報表"));
+        assert_eq!(v["schema_version"], version, "{label}：保留原版本號");
+        assert!(
+            v["components"][0].get("locations").is_none(),
+            "{label}：缺來源欄位視為空，不補假值"
+        );
+        assert!(v["findings"][0].get("locations").is_none(), "{label}：同上");
+    }
+}

@@ -246,8 +246,9 @@ fn quantum_gate_does_not_pass_when_engine_skipped_files() {
 fn future_schema_version_is_detected() {
     use cytrace_core::schema_warning;
     // 舊版 binary 讀到新版檔案會靜默丟棄未知欄位——唯一的提示就是這個警告
-    assert!(schema_warning(3).is_some(), "超前版本須有警告");
-    assert!(schema_warning(2).is_none(), "同版不警告");
+    assert!(schema_warning(4).is_some(), "超前版本須有警告");
+    assert!(schema_warning(3).is_none(), "同版不警告");
+    assert!(schema_warning(2).is_none(), "舊版可讀，不警告");
     assert!(schema_warning(1).is_none(), "舊版可讀，不警告");
 }
 

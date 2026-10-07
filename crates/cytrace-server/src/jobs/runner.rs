@@ -149,7 +149,8 @@ fn run_pipeline(
     };
 
     let components = parse::parse_cyclonedx(&sbom)?;
-    let findings = parse::parse_grype(&grype)?;
+    // 弱點對應元件位置要用同一次掃描的元件清單（ADR-009「修訂：schema v3」）
+    let findings = parse::parse_grype_for(&grype, &components)?;
     let meta = Meta {
         target: target.to_string(),
         tool_versions: cytrace_core::engine::tool_versions(

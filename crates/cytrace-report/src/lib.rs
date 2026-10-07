@@ -92,6 +92,10 @@ mod tests {
                 component: "evil</script><b>".into(),
                 fixed_version: None,
                 source: "nvd".into(),
+                component_version: None,
+                component_purl: None,
+                // 位置同樣是使用者可控字串，一併驗證跳脫
+                locations: vec!["/x/</script>".into()],
             }],
             summary: Summary {
                 counts_by_severity: BTreeMap::new(),
@@ -156,10 +160,18 @@ mod tests {
         let html = render(&sample(), "zh-TW").unwrap();
         // 跳脫後不得出現裸 </script> 來自資料（只有結尾 tag 自己的）
         assert!(html.contains("<\\/script>"), "資料中的 </ 應被跳脫為 <\\/");
-        // 內嵌資料段不可提前以 </script> 關閉：資料裡的 </script> 必須是 <\/script>
+        // 內嵌資料段不可提前以 </script> 關閉：第一個 </script> 之前就要完整含有兩處跳脫後的值
+        // （元件名與 v3 的位置）。跳脫失效時資料段會在其中一處被截斷，下面兩條就會失敗。
         let data_seg = html.split("type=\"application/json\">").nth(1).unwrap();
         let before_close = data_seg.split("</script>").next().unwrap();
-        assert!(!before_close.contains("</script>"));
+        assert!(
+            before_close.contains(r#""component":"evil<\/script><b>""#),
+            "{before_close}"
+        );
+        assert!(
+            before_close.contains(r#""locations":["/x/<\/script>"]"#),
+            "{before_close}"
+        );
     }
 
     #[test]

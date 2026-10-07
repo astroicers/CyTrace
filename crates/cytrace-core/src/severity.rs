@@ -43,6 +43,9 @@ mod tests {
             component: "lib".into(),
             fixed_version: None,
             source: "test".into(),
+            component_version: None,
+            component_purl: None,
+            locations: vec![],
         }
     }
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "meta": {
     "target": "dir:/fixture",
     "tool_versions": {
@@ -21,6 +21,11 @@
       "type": "library",
       "licenses": [
         "Apache-2.0"
+      ],
+      "bom_ref": "pkg:deb/debian/libfoo@3.0.1?package-id=1111aaaa1111aaaa",
+      "purl": "pkg:deb/debian/libfoo@3.0.1",
+      "locations": [
+        "/var/lib/dpkg/status"
       ]
     },
     {
@@ -29,6 +34,12 @@
       "type": "library",
       "licenses": [
         "MIT"
+      ],
+      "bom_ref": "pkg:npm/barlib@1.4.0?package-id=2222bbbb2222bbbb",
+      "purl": "pkg:npm/barlib@1.4.0",
+      "locations": [
+        "/package-lock.json",
+        "/web/package-lock.json"
       ]
     }
   ],
@@ -39,14 +50,25 @@
       "cvss": 9.8,
       "component": "libfoo",
       "fixed_version": "3.0.2",
-      "source": "https://nvd.nist.gov/vuln/detail/CVE-2024-1111"
+      "source": "https://nvd.nist.gov/vuln/detail/CVE-2024-1111",
+      "component_version": "3.0.1",
+      "component_purl": "pkg:deb/debian/libfoo@3.0.1",
+      "locations": [
+        "/var/lib/dpkg/status"
+      ]
     },
     {
       "id": "CVE-2024-2222",
       "severity": "Medium",
       "cvss": 5.4,
       "component": "barlib",
-      "source": "ghsa"
+      "source": "ghsa",
+      "component_version": "1.4.0",
+      "component_purl": "pkg:npm/barlib@1.4.0",
+      "locations": [
+        "/package-lock.json",
+        "/web/package-lock.json"
+      ]
     }
   ],
   "summary": {
