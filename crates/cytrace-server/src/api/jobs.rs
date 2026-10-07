@@ -84,11 +84,23 @@ pub async fn create(
         ApiError::new(lang, ErrorKind::ForbiddenPath)
             .with_detail(format!("{}: root={root} path={path}", e.as_str()))
     })?;
+    // #49：
+    // - 檔案（例如映像 tar）不加前綴，交給 Syft 自動辨識；一律 `dir:` 時 Syft 以 not a directory 失敗。
+    // - OCI layout 目錄 → `oci-dir:`，與 `cbom_target` 對它走 theia image 模式一致。扁平的 layout 給 `dir:`
+    //   Syft 也會認作映像；Docker 匯出的巢狀 index 給 `dir:` 則靜默得 0，給 `oci-dir:` 會明確失敗（實測）。
+    // - 其餘目錄維持 `dir:`。
+    let scan_target = if resolved.is_file() {
+        resolved.display().to_string()
+    } else if cytrace_core::engine::is_oci_layout(&resolved) {
+        format!("oci-dir:{}", resolved.display())
+    } else {
+        format!("dir:{}", resolved.display())
+    };
     let record = submit(
         &app,
         lang,
         format!("mounted:{root}/{path}"),
-        format!("dir:{}", resolved.display()),
+        scan_target,
         body.fail_on.clone(),
         body.cbom,
     )?;

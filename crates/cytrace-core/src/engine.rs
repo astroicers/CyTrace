@@ -387,11 +387,11 @@ pub fn cbom_target(target: &str) -> Result<CbomTarget> {
     Ok(CbomTarget::Image(path.to_path_buf()))
 }
 
-/// OCI image layout 目錄的實質驗證（非僅檔名存在）。
+/// OCI image layout 目錄的實質驗證（非僅檔名存在）。server 判斷上傳與掛載目標時共用。
 ///
 /// 依 OCI Image Layout 規格要求三者齊備：`oci-layout` 為含 `imageLayoutVersion` 的
 /// 合法 JSON、`index.json` 存在、`blobs/` 目錄存在。
-fn is_oci_layout(dir: &std::path::Path) -> bool {
+pub fn is_oci_layout(dir: &std::path::Path) -> bool {
     let Ok(text) = std::fs::read_to_string(dir.join("oci-layout")) else {
         return false;
     };

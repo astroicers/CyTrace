@@ -822,3 +822,179 @@ fn pinned_syft_components_carry_purl_and_locations() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// #49：釘選版 syft 掃 docker-save 映像時，`docker-archive:` 抓得到套件，解開後以 `dir:` 掃則一個都沒有。
+///
+/// server 上傳映像 tar 時改給 `docker-archive:` 的依據就是這個行為。若某次升級 syft 讓 `dir:` 也能掃進
+/// layer，或 `docker-archive:` 不再可用，這支會提醒重新檢視 `upload::image_aware_target`。
+/// 映像以手工構造（一層，只含 apk 的已安裝套件資料庫），不依賴 docker 或網路。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_reads_docker_archive_but_not_its_extracted_dir() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+
+    let (layer, config) = mini_image_layer_and_config();
+    let config_name = format!("{}.json", sha256_hex(config.as_bytes()));
+    let manifest = serde_json::json!([
+        { "Config": config_name, "RepoTags": ["cytrace-mini:1"], "Layers": ["layer.tar"] }
+    ])
+    .to_string();
+    let image = tar_of(&[
+        ("manifest.json", manifest.as_bytes()),
+        (&config_name, config.as_bytes()),
+        ("layer.tar", &layer),
+    ]);
+
+    let dir = workspace("docker-archive");
+    let tar_path = dir.join("mini.tar");
+    fs::write(&tar_path, &image).unwrap();
+    let extracted = dir.join("extracted");
+    fs::create_dir_all(&extracted).unwrap();
+    tar::Archive::new(&image[..]).unpack(&extracted).unwrap();
+
+    assert_eq!(
+        syft_libraries(format!("docker-archive:{}", tar_path.display())),
+        [("musl".to_string(), "1.2.5-r0".to_string())],
+        "docker-archive 應抓到映像層裡的套件"
+    );
+    assert!(
+        syft_libraries(format!("dir:{}", extracted.display())).is_empty(),
+        "解開後以 dir: 掃描不會打開 layer tar——若此斷言失敗，代表 syft 行為改變，請重新檢視上傳映像的處理"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+fn tar_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut buf);
+        for (name, data) in entries {
+            let mut h = tar::Header::new_ustar();
+            h.set_size(data.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            b.append_data(&mut h, name, *data).unwrap();
+        }
+        b.finish().unwrap();
+    }
+    buf
+}
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b)
+        .iter()
+        .map(|x| format!("{x:02x}"))
+        .collect()
+}
+
+/// 最小映像的單一層（只含 apk 的已安裝套件資料庫：musl 1.2.5-r0）與其 config。
+fn mini_image_layer_and_config() -> (Vec<u8>, String) {
+    let layer = tar_of(&[(
+        "lib/apk/db/installed",
+        b"P:musl\nV:1.2.5-r0\nA:x86_64\nL:MIT\nT:the musl c library\n\n",
+    )]);
+    let config = serde_json::json!({
+        "architecture": "amd64", "os": "linux", "config": {},
+        "rootfs": { "type": "layers", "diff_ids": [format!("sha256:{}", sha256_hex(&layer))] }
+    })
+    .to_string();
+    (layer, config)
+}
+
+/// 以釘選 syft 掃描 `target`，回傳 library 類元件的（名稱, 版本）。
+fn syft_libraries(target: String) -> Vec<(String, String)> {
+    let sbom = RealEngine.sbom(&target).expect("syft 應產出 CycloneDX");
+    cytrace_core::parse::parse_cyclonedx(&sbom)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == "library")
+        .map(|c| (c.name, c.version))
+        .collect()
+}
+
+/// #49：OCI layout 目錄在兩種 index 形態下的行為，server 對 OCI layout 給 `oci-dir:` 的依據：
+/// - 扁平（index.json 直接指向映像 manifest，例如 skopeo 匯出）：`oci-dir:` 掃得到映像層裡的套件。
+///   （`dir:` 也會被 Syft 自動認作映像，實測 source type 為 image，故這裡不比較兩者。）
+/// - 巢狀（index.json 指向另一份 image index，Docker 25 起的匯出）：`oci-dir:` **明確失敗**，`dir:` 則
+///   **靜默得 0**——給 `oci-dir:` 讓 job 失敗而不是交出空報表。上傳的 docker-save 另走 docker-archive。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_oci_dir_reads_flat_layout_and_fails_loudly_on_nested_index() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+
+    let (layer, config) = mini_image_layer_and_config();
+    let manifest = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "config": { "mediaType": "application/vnd.oci.image.config.v1+json",
+                    "digest": format!("sha256:{}", sha256_hex(config.as_bytes())), "size": config.len() },
+        "layers": [{ "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                     "digest": format!("sha256:{}", sha256_hex(&layer)), "size": layer.len() }]
+    })
+    .to_string();
+    let index = serde_json::json!({
+        "schemaVersion": 2,
+        "manifests": [{ "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                        "digest": format!("sha256:{}", sha256_hex(manifest.as_bytes())), "size": manifest.len() }]
+    })
+    .to_string();
+
+    // 巢狀：最外層 index.json 指向一份 image index blob，那份再指向映像 manifest
+    let nested_index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{ "mediaType": "application/vnd.oci.image.index.v1+json",
+                        "digest": format!("sha256:{}", sha256_hex(index.as_bytes())), "size": index.len() }]
+    })
+    .to_string();
+    let write_layout = |name: &str, top: &str, extra: &[&[u8]]| -> std::path::PathBuf {
+        let dir = workspace(name);
+        let blobs = dir.join("blobs/sha256");
+        fs::create_dir_all(&blobs).unwrap();
+        for blob in [&layer[..], config.as_bytes(), manifest.as_bytes()]
+            .into_iter()
+            .chain(extra.iter().copied())
+        {
+            fs::write(blobs.join(sha256_hex(blob)), blob).unwrap();
+        }
+        fs::write(dir.join("oci-layout"), r#"{"imageLayoutVersion":"1.0.0"}"#).unwrap();
+        fs::write(dir.join("index.json"), top).unwrap();
+        assert!(
+            cytrace_core::engine::is_oci_layout(&dir),
+            "{name} 應被認作 OCI layout"
+        );
+        dir
+    };
+
+    let flat = write_layout("oci-flat", &index, &[]);
+    assert_eq!(
+        syft_libraries(format!("oci-dir:{}", flat.display())),
+        [("musl".to_string(), "1.2.5-r0".to_string())],
+        "扁平 layout 以 oci-dir 應抓到映像層裡的套件"
+    );
+
+    let nested = write_layout("oci-nested", &nested_index, &[index.as_bytes()]);
+    assert!(
+        RealEngine
+            .sbom(&format!("oci-dir:{}", nested.display()))
+            .is_err(),
+        "巢狀 index 以 oci-dir 應明確失敗——若 syft 開始支援，上傳 docker-save 可改回 oci-dir 並重新檢視"
+    );
+    assert!(
+        syft_libraries(format!("dir:{}", nested.display())).is_empty(),
+        "巢狀 index 以 dir: 靜默得 0——這正是不給 dir: 的理由；若此斷言失敗，代表 syft 行為改變"
+    );
+    let _ = fs::remove_dir_all(&flat);
+    let _ = fs::remove_dir_all(&nested);
+}

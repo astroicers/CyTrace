@@ -173,6 +173,9 @@ docker images --digests
 - [ ] **掛載目標**（`/scan-targets` 搭配 `CYTRACE_SCAN_ROOTS`）送出掃描，完成後可線上檢視報表，也能下載 SBOM（CycloneDX、SPDX）與 Grype 結果。
 - [ ] **上傳掃描**（zip 或 tar）完成後，伺服器上該工作的 `input/` 已不存在（NFR-09；預設 `CYTRACE_KEEP_INPUT=false`）。
       檢查路徑：`<data volume>/jobs/<job id>/input`
+- [ ] **映像掃描**：用 `docker save <映像> -o img.tar` 匯出一個場域內的映像，分別以上傳與掛載兩種方式掃描。兩者的
+      元件數都應大於 0，且與 CLI `cytrace-offline run docker-archive:img.tar` 的結果相同。
+      一個映像一個 tar；gzip 壓縮的映像請用上傳方式（掛載不支援）。其他限制見 ADR-011 修訂節。
 - [ ] （選做）從控制台下載 ScanResult，在另一台機器以 `cytrace report <檔案>` 重建報表，內容一致。
 
 **停機與降級**：

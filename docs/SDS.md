@@ -318,8 +318,10 @@ ScanResult {
   - 沒有資料庫，`{data_dir}/jobs/<id>/` 的檔案系統就是狀態真相；`job.json` 以暫存檔加 rename 原子落盤；
   - 重啟時，非終態的 job 標為 `interrupted`；損毀的記錄改名為 `.corrupt` 隔離，改名成功才回報。
 - **輸入**：
-  - 上傳：multipart 串流，zip／tar／tar.gz 有三道解壓防護；
-  - 掛載目錄白名單：先做語彙檢查，再以 canonicalize 加前綴驗證擋 symlink 逃逸。
+  - 上傳：multipart 串流，zip／tar／tar.gz 有三道解壓防護。解開後依內容決定 Syft 的目標：docker-save →
+    `docker-archive:<原始 tar>`（gzip 先解壓）；只有 OCI layout → `oci-dir:`；其餘 → `dir:`（ADR-011 修訂，#49）；
+  - 掛載目錄白名單：先做語彙檢查，再以 canonicalize 加前綴驗證擋 symlink 逃逸。目標是檔案（例如映像 tar）時
+    不加 `dir:`，交給 Syft 自動辨識；目錄是 OCI layout 時給 `oci-dir:`，其餘目錄 `dir:`（ADR-011 修訂，#49）。
 - **API**：
   - 路徑：`/api/v1` 下的 session、targets、jobs、upload、report、result、artifacts、version，加上 `/healthz`；
   - 產物 `GET /jobs/{id}/artifacts/{kind}`：`sbom`（CycloneDX）、`spdx`、`grype`、`cbom`，以附件回應

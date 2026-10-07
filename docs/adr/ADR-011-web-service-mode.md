@@ -170,3 +170,36 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
   T919 起另有 `sbom.spdx.json`（Web 服務模式一律產出）。
 - 決策 7 的 artifacts 端點種類：`sbom`、`spdx`、`grype`、`cbom`，以附件下載；單筆 job 查詢另附
   `artifacts` 欄位，列出實際存在的產物。落盤的 `job.json` 格式不變。
+
+## 修訂：映像 tar 的掃描目標形態（2026-10-07，T927／#49）
+
+**裁定來源**：使用者於 2026-10-07 核准後續工作計畫（T927）。
+
+**實測起因**（釘選版 Syft 1.45.1，Docker 28 匯出的 alpine）：
+- 上傳的 `docker save` tar 被判為一般 tar，解開後以 `dir:` 掃描，結果**靜默得到 0 個元件**。CLI 以 `docker-archive:` 掃描同一個 tar，可抓到 16 個套件。
+- 掛載目標一律組成 `dir:`。掛載映像 `.tar` 檔時，Syft 以 not a directory 失敗。
+
+**決定**：
+- **上傳**：解開後依內容決定目標形態（`upload::image_aware_target`）。
+  - 根目錄的 `manifest.json` 是非空陣列，且每個元素都有 `Layers` 陣列，視為 docker-save：
+    - 一般 tar → `docker-archive:<原始 tar>`。
+    - gzip 壓縮 → 先解壓成 `<input>/image.tar`，再以 `docker-archive:` 掃描，因為 Syft 讀不了壓縮的映像 tar。
+      解壓量的上限是「解壓上限＋檔頭餘量」（每個檔案 4 KiB，外加 16 個）：tar 串流比內容多出檔頭與補齊，
+      只用內容上限的話，內容剛好在上限內的合法映像會在這一步被拒收。tar 結尾之後的填充則在這一步擋下。
+    - 前端專案常見的 PWA `manifest.json` 是物件，不會被誤判；空陣列也不算。
+  - Docker 25 起的 `docker save` 會同時寫出 OCI layout。Syft 1.45.1 的 `oci-dir` 解析不了它的巢狀 index，所以有 docker-save 清單時一律走 `docker-archive:`。
+  - 只有 OCI layout（例如 skopeo 匯出）→ `oci-dir:<解開的目錄>`。真引擎測試以手工構造的扁平 layout 驗證可掃到套件（`pinned_syft_oci_dir_reads_flat_layout_and_fails_loudly_on_nested_index`）。
+  - 其餘 → `dir:`。zip 包不做上述 docker-save 轉換（見已知限制）。
+- **掛載**：
+  - 解析出的目標是檔案時不加 `dir:`，交給 Syft 自動辨識。實測可認出 docker-archive；一般原始碼 tar 與 Go 執行檔照常掃描其內容。
+  - 目錄是 OCI layout 時給 `oci-dir:`，其餘目錄維持 `dir:`。扁平 layout 給 `dir:` 時 Syft 也會認作映像；但 Docker 匯出的巢狀 index 給 `dir:` 會**靜默得到 0**，給 `oci-dir:` 則明確失敗——寧可失敗，不交出空報表。
+- **CBOM**：`cbom_target` 先剝除 `dir:`／`docker-archive:`／`oci-archive:`／`oci-dir:` 前綴。目錄依 `is_oci_layout` 決定 theia 的 image 或 dir 模式，與上述 Syft 的判斷共用同一個函式；檔案一律依 magic bytes 當映像處理。掛載的非映像檔案在 CBOM 側盤點失敗並記錄於報表（實測：原始碼 tar → `cbom.err.empty_output`、Go 執行檔 → `cbom.err.target_not_archive`），SBOM 與弱點照常產出；這是既有行為，與 CLI 相同。
+- **實測**（釘選 Syft 1.45.1／Grype 0.114.0／theia 1.1.2、真實漏洞 DB，同一個 alpine 映像，皆帶 CBOM）：CLI `run docker-archive:`、上傳 tar、上傳 tar.gz、掛載 tar 四條路徑都是 96 個元件、30 筆弱點、CBOM 2904 項。
+- **已知限制**（實測原文見 #49 的 PR）：
+  - gzip 壓縮的映像以**掛載**方式提供時，Syft 讀不了，且不加前綴時靜默得到 0 個元件。請改以上傳方式提供，或先解壓再掛載。
+  - **zip 包的映像**不轉成 docker-archive：舊式匯出落到 `dir:`，靜默得到 0；Docker 25 起的匯出因帶 OCI layout 落到 `oci-dir:`，Syft 報錯。映像請以 tar 或 tar.gz 上傳。
+  - **映像放在子目錄裡**（例如 tar 內是 `images/app.tar` 或 `app/manifest.json`）只看根目錄，落到 `dir:`，靜默得到 0。
+  - **多映像**（`docker save a b`）：Syft 以 `cannot process multiple docker manifests` 失敗，job 顯示失敗。請一個映像一個 tar。
+  - 掛載**已解開的** Docker 匯出目錄：Docker 25 起的匯出因巢狀 index 明確失敗；更舊的匯出沒有 OCI layout，落到 `dir:`，靜默得到 0。請掛載 tar 檔本身。
+  - 磁碟峰值：映像 tar 仍會完整解開到 `extracted/` 以判斷形態。tar 約佔兩份（原檔＋解開內容），tar.gz 約三份（再加 `image.tar`），都在 job 的 `input/` 底下、受解壓上限約束。
+- 原始上傳檔與解壓產物都在 `input/` 底下，掃描結束後照 #39 的規則刪除。
