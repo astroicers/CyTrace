@@ -1534,10 +1534,10 @@ milestones:
         spec: null
         srs_ref: FR-001
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: review
-        source_ref: "T925 後續規劃（2026-10-07）"
+        source_ref: "T925 後續規劃（2026-10-07）；GitHub #49"
         triggered_by: review
         sla_hours: 168
         imported_at: "2026-10-07"
@@ -1545,6 +1545,17 @@ milestones:
           Web 上傳 docker save 的 tar 會被判為一般 tar，解開後以 dir: 掃描（upload.rs prepare）。Syft 的目錄掃描不打開內層
           layer tar，元件可能大量漏抓，待實測。掛載目標一律加 dir:（api/jobs.rs），掛載的映像 .tar 檔無法掃描。
           計畫：先實測確認；再依內容形態給 syft 正確的目標（docker-archive:<原始 tar>／oci-dir:<解開目錄>），掛載路徑比照辦理。
+
+          **結案（2026-10-07，PR #52）**：實測證實缺陷。釘選 Syft 1.45.1 掃 Docker 28 匯出的 alpine：
+          - docker-archive: 得 96 個元件。
+          - 解開後 dir: 得 0。
+          - 掛載 tar 以 dir: 直接失敗。
+          修正：
+          - 上傳依解開後的內容給目標：docker-save → docker-archive:；tar.gz 先解壓成 image.tar；只有 OCI layout → oci-dir:；其餘 → dir:。
+          - 掛載：檔案不加前綴；OCI layout 目錄給 oci-dir:，與 cbom_target 一致。
+          真實端到端（釘選三引擎、真實 DB、帶 CBOM）：CLI、上傳 tar、上傳 tar.gz、掛載 tar 四條路徑都是 96 元件、30 弱點、
+          CBOM 2904 項。多映像、zip 包的映像、子目錄裡的映像、掛載 gzip 映像、掛載已解開的匯出目錄列為已知限制（ADR-011 修訂）。
+          獨立複審兩輪。第二輪的 low finding「預期失敗的路徑錯誤訊息不帶成因」由使用者裁定另開 #51。
 
       - id: T928
         title: "軟體產品文件表與 ScanResult 排除 Syft 的 file 類元件"
