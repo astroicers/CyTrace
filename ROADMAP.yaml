@@ -1499,6 +1499,110 @@ milestones:
           獨立複審兩輪：第一輪 NEEDS_WORK（bom-ref 命中但元件無位置時會退到 purl 聯集、ADR 對第 1、2 段影響的
           說法不實、CBOM 來源列與列 key 缺證據、斷言名實不符、英文報表的 DB 標籤用全形括號、文件殘留 schema v2）
           後修正；第二輪 NEEDS_WORK 僅本結案記錄與證據不符，已更正。
+      - id: T926
+        title: "Grype 對應實測：artifact.id 與位置是否保留（T925 後續驗證）"
+        type: GENERAL
+        priority: 2
+        adr: ADR-009
+        spec: null
+        srs_ref: FR-002
+        depends_on: [T925]
+        status: completed
+        estimated_complexity: low
+        source_type: review
+        source_ref: "T925 複審待補證據；使用者 2026-10-07 同意在開發機下載 Grype DB 實測"
+        triggered_by: review
+        sla_hours: 72
+        imported_at: "2026-10-07"
+        description: |
+          T925 的弱點→元件位置對應鏈，第 1、2 段（Grype 自帶位置、artifact.id 等於 bom-ref）在無漏洞 DB 的環境無法實測。
+
+          **結案（2026-10-07）**：使用釘選版 Syft 1.45.1、Grype 0.114.0，漏洞 DB v6.1.10 下載到 scratchpad 的獨立
+          快取（未動 ~/.cache）。目標目錄的同一套件分布在兩份 lockfile，並含 scoped npm 套件與 PyPI 套件。結果：
+          - artifact.id 一律等於 bom-ref（5／5）。
+          - artifact.locations 逐實例保留。
+          - scoped npm 套件的 purl 編碼兩邊一致（%40）。
+          第 1 段即為主路徑。真的 `cytrace run` 產出含 17 筆真實弱點的報表，全部帶有正確位置。結論記入 ADR-009 修訂節。
+          另發現漏洞 DB 解開後約 3.0 GB，文件原寫 1.7 GB，已更正（DOCKER.md、FIELD_ACCEPTANCE.md、package.ps1 註解）。
+          實測報表也直接呈現了 T928 的問題：軟體產品文件表混有 3 列以主機絕對路徑為名的 file 類元件。
+
+      - id: T927
+        title: "映像 tar 與 OCI layout 的正確掃描：上傳不再當目錄掃、掛載的映像檔可掃"
+        type: BUGFIX
+        priority: 1
+        adr: ADR-011
+        spec: null
+        srs_ref: FR-001
+        depends_on: []
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T925 後續規劃（2026-10-07）"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-07"
+        description: |
+          Web 上傳 docker save 的 tar 會被判為一般 tar，解開後以 dir: 掃描（upload.rs prepare）。Syft 的目錄掃描不打開內層
+          layer tar，元件可能大量漏抓，待實測。掛載目標一律加 dir:（api/jobs.rs），掛載的映像 .tar 檔無法掃描。
+          計畫：先實測確認；再依內容形態給 syft 正確的目標（docker-archive:<原始 tar>／oci-dir:<解開目錄>），掛載路徑比照辦理。
+
+      - id: T928
+        title: "軟體產品文件表與 ScanResult 排除 Syft 的 file 類元件"
+        type: BUGFIX
+        priority: 2
+        adr: ADR-009
+        spec: null
+        srs_ref: NFR-09
+        depends_on: []
+        status: pending
+        estimated_complexity: low
+        source_type: manual
+        source_ref: "使用者 2026-10-07 裁定：從報表與 ScanResult 排除，原始 sbom.cdx.json 保留"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-07"
+        description: |
+          Syft 把 lockfile、二進位檔列成 type:"file" 元件，以主機絕對路徑為名，沒有版本、沒有 purl，不參與弱點比對。
+          它們混在軟體產品文件表裡，Web 模式下還會暴露資料目錄路徑。parse_cyclonedx 改為略過，ADR-009 修訂節補記。
+
+      - id: T929
+        title: "發布 v0.6.0 與離線安裝包（Linux／Windows；含 DB 快照與 minisign 簽章）"
+        type: GENERAL
+        priority: 1
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T927, T928]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "T925 後續規劃（2026-10-07）"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-07"
+        description: |
+          把 #39 起的修正（T922 至 T928）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
+          終端機執行；Windows 包需要 Windows 建置機。DB 快照約 3 GB，媒體容量依此規劃。
+
+      - id: T930
+        title: "場域驗收演練（依 docs/FIELD_ACCEPTANCE.md，由人在斷網目標機執行）"
+        type: GENERAL
+        priority: 1
+        adr: null
+        spec: null
+        srs_ref: null
+        depends_on: [T929]
+        status: pending
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "T925 後續規劃（2026-10-07）"
+        triggered_by: manual
+        sla_hours: 336
+        imported_at: "2026-10-07"
+        description: |
+          完整離線安裝包從未在真正斷網的機器上走完驗章、安裝、掃描、報表這一輪，是交件前最大的未驗證項。演練前把 T927
+          新增的映像掃描項目補進驗收清單；演練後依清單第 9 節的偏差紀錄開票。
+
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
     target_date: 2027-01-01
