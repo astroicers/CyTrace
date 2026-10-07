@@ -146,7 +146,13 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
   Grype 自 SBOM 讀入時是否保留 id 與位置，在無漏洞 DB 的環境無法實測。若第 1、2 段都不成立，
   就由第 3 段接手：同 purl 出現在多處時取聯集（精準度較低）；purl 字串若有 percent-decode 之外的差異
   （例如 qualifiers 順序、大小寫），位置會留空（fail-closed，不猜測）。
-  **後續驗證**：以含漏洞 DB 的 Grype 對真實 SBOM 實測 `artifact.id` 與 `artifact.locations` 是否保留。
+  **實測結論（2026-10-07，T926）**：以釘選版 Syft 1.45.1、Grype 0.114.0 與漏洞 DB v6.1.10，對同一套件分布在兩份
+  lockfile 的目錄實測，結果如下：
+  - `artifact.id` 一律等於 CycloneDX 的 `bom-ref`（5／5）。
+  - `artifact.locations` 逐實例保留：兩份 lockfile 的 lodash 各自帶自己的位置。
+  - scoped npm 套件的 purl 在兩邊都是 `%40babel`，編碼一致。
+  因此第 1 段（Grype 自帶位置）就是真實資料的主路徑，而且精準到實例；第 2 至 4 段只是防線。
+  以真的 `cytrace run` 掃同一目錄，17 筆弱點全部帶有正確的位置。
 - **區段來源**不新增欄位，報表由既有的 `meta.tool_versions` 與 `meta.db_snapshot` 組出。
 - **信任邊界（NFR-09）**：位置是相對於掃描目標根目錄的路徑，與 CBOM 資產的 `location` 同性質。
   只記路徑，不含檔案內容。

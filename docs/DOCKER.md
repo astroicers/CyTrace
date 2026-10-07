@@ -112,7 +112,7 @@ healthcheck:
 
 未掛 `/db` 或 DB 為空時，服務**可正常起站**（登入/瀏覽可用），
 但掃描回 `503 db_missing`；`/api/v1/version` 的 `db.present` 回報 `false`。
-用途：CI 冒煙免搬 1.7GB DB、場域 fail-fast 診斷。
+用途：CI 冒煙免搬數 GB 的 DB（2026-10 實測 v6.1.10 解開後約 3.0 GB）、場域 fail-fast 診斷。
 
 ## 離線搬運
 

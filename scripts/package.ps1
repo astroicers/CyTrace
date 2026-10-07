@@ -12,7 +12,7 @@
 .PARAMETER DbPath
   grype DB 來源（預設 $env:LOCALAPPDATA\grype\db；需先在有網段 grype db update）。
 .PARAMETER SkipDb
-  跳過 1.7GB DB 複製（CI 冒煙用；產物結構/wrapper/SHA256SUMS 仍完整）。
+  跳過數 GB 的 DB 複製（CI 冒煙用；產物結構/wrapper/SHA256SUMS 仍完整）。
 .EXAMPLE
   pwsh scripts/package.ps1
   pwsh scripts/package.ps1 -SkipDb        # CI 冒煙
