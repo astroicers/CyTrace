@@ -153,6 +153,17 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
   - scoped npm 套件的 purl 在兩邊都是 `%40babel`，編碼一致。
   因此第 1 段（Grype 自帶位置）就是真實資料的主路徑，而且精準到實例；第 2 至 4 段只是防線。
   以真的 `cytrace run` 掃同一目錄，17 筆弱點全部帶有正確的位置。
+- **Syft 的 `file` 類元件不進 ScanResult**（2026-10-07，T928；裁定來源：使用者 2026-10-07 選擇「排除」）：
+  - 起因：Syft 把讀過的檔案（lockfile、執行檔等）列成 `type:"file"` 元件，名稱是**主機絕對路徑**。
+    Web 模式下會露出 `<資料目錄>/jobs/<id>/input/…`；這些元件沒有版本、沒有 purl、不參與弱點比對。
+    T926／T927 的實測報表中，軟體產品文件表因此混入以路徑為名的列（alpine 映像 96 列中有 79 列是 file）。
+  - 決定：`parse_cyclonedx` 略過 `type == "file"` 的元件，ScanResult 的 `components`、報表的軟體產品文件表、
+    風險總評的元件總數都不含它們。其他類型照收，包含 `operating-system`。
+  - 原始 `sbom.cdx.json` 與 `sbom.spdx.json` 是 Syft 的原樣輸出，**不受影響**，照常完整交付。
+  - schema 欄位不變，不升版。T928 之前產生的 JSON 若含 file 元件，`cytrace report` 重建時照原樣呈現，不改寫既有檔案。
+  - 由單元測試與真引擎測試釘住：真引擎測試先斷言 Syft 原始輸出確實含 file 元件，再斷言解析結果一個都不留。
+  - **尚未收掉的同類外露**：Web 模式下 `meta.target`（報表封面「受測目標」）仍是內部掃描目標字串，帶資料目錄或
+    掃描根的主機路徑；CBOM 失敗的 `reason_detail` 亦然。另案 #53（ROADMAP T931）處理，擋 v0.6.0 發布（使用者 2026-10-07 裁定）。
 - **區段來源**不新增欄位，報表由既有的 `meta.tool_versions` 與 `meta.db_snapshot` 組出。
 - **信任邊界（NFR-09）**：位置是相對於掃描目標根目錄的路徑，與 CBOM 資產的 `location` 同性質。
   只記路徑，不含檔案內容。

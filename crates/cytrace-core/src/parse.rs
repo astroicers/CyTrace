@@ -265,6 +265,8 @@ pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
     Ok(doc
         .components
         .into_iter()
+        // Syft 的 file 類元件以主機絕對路徑為名、無版本與 purl、不參與比對：不進 ScanResult（T928，ADR-009 修訂）
+        .filter(|c| c.kind != "file")
         .map(|c| {
             let licenses = c
                 .licenses
@@ -814,6 +816,31 @@ mod tests {
         )
         .unwrap();
         assert!(v[0].locations.is_empty());
+    }
+
+    /// T928：Syft 把被讀過的檔案列成 `type:"file"` 元件，名稱是主機絕對路徑（Web 模式下會露出
+    /// `<資料目錄>/jobs/<id>/input/…`）、沒有版本與 purl、不參與弱點比對——不進 ScanResult 與報表
+    /// （ADR-009 修訂，使用者 2026-10-07 裁定）。其他類型（含 operating-system）照收；原始 sbom.cdx.json 不受影響。
+    #[test]
+    fn syft_file_components_are_excluded() {
+        let c = parse_cyclonedx(
+            r#"{ "components": [
+              { "bom-ref": "a1", "type": "library", "name": "requests", "version": "2.19.0",
+                "purl": "pkg:pypi/requests@2.19.0" },
+              { "bom-ref": "f1", "type": "file", "name": "/srv/cytrace/jobs/x/input/extracted/requirements.txt",
+                "hashes": [ { "alg": "SHA-1", "content": "0000000000000000000000000000000000000000" } ] },
+              { "bom-ref": "o1", "type": "operating-system", "name": "alpine", "version": "3.22.1" }
+            ] }"#,
+        )
+        .unwrap();
+        let kinds: Vec<(&str, &str)> = c
+            .iter()
+            .map(|x| (x.kind.as_str(), x.name.as_str()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [("library", "requests"), ("operating-system", "alpine")]
+        );
     }
 
     #[test]
