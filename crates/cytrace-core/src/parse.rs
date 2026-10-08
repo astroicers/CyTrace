@@ -259,6 +259,9 @@ struct CycloneLicense {
 }
 
 /// 解析 CycloneDX SBOM 為元件清單（→ 軟體產品文件表）。
+///
+/// 略過 `type == "file"` 的元件（Syft 的檔案紀錄：以路徑為名、無版本與 purl、不參與比對；T928，ADR-009 修訂）。
+/// 其他類型照收，包含 `library`、`application`（執行檔，Grype 會比對 CVE）、`operating-system`。
 pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
     let doc: CycloneDoc =
         serde_json::from_str(json).map_err(|e| CytraceError::Parse(format!("cyclonedx: {e}")))?;
@@ -830,7 +833,9 @@ mod tests {
                 "purl": "pkg:pypi/requests@2.19.0" },
               { "bom-ref": "f1", "type": "file", "name": "/srv/cytrace/jobs/x/input/extracted/requirements.txt",
                 "hashes": [ { "alg": "SHA-1", "content": "0000000000000000000000000000000000000000" } ] },
-              { "bom-ref": "o1", "type": "operating-system", "name": "alpine", "version": "3.22.1" }
+              { "bom-ref": "o1", "type": "operating-system", "name": "alpine", "version": "3.22.1" },
+              { "bom-ref": "b1", "type": "application", "name": "curl", "version": "7.81.0",
+                "purl": "pkg:generic/curl@7.81.0" }
             ] }"#,
         )
         .unwrap();
@@ -838,9 +843,15 @@ mod tests {
             .iter()
             .map(|x| (x.kind.as_str(), x.name.as_str()))
             .collect();
+        // application（執行檔，帶 purl、Grype 會比對 CVE）必須保留：若過濾改成只留 library／OS 的白名單，
+        // 執行檔會從文件表消失、其弱點的位置對應也會斷掉（釘選 Syft 1.45.1 實測執行檔輸出為 application）
         assert_eq!(
             kinds,
-            [("library", "requests"), ("operating-system", "alpine")]
+            [
+                ("library", "requests"),
+                ("operating-system", "alpine"),
+                ("application", "curl")
+            ]
         );
     }
 

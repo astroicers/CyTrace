@@ -161,10 +161,15 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
     - 壓縮檔目標：Syft 的暫存解壓路徑（`/tmp/syft-archive-contents-*/…`）。
     - 映像目標：映像內路徑（`/bin/busybox`），不是主機路徑。但它們同樣不是套件，alpine 映像的 96 列中有 79 列是這種元件。
   - 決定：`parse_cyclonedx` 略過 `type == "file"` 的元件，ScanResult 的 `components`、報表的軟體產品文件表、
-    風險總評的元件總數都不含它們。其他類型照收，包含 `operating-system`。
+    風險總評的元件總數都不含它們。其他類型照收，包含 `library`、`application`（執行檔，帶 purl、Grype 會比對 CVE）、
+    `operating-system`。
   - 原始 `sbom.cdx.json` 與 `sbom.spdx.json` 是 Syft 的原樣輸出，**不受影響**，照常完整交付。
   - schema 欄位不變，不升版。T928 之前產生的 JSON 若含 file 元件，`cytrace report` 重建時照原樣呈現，不改寫既有檔案。
-  - 由單元測試與真引擎測試釘住：真引擎測試先斷言 Syft 原始輸出確實含 file 元件，再斷言解析結果一個都不留。
+  - 由三層測試釘住：
+    - 單元測試：file 排除，library、application、operating-system 保留。
+    - 共用 fixture 含一筆 file 元件，golden 快照因此不變；server 測試斷言 job 目錄的 `sbom.cdx.json` 與引擎輸出一字不差、
+      `scan-result.json` 與 `/result` 不含 file 元件。
+    - 真引擎測試：先斷言 Syft 原始輸出確實含 file 元件，再斷言解析結果一個都不留。
   - **尚未收掉的同類外露**（另案 #53，ROADMAP T931，擋 v0.6.0 發布；使用者 2026-10-07 裁定）：
     - `meta.target`（報表封面「受測目標」）仍是內部掃描目標字串，帶資料目錄或掃描根的主機路徑。
     - CBOM 失敗的 `reason_detail` 帶目標路徑。

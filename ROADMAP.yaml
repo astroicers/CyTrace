@@ -1589,7 +1589,14 @@ milestones:
             - 第一輪（程式碼與三份文件）PASS，12 項正面證據、0 項反面證據。
             - 第二輪（合併前、整份 PR）NEEDS_WORK：ADR 外露清單漏了可下載的原始產物；起因寫法不精確（映像目標的
               file 元件是映像內路徑）；另有 4 項待補證據，並更正 T927 第一輪 finding 數為 8。
-            - 第三輪 NEEDS_WORK，17 項正面證據、0 項 finding；唯一缺口是最終 head 的 CI 結論，CI 全綠即達 PASS 條件（PR #54）。
+            - 第三輪 NEEDS_WORK，17 項正面證據、0 項 finding；唯一缺口是最終 head 的 CI 結論。補上 af98b4e 的 CI（8/8）後，
+              終判 PASS（21 項正面證據、0 項反面證據）。
+          - 合併前另做一次程式碼品質 review（Code Reviewer）：結論可合併，無 critical／high／medium。依使用者同意於合併前補上：
+            - application 類元件（執行檔；釘選 Syft 1.45.1 實測輸出為 application）保留的單元測試，防止過濾被改成白名單。
+            - 共用 fixture 加一筆 file 元件（golden 快照不變）；server 測試斷言交付的 sbom.cdx.json 與引擎輸出一字不差、
+              scan-result.json 與 /result 不含 file 元件。
+            - parse_cyclonedx 的 doc comment 寫明排除規則。
+            - 「重建舊版 JSON 時 file 元件照原樣呈現」併入 #53 一併考慮。
           - 複審時揭露：Web 模式的 `meta.target`、CBOM `reason_detail`、可下載的原始產物仍帶主機路徑，另開 #53（T931）。
 
       - id: T929
@@ -1652,6 +1659,8 @@ milestones:
           可下載的原始產物（sbom.cdx.json、sbom.spdx.json、grype.json）也帶同樣的主機路徑，包括來源描述，以及 dir:／
           單檔目標的 file 元件名稱。使用者 2026-10-07 裁定併入本票：優先以 Syft 自己的參數（例如 --source-name、--base-path）
           控制輸出，不事後改寫原始檔；用哪個參數須先實測。
+          另一併考慮：`cytrace report` 重建 v0.5.0 以前的 JSON 時，以伺服器路徑為名的 file 元件照原樣出現在文件表
+          （可在報表渲染端略過 file，代價是報表與 JSON 元件數不一致；ADR 修訂時裁定）。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
