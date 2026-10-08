@@ -163,14 +163,16 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
   - 決定：`parse_cyclonedx` 略過 `type == "file"` 的元件，ScanResult 的 `components`、報表的軟體產品文件表、
     風險總評的元件總數都不含它們。其他類型照收，包含 `library`、`application`（執行檔，帶 purl、Grype 會比對 CVE）、
     `operating-system`。
-  - 原始 `sbom.cdx.json` 與 `sbom.spdx.json` 是 Syft 的原樣輸出，**不受影響**，照常完整交付。
+  - 原始 `sbom.cdx.json` 與 `sbom.spdx.json` 是 Syft 的原樣輸出，不經本條過濾。
+    （2026-10-08 起 Syft 以 `SYFT_FILE_METADATA_SELECTION=none` 執行，原始產物也不再含 file 元件，見「修訂：Web 模式不外露伺服器主機路徑」。）
   - schema 欄位不變，不升版。T928 之前產生的 JSON 若含 file 元件，`cytrace report` 重建時照原樣呈現，不改寫既有檔案。
   - 由三層測試釘住：
     - 單元測試：file 排除，library、application、operating-system 保留。
     - 共用 fixture 含一筆 file 元件，golden 快照因此不變；server 測試斷言 job 目錄的 `sbom.cdx.json` 與引擎輸出一字不差、
       `scan-result.json` 與 `/result` 不含 file 元件。
     - 真引擎測試：先斷言 Syft 原始輸出確實含 file 元件，再斷言解析結果一個都不留。
-  - **尚未收掉的同類外露**（另案 #53，ROADMAP T931，擋 v0.6.0 發布；使用者 2026-10-07 裁定）：
+  - **當時尚未收掉的同類外露**（另案 #53，ROADMAP T931，擋 v0.6.0 發布；使用者 2026-10-07 裁定）。
+    已由「修訂：Web 模式不外露伺服器主機路徑」處理：
     - `meta.target`（報表封面「受測目標」）仍是內部掃描目標字串，帶資料目錄或掃描根的主機路徑。
     - CBOM 失敗的 `reason_detail` 帶目標路徑。
     - Web 模式可下載的原始產物（`sbom.cdx.json`、`sbom.spdx.json`、`grype.json`）帶同樣的主機路徑，出現在來源描述，
@@ -181,3 +183,77 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - **向後相容政策不變**：v3 的 `cytrace report` 讀 v1、v2 JSON 須可重建。新欄位缺漏時視為空，
   報表的軟體產品文件表位置欄以「—」呈現，弱點列不顯示位置行。由回歸測試釘住。
 - 讀到 v3 JSON 的舊版 CyTrace（v2）會略過未知欄位並警告 `cli.schema_ahead`；這是既有機制，行為不變。
+
+## 修訂：Web 模式不外露伺服器主機路徑（2026-10-08，T931／#53）
+
+**裁定來源**：使用者於 2026-10-08 逐點裁定下方提案 1、3、5、6，四點皆採提案內容；提案 2、4、7 為提案 1 的直接推論。
+
+**起因**：T928 複審揭露，Web 模式交出去的產物仍帶伺服器的主機路徑：
+- 上傳時帶資料目錄，例如 `<資料目錄>/jobs/<id>/input/…`。
+- 掛載時帶掃描根。
+
+這不符 NFR-09「報表只含依賴與弱點中繼資料、掃描目標不離開場域」。實測各產物的外露點如下（2026-10-07）：
+
+| 產物 | 外露位置 |
+|---|---|
+| ScanResult／報表封面「受測目標」 | `meta.target` 寫入的是交給引擎的內部字串（`runner.rs`） |
+| ScanResult／報表 CBOM 區 | 失敗時 `reason_detail` 帶目標路徑（`engine::cbom_target`） |
+| `sbom.cdx.json` | 來源描述 `metadata.component.name`；`dir:` 與單檔目標的 file 元件名稱 |
+| `sbom.spdx.json` | `name`、`documentNamespace`、根套件名稱 |
+| `grype.json` | `source.target`（取自 SBOM 的來源描述）；`descriptor` 內的漏洞 DB 路徑 |
+| `cbom.cdx.json` | 無。theia 的資產位置本來就是相對路徑（實測含憑證的目錄） |
+
+**引擎參數實測**（釘選 Syft 1.45.1、Grype 0.114.0，真實漏洞 DB；目錄、映像 tar、單檔執行檔、原始碼 tar、扁平 OCI 五種目標）：
+- Syft `--source-name <名稱>`：CycloneDX 與 SPDX 的來源描述不再含路徑。Grype 從 SBOM 讀來源描述，`source.target` 也跟著乾淨。元件數與弱點數不變。
+- Syft `--base-path`：對 file 元件名稱沒有作用，不採用。Grype `--name` 亦無作用，不採用。
+- 環境變數 `SYFT_FILE_METADATA_SELECTION=none`：Syft 不再輸出 file 元件，原始 CycloneDX 從此不含 file 元件的路徑。
+  - 五種目標的套件清單、套件位置、弱點清單三組指紋前後完全相同，只少了 file 元件。
+  - file 元件在 T928 已排除於 ScanResult 之外，報表不受影響。
+- 兩者都是引擎原生設定，不事後改寫原始檔，原始產物仍是「引擎的原樣輸出」。
+- 剩下的是 `grype.json` `descriptor` 內的漏洞 DB 路徑。它是伺服器的安裝位置，與掃描目標或 job 無關。
+
+**決定**：
+1. `meta.target`：Web 模式改寫 job 描述（`upload:<檔名>`、`mounted:<root>/<path>`，與 job API 的 `target` 相同）。CLI 模式不變，仍是使用者輸入的目標字串，那是使用者自己給的值。
+2. Syft 呼叫加 `--source-name`：Web 模式用 job 描述。CLI 模式不加，維持 Syft 預設，也就是使用者給的目標，與現況相同。
+   （草案原寫「CLI 用使用者輸入的目標字串」；實作時改為不加，因為 Syft 預設的來源名稱與目標字串略有差異，不加才真正「與現況相同」。）
+3. Syft 呼叫加 `SYFT_FILE_METADATA_SELECTION=none`，CLI 與 Web 兩種模式都加，引擎呼叫只有一種形態。
+   - **這會改變 T928 的一句話**：「原始 sbom.cdx.json 保留完整內容（含 file 元件）」改為「原始產物不含 file 元件」。
+   - 套件、位置與弱點不變（實測）。
+4. CBOM `reason_detail`：Web 模式以 job 描述取代目標路徑，`reason_key` 不變。
+5. `grype.json` 的漏洞 DB 路徑：照原樣保留並寫明，不事後改寫原始檔。
+6. 重建 v0.6.0 以前的 JSON：不在報表渲染端過濾。舊檔的 `meta.target` 本來就帶路徑，只過濾 file 元件也收不乾淨；若要交出乾淨的報表，請以 v0.6.0 重新掃描。
+7. #51（失敗訊息加上 Syft 錯誤摘要）實作時，摘要不得重新帶回資料目錄或掃描根的路徑。本節的整合測試會擋住這件事。
+
+**驗證分工**（依產物的來源分層；草案原寫「server 整合測試含四種可下載產物」，實作改為下列分工）：
+- 單元測試：Syft 呼叫帶 `--source-name` 與 file 選擇設定。
+- server 整合測試：CyTrace 自己寫出的內容（ScanResult、報表、job API、CBOM 失敗成因、引擎失敗細節）不含資料目錄與
+  掃描根。反空轉：先斷言內部掃描目標確實含這些路徑。
+  - 原始產物是引擎的原樣輸出，fake 引擎回傳的是固定 fixture，用它驗原始產物沒有意義，所以不在這一層。
+- 真引擎測試：以來源名稱呼叫 Syft 後，原始 CycloneDX／SPDX 不含掃描根、沒有 file 元件，套件與 Syft 預設呼叫相同。
+  - `grype.json` 的 `source.target` 取自 SBOM 的來源描述（實測），CycloneDX 的來源描述已由此斷言。
+    CI 的真引擎 job 沒有漏洞 DB，Grype 無法比對，所以 `grype.json` 沒有自動化回歸，由真實端到端與場域驗收承接。
+- 真實端到端：上傳與掛載逐一掃描，逐檔搜尋主機路徑。
+
+提案 3 改變了 T928 原先「原始 sbom.cdx.json 保留 file 元件」的說法，使用者已明確同意。
+
+**實作**：
+- `engine::syft_scan` 統一組 Syft 指令，一律帶 `SYFT_FILE_METADATA_SELECTION=none`。
+- `ScanEngine::sbom_with_spdx_named` 帶 `--source-name`。預設實作忽略名稱，既有 fake 引擎不用改。
+- server 的 runner 以 job 描述呼叫上述方法，並寫入 `meta.target`。
+- `runner::redact` 把 CBOM `reason_detail` 與 job 錯誤細節中的內部目標換成 job 描述。目標的三種形態都會替換：原字串、去前綴的路徑、正規化後的絕對路徑。
+
+**驗證**（2026-10-08）：
+- 單元測試：Syft 指令的參數與環境變數；`redact` 替換三種形態；取不到 job 描述時以 `job:<id>` 代替，不得為空。
+- server 整合測試：
+  - 掛載與上傳兩條路徑，引擎收到的來源名稱都是 job 描述。
+  - `meta.target` 是 job 描述。
+  - ScanResult、報表、job API 都不含主機路徑；CBOM 失敗成因與引擎失敗細節亦同。
+  - 每支都先斷言內部目標確實含主機路徑，防止測試空轉。
+- 真引擎測試：以來源名稱呼叫時，原始 CycloneDX 與 SPDX 都不含掃描根，也沒有 file 元件；`sbom()`（CLI 路徑）同樣沒有 file 元件。
+- 突變測試：T931 自身的 10 個突變全部轉紅（另有 1 個驗 T928 的 server 測試改寫後仍有效），涵蓋關掉 file 選擇、不帶來源名稱、`meta.target` 用內部目標、不做遮蔽、遮蔽漏掉正規化路徑、
+  named 路徑套件與預設不同、取不到 job 描述時退回空字串等情形。
+- 真實端到端：釘選三引擎、真實 DB、帶 CBOM，涵蓋上傳 zip／tar／tar.gz，以及掛載目錄、映像 tar、原始碼 tar、執行檔、扁平 OCI、巢狀目錄，共 9 個 job。每個 job 都先確認搜尋用的路徑確實是它的
+    資料目錄與掃描根（反空轉）。
+  - 檢查範圍：ScanResult、報表、`sbom`／`spdx`／`grype`／`cbom` 四種原始產物、job API。
+  - 主機路徑外露合計 0。
+  - 元件、弱點、CBOM 數字與修正前相同。

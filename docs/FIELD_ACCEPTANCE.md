@@ -176,6 +176,10 @@ docker images --digests
 - [ ] **映像掃描**：用 `docker save <映像> -o img.tar` 匯出一個場域內的映像，分別以上傳與掛載兩種方式掃描。兩者的
       元件數都應大於 0，且與 CLI `cytrace-offline run docker-archive:img.tar` 的結果相同。
       一個映像一個 tar；gzip 壓縮的映像請用上傳方式（掛載不支援）。其他限制見 ADR-011 修訂節。
+- [ ] **不外露主機路徑**（NFR-09，ADR-009 修訂）：任選一個上傳與一個掛載的工作，下載報表、ScanResult、SBOM（CycloneDX、
+      SPDX）、Grype 與 CBOM 產物。逐一搜尋 `<資料目錄>/jobs`（容器部署為 `/data/jobs`）與掃描根的路徑
+      （容器部署為 `/scan-targets`），都應找不到；報表封面的「受測目標」應顯示 `upload:<檔名>` 或 `mounted:<root>/<path>`。
+      （Grype 產物內記錄的漏洞 DB 安裝路徑，例如 `/db`，屬於預期，見 ADR-009 修訂。）
 - [ ] （選做）從控制台下載 ScanResult，在另一台機器以 `cytrace report <檔案>` 重建報表，內容一致。
 
 **停機與降級**：

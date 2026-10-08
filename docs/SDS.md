@@ -94,7 +94,9 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 
 ### 3.2 Syft／Grype
 
-- `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。
+- `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。一律帶環境變數
+  `SYFT_FILE_METADATA_SELECTION=none`，不輸出 file 元件；Web 模式另加 `--source-name <job 描述>`，
+  讓原始產物不帶伺服器主機路徑（ADR-009 修訂：Web 模式不外露伺服器主機路徑，T931）。
 - 需要 SPDX 時（CLI `scan --spdx`；Web 服務模式一律）改為同一次執行多重輸出：
   `-o cyclonedx-json -o spdx-json=<暫存檔>`，兩種格式出自同一次編目（T919）。暫存檔名行程內唯一、
   用完即刪；SPDX 缺檔、不是 JSON 或缺 `spdxVersion` 時整次掃描失敗（fail-closed，取捨見 ADR-002 修訂節）。
@@ -141,7 +143,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 ScanResult {
   schema_version: u32                       // 目前為 3（cytrace_types::SCHEMA_VERSION）
   meta: {
-    target, generated_at,
+    target, generated_at,                   // target：CLI 為使用者輸入；Web 為 job 描述（T931）
     tool_versions { syft, grype, theia? },  // theia 僅在 CBOM 完成時填
     db_snapshot { version, built },         // grype db status 真值；取不到為 "unavailable"
     scan_identity?                          // 執行掃描的身分（ADR-013 決策 10）

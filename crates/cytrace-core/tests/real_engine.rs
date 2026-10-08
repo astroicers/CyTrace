@@ -823,12 +823,14 @@ fn pinned_syft_components_carry_purl_and_locations() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// T928：釘選版 syft 的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機絕對路徑為名），經 `parse_cyclonedx`
-/// 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有** file 元件，免得 syft 哪天不再輸出
-/// 時這支空轉成恆真。原始 sbom.cdx.json 照樣完整交付，不經這道過濾。
+/// T928：以 Syft **預設**呼叫（未關 file 選擇）產出的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機
+/// 絕對路徑為名），經 `parse_cyclonedx` 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有**
+/// file 元件，免得 syft 哪天不再輸出時這支空轉成恆真。
+/// T931 起 CyTrace 以 `SYFT_FILE_METADATA_SELECTION=none` 呼叫 Syft，原始產物已不含 file 元件；這支驗的是
+/// parse 這第二道防線，所以刻意直接以預設參數呼叫 syft，不經 `RealEngine`。
 #[test]
 #[ignore = "需要 syft 在 PATH（make test-real-engine）"]
-fn pinned_syft_file_components_stay_in_raw_sbom_but_not_in_scan_result() {
+fn pinned_syft_default_file_components_are_excluded_by_parse() {
     let present = Command::new("syft")
         .arg("version")
         .output()
@@ -839,9 +841,18 @@ fn pinned_syft_file_components_stay_in_raw_sbom_but_not_in_scan_result() {
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("requirements.txt"), "requests==2.31.0\n").unwrap();
 
-    let sbom = RealEngine
-        .sbom(&format!("dir:{}", dir.display()))
-        .expect("syft 應產出 CycloneDX");
+    let out = Command::new("syft")
+        .args([
+            "scan",
+            &format!("dir:{}", dir.display()),
+            "-o",
+            "cyclonedx-json",
+            "-q",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "syft 應產出 CycloneDX");
+    let sbom = String::from_utf8(out.stdout).unwrap();
     let raw: serde_json::Value = serde_json::from_str(&sbom).unwrap();
     let raw_files = raw["components"]
         .as_array()
@@ -862,6 +873,80 @@ fn pinned_syft_file_components_stay_in_raw_sbom_but_not_in_scan_result() {
     assert!(
         comps.iter().any(|c| c.name == "requests"),
         "套件須保留：{comps:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// T931（ADR-009 修訂：Web 模式不外露伺服器主機路徑）：`RealEngine` 以來源名稱呼叫 Syft 時，原始 CycloneDX
+/// 與 SPDX 都不含掃描根的主機路徑，也不含 file 元件；解析出的套件與 Syft 預設呼叫相同。`sbom()`（CLI 路徑）同樣不含 file 元件。
+/// 先以 Syft 預設參數確認原始輸出**確實**會帶主機路徑，免得這支空轉。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_source_name_keeps_host_paths_out_of_raw_sboms() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("source-name");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("requirements.txt"), "requests==2.31.0\n").unwrap();
+    let host = dir.display().to_string();
+    let target = format!("dir:{host}");
+
+    let default = Command::new("syft")
+        .args(["scan", &target, "-o", "cyclonedx-json", "-q"])
+        .output()
+        .unwrap();
+    let default = String::from_utf8(default.stdout).unwrap();
+    assert!(
+        default.contains(&host),
+        "Syft 預設輸出應帶主機路徑（否則本測試空轉）"
+    );
+
+    let (cdx, spdx) = RealEngine
+        .sbom_with_spdx_named(&target, "upload:src.zip")
+        .expect("syft 應產出 SBOM");
+    let spdx = spdx.expect("RealEngine 應產出 SPDX");
+    assert!(!cdx.contains(&host), "CycloneDX 不得含主機路徑：{cdx}");
+    assert!(!spdx.contains(&host), "SPDX 不得含主機路徑：{spdx}");
+    let doc: serde_json::Value = serde_json::from_str(&cdx).unwrap();
+    assert_eq!(doc["metadata"]["component"]["name"], "upload:src.zip");
+    let kinds = |s: &str| -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(s).unwrap();
+        v["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["type"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    assert!(
+        !kinds(&cdx).contains(&"file".to_string()),
+        "不得含 file 元件：{cdx}"
+    );
+    // named 路徑解析出的套件須與 Syft 預設呼叫相同（關掉 file 選擇、改來源名稱都不得影響套件）
+    let libs = |s: &str| -> Vec<(String, String)> {
+        cytrace_core::parse::parse_cyclonedx(s)
+            .unwrap()
+            .into_iter()
+            .filter(|c| c.kind == "library")
+            .map(|c| (c.name, c.version))
+            .collect()
+    };
+    assert!(
+        !libs(&default).is_empty(),
+        "預設呼叫應抓到套件（否則比對空轉）"
+    );
+    assert_eq!(
+        libs(&cdx),
+        libs(&default),
+        "named 路徑的套件須與預設呼叫相同"
+    );
+    assert!(
+        !kinds(&RealEngine.sbom(&target).unwrap()).contains(&"file".to_string()),
+        "sbom()（CLI 路徑）同樣不得含 file 元件"
     );
     let _ = fs::remove_dir_all(&dir);
 }

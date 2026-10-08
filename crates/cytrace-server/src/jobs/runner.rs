@@ -42,11 +42,17 @@ pub fn spawn_with_cleanup(
 
         let engine = app.engine.clone();
         let job_dir = app.jobs.job_dir(&job_id);
-        let fail_on = app.jobs.get(&job_id).and_then(|r| r.fail_on.clone());
+        let record = app.jobs.get(&job_id);
+        let fail_on = record.as_ref().and_then(|r| r.fail_on.clone());
+        // 交出去的產物只帶 job 描述（`upload:<檔名>`、`mounted:<root>/<path>`），不帶內部掃描目標的主機路徑
+        // （ADR-009 修訂：Web 模式不外露伺服器主機路徑，T931）
+        let display = display_name(record.map(|r| r.target), &job_id);
+        let (target_c, display_c) = (scan_target.clone(), display.clone());
         let result = tokio::task::spawn_blocking(move || {
             run_pipeline(
                 engine.as_ref(),
-                &scan_target,
+                &target_c,
+                &display_c,
                 fail_on.as_deref(),
                 &job_dir,
                 cbom,
@@ -68,7 +74,9 @@ pub fn spawn_with_cleanup(
                 app.jobs.update(&job_id, |r| {
                     r.status = JobStatus::Failed;
                     r.finished_at = Some(super::now_iso());
-                    r.error = Some(job_error_of(&e));
+                    let mut err = job_error_of(&e);
+                    err.detail = redact(&err.detail, &scan_target, &display);
+                    r.error = Some(err);
                 });
             }
             Err(join_err) => {
@@ -89,6 +97,35 @@ pub fn spawn_with_cleanup(
         }
         drop(permit);
     });
+}
+
+/// 交出去的產物用的名稱：job 描述；取不到時用 `job:<id>`，絕不退回內部掃描目標
+/// （空字串會讓 Syft 的 `--source-name` 退回預設，也就是主機路徑；T931 複審 N4）。
+fn display_name(record_target: Option<String>, job_id: &str) -> String {
+    record_target
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| format!("job:{job_id}"))
+}
+
+/// 把細節裡的內部掃描目標換成 job 描述（ADR-009 修訂：Web 模式不外露伺服器主機路徑，T931）。
+///
+/// 引擎的錯誤訊息會引用目標（CBOM 的 `reason_detail`、子程序 stderr），形態可能是原字串
+/// （`dir:<路徑>`）、去掉前綴的路徑，或正規化後的絕對路徑；三者都換掉，長的先換。
+fn redact(detail: &str, target: &str, display: &str) -> String {
+    let path = ["dir:", "docker-archive:", "oci-archive:", "oci-dir:"]
+        .iter()
+        .find_map(|p| target.strip_prefix(*p))
+        .unwrap_or(target);
+    let canonical = std::fs::canonicalize(path)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let mut forms = vec![target.to_string(), path.to_string(), canonical];
+    forms.retain(|f| !f.is_empty());
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms.dedup();
+    forms.iter().fold(detail.to_string(), |acc, f| {
+        acc.replace(f.as_str(), display)
+    })
 }
 
 /// `CytraceError` → 持久化的 `JobError`。
@@ -121,6 +158,7 @@ fn job_error_of(e: &CytraceError) -> JobError {
 fn run_pipeline(
     engine: &dyn ScanEngine,
     target: &str,
+    display: &str,
     fail_on: Option<&str>,
     job_dir: &Path,
     cbom: bool,
@@ -128,7 +166,7 @@ fn run_pipeline(
 ) -> cytrace_core::error::Result<(Summary, bool)> {
     // SPDX（備；FR-001）與 CycloneDX 出自同一次 syft 執行，web 模式一律附上（T919）——
     // 下載哪一種由使用者在 console 選，不必在送出時先決定
-    let (sbom, spdx) = engine.sbom_with_spdx(target)?;
+    let (sbom, spdx) = engine.sbom_with_spdx_named(target, display)?;
     let grype = engine.vuln(&sbom)?;
     std::fs::write(job_dir.join("sbom.cdx.json"), &sbom)?;
     if let Some(s) = &spdx {
@@ -139,7 +177,14 @@ fn run_pipeline(
     // CBOM 失敗只影響 crypto 區段，不中止 job（ADR-013 決策 4）
     let crypto = if cbom {
         // 一次呼叫同時取得盤點結果與原始 JSON——不可為了落地而再跑一次引擎
-        let (inv, raw) = cytrace_core::collect_cbom_with_raw(engine, target);
+        let (mut inv, raw) = cytrace_core::collect_cbom_with_raw(engine, target);
+        if let cytrace_types::CbomStatus::Failed {
+            reason_detail: Some(d),
+            ..
+        } = &mut inv.status
+        {
+            *d = redact(d, target, display);
+        }
         if let Some(json) = raw {
             std::fs::write(job_dir.join("cbom.cdx.json"), &json)?;
         }
@@ -152,7 +197,7 @@ fn run_pipeline(
     // 弱點對應元件位置要用同一次掃描的元件清單（ADR-009「修訂：schema v3」）
     let findings = parse::parse_grype_for(&grype, &components)?;
     let meta = Meta {
-        target: target.to_string(),
+        target: display.to_string(),
         tool_versions: cytrace_core::engine::tool_versions(
             crypto
                 .as_ref()
@@ -192,6 +237,34 @@ fn run_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T931 複審 N4：取不到 job 描述時用 `job:<id>`，不得為空。
+    #[test]
+    fn display_name_never_falls_back_to_empty() {
+        assert_eq!(
+            display_name(Some("upload:a.zip".into()), "j1"),
+            "upload:a.zip"
+        );
+        assert_eq!(display_name(Some(String::new()), "j1"), "job:j1");
+        assert_eq!(display_name(None, "j1"), "job:j1");
+    }
+
+    /// T931：三種形態的目標路徑（原字串、去前綴、正規化後）都換成 job 描述；無關內容不動。
+    #[test]
+    fn redact_replaces_every_form_of_the_internal_target() {
+        let dir = std::env::temp_dir().join(format!("cytrace-redact-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("x")).unwrap();
+        // 帶 `..` 的路徑：正規化後與原字串不同，theia 的錯誤訊息引用的是正規化後的形態
+        let raw = format!("{}/x/..", dir.display());
+        let canonical = std::fs::canonicalize(&raw).unwrap().display().to_string();
+        let target = format!("dir:{raw}");
+        let detail = format!("a={target} b={raw} c={canonical}/f.crt d=300s");
+        assert_eq!(
+            redact(&detail, &target, "upload:src.zip"),
+            "a=upload:src.zip b=upload:src.zip c=upload:src.zip/f.crt d=300s"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// `JobError.detail` 不得夾帶本型別的中文散文，`i18n_key` 不得是查不到的鍵。
     ///
