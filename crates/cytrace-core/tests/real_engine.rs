@@ -823,7 +823,7 @@ fn pinned_syft_components_carry_purl_and_locations() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// T928：釘選版 syft 的原始 CycloneDX 含 `type:"file"` 元件（以主機絕對路徑為名），經 `parse_cyclonedx`
+/// T928：釘選版 syft 的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機絕對路徑為名），經 `parse_cyclonedx`
 /// 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有** file 元件，免得 syft 哪天不再輸出
 /// 時這支空轉成恆真。原始 sbom.cdx.json 照樣完整交付，不經這道過濾。
 #[test]

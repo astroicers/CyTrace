@@ -265,7 +265,8 @@ pub fn parse_cyclonedx(json: &str) -> Result<Vec<Component>> {
     Ok(doc
         .components
         .into_iter()
-        // Syft 的 file 類元件以主機絕對路徑為名、無版本與 purl、不參與比對：不進 ScanResult（T928，ADR-009 修訂）
+        // Syft 的 file 類元件以路徑為名（dir:／單檔目標時是主機絕對路徑）、無版本與 purl、不參與比對：
+        // 不進 ScanResult（T928，ADR-009 修訂）
         .filter(|c| c.kind != "file")
         .map(|c| {
             let licenses = c
@@ -818,8 +819,8 @@ mod tests {
         assert!(v[0].locations.is_empty());
     }
 
-    /// T928：Syft 把被讀過的檔案列成 `type:"file"` 元件，名稱是主機絕對路徑（Web 模式下會露出
-    /// `<資料目錄>/jobs/<id>/input/…`）、沒有版本與 purl、不參與弱點比對——不進 ScanResult 與報表
+    /// T928：Syft 把被讀過的檔案列成 `type:"file"` 元件，以路徑為名（`dir:` 目標時是主機絕對路徑，Web 上傳會露出
+    /// `<資料目錄>/jobs/<id>/input/extracted/…`；映像目標則是映像內路徑）、沒有版本與 purl、不參與弱點比對——不進 ScanResult 與報表
     /// （ADR-009 修訂，使用者 2026-10-07 裁定）。其他類型（含 operating-system）照收；原始 sbom.cdx.json 不受影響。
     #[test]
     fn syft_file_components_are_excluded() {

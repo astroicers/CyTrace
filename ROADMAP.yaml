@@ -1556,7 +1556,7 @@ milestones:
           真實端到端（釘選三引擎、真實 DB、帶 CBOM）：CLI、上傳 tar、上傳 tar.gz、掛載 tar 四條路徑都是 96 元件、30 弱點、
           CBOM 2904 項。多映像、zip 包的映像、子目錄裡的映像、掛載 gzip 映像、掛載已解開的匯出目錄列為已知限制（ADR-011 修訂）。
           獨立複審三輪（/asp:review-work）：
-          - 第一輪 NEEDS_WORK，9 項 finding，含 Cargo.lock 未提交、gunzip 上限未計檔頭、zip 與掛載 OCI 目錄的文件與實作不符。
+          - 第一輪 NEEDS_WORK，8 項 finding，含 Cargo.lock 未提交、gunzip 上限未計檔頭、zip 與掛載 OCI 目錄的文件與實作不符。
           - 第二輪 NEEDS_WORK：CI 結論行待補、扁平 OCI layout 以 dir: 掃描的實測原文待補；low finding「預期失敗的路徑錯誤訊息
             不帶成因」由使用者裁定另開 #51。
           - 第三輪 PASS（15 項正面證據、0 項反面證據；CI 真引擎 job 18 passed）。
@@ -1577,7 +1577,7 @@ milestones:
         sla_hours: 168
         imported_at: "2026-10-07"
         description: |
-          Syft 把 lockfile、二進位檔列成 type:"file" 元件，以主機絕對路徑為名，沒有版本、沒有 purl，不參與弱點比對。
+          Syft 把 lockfile、二進位檔列成 type:"file" 元件，以路徑為名（dir:／單檔目標時是主機絕對路徑），沒有版本、沒有 purl，不參與弱點比對。
           它們混在軟體產品文件表裡，Web 模式下還會暴露資料目錄路徑。parse_cyclonedx 改為略過，ADR-009 修訂節補記。
 
           **結案（2026-10-07）**：
@@ -1585,8 +1585,12 @@ milestones:
           - 驗證：單元測試，加上真引擎測試（先斷言 Syft 原始輸出有 file 元件，防止測試空轉）。拿掉過濾的突變會讓兩支都轉紅。
           - 真實端到端（釘選三引擎、真實 DB）：alpine 映像從 96 元件（79 個 file）降到 17 個（16 library、1 operating-system），
             弱點 30、CBOM 2904 不變；server 交付的原始 sbom.cdx.json 仍保留全部 79 個 file 元件。
-          - 獨立複審一輪 PASS（12 項正面證據、0 項反面證據）。
-          - 複審時呼叫端主動揭露：Web 模式的 `meta.target` 與 CBOM `reason_detail` 仍帶主機路徑，另開 #53（T931）。
+          - 獨立複審三輪（/asp:review-work）：
+            - 第一輪（程式碼與三份文件）PASS，12 項正面證據、0 項反面證據。
+            - 第二輪（合併前、整份 PR）NEEDS_WORK：ADR 外露清單漏了可下載的原始產物；起因寫法不精確（映像目標的
+              file 元件是映像內路徑）；另有 4 項待補證據，並更正 T927 第一輪 finding 數為 8。
+            - 第三輪 NEEDS_WORK，17 項正面證據、0 項 finding；唯一缺口是最終 head 的 CI 結論，CI 全綠即達 PASS 條件（PR #54）。
+          - 複審時揭露：Web 模式的 `meta.target`、CBOM `reason_detail`、可下載的原始產物仍帶主機路徑，另開 #53（T931）。
 
       - id: T929
         title: "發布 v0.6.0 與離線安裝包（Linux／Windows；含 DB 快照與 minisign 簽章）"
@@ -1627,7 +1631,7 @@ milestones:
           新增的映像掃描項目補進驗收清單；演練後依清單第 9 節的偏差紀錄開票。
 
       - id: T931
-        title: "Web 模式報表封面的受測目標與 CBOM 失敗成因不帶伺服器主機路徑"
+        title: "Web 模式的報表封面、CBOM 失敗成因與可下載的原始產物不帶伺服器主機路徑"
         type: BUGFIX
         priority: 1
         adr: ADR-009
@@ -1645,6 +1649,9 @@ milestones:
           ScanResult 的 `meta.target` 寫入的是交給引擎的內部字串（runner.rs）。Web 模式下它帶資料目錄（上傳）或掃描根
           （掛載）的主機路徑，報表封面「受測目標」照樣顯示；CBOM 失敗的 `reason_detail` 也帶目標路徑。job 紀錄已有給人
           看的描述（`upload:<檔名>`、`mounted:<root>/<path>`）。`meta.target` 屬 ADR-009 稽核契約，實作前先寫 ADR 修訂。
+          可下載的原始產物（sbom.cdx.json、sbom.spdx.json、grype.json）也帶同樣的主機路徑，包括來源描述，以及 dir:／
+          單檔目標的 file 元件名稱。使用者 2026-10-07 裁定併入本票：優先以 Syft 自己的參數（例如 --source-name、--base-path）
+          控制輸出，不事後改寫原始檔；用哪個參數須先實測。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
