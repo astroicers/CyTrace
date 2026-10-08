@@ -823,6 +823,49 @@ fn pinned_syft_components_carry_purl_and_locations() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// T928：釘選版 syft 的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機絕對路徑為名），經 `parse_cyclonedx`
+/// 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有** file 元件，免得 syft 哪天不再輸出
+/// 時這支空轉成恆真。原始 sbom.cdx.json 照樣完整交付，不經這道過濾。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_file_components_stay_in_raw_sbom_but_not_in_scan_result() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("file-components");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("requirements.txt"), "requests==2.31.0\n").unwrap();
+
+    let sbom = RealEngine
+        .sbom(&format!("dir:{}", dir.display()))
+        .expect("syft 應產出 CycloneDX");
+    let raw: serde_json::Value = serde_json::from_str(&sbom).unwrap();
+    let raw_files = raw["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["type"] == "file")
+        .count();
+    assert!(
+        raw_files > 0,
+        "原始 SBOM 應含 file 元件（否則本測試空轉）：{sbom}"
+    );
+
+    let comps = cytrace_core::parse::parse_cyclonedx(&sbom).unwrap();
+    assert!(
+        comps.iter().all(|c| c.kind != "file"),
+        "ScanResult 不得含 file 元件：{comps:?}"
+    );
+    assert!(
+        comps.iter().any(|c| c.name == "requests"),
+        "套件須保留：{comps:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// #49：釘選版 syft 掃 docker-save 映像時，`docker-archive:` 抓得到套件，解開後以 `dir:` 掃則一個都沒有。
 ///
 /// server 上傳映像 tar 時改給 `docker-archive:` 的依據就是這個行為。若某次升級 syft 讓 `dir:` 也能掃進

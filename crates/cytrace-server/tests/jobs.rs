@@ -778,6 +778,51 @@ async fn uploaded_docker_save_is_scanned_as_docker_archive() {
     );
 }
 
+/// T928：server 交付的原始 `sbom.cdx.json` 是引擎輸出的原樣（含 Syft 的 file 元件），
+/// `scan-result.json` 與 `/result` 則不含 file 元件。共用 fixture 帶一筆以主機路徑為名的 file 元件。
+#[tokio::test]
+async fn file_components_stay_in_raw_sbom_but_not_in_scan_result() {
+    assert!(
+        CYCLONEDX.contains(r#""type": "file""#),
+        "fixture 須含 file 元件，否則本測試空轉"
+    );
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (_, job) = create_job(&env.app, &cookie, "app", None).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_terminal(&env.app, &cookie, &id).await["status"],
+        "done"
+    );
+
+    let job_dir = env.base.join("data/jobs").join(&id);
+    assert_eq!(
+        std::fs::read_to_string(job_dir.join("sbom.cdx.json")).unwrap(),
+        CYCLONEDX,
+        "原始 sbom.cdx.json 須與引擎輸出一字不差"
+    );
+    let kinds = |v: &serde_json::Value| -> Vec<String> {
+        v["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["type"].as_str().unwrap_or_default().to_string())
+            .collect()
+    };
+    let on_disk: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(job_dir.join("scan-result.json")).unwrap())
+            .unwrap();
+    assert_eq!(kinds(&on_disk), ["library", "library"], "scan-result.json");
+
+    let req = Request::get(format!("/api/v1/jobs/{id}/result"))
+        .header(header::COOKIE, &cookie)
+        .body(Body::empty())
+        .unwrap();
+    let (status, v) = send_json(&env.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kinds(&v), ["library", "library"], "/result");
+}
+
 /// T925：server 管線同樣要把弱點對應到元件位置（ADR-009「修訂：schema v3」）。
 /// fixture 的 Grype artifact 不帶位置，必須經對應鏈才拿得到；各段的取捨由 parse.rs 的單元測試釘住。
 #[tokio::test]

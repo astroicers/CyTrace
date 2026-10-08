@@ -1555,7 +1555,11 @@ milestones:
           - 掛載：檔案不加前綴；OCI layout 目錄給 oci-dir:，與 cbom_target 一致。
           真實端到端（釘選三引擎、真實 DB、帶 CBOM）：CLI、上傳 tar、上傳 tar.gz、掛載 tar 四條路徑都是 96 元件、30 弱點、
           CBOM 2904 項。多映像、zip 包的映像、子目錄裡的映像、掛載 gzip 映像、掛載已解開的匯出目錄列為已知限制（ADR-011 修訂）。
-          獨立複審兩輪。第二輪的 low finding「預期失敗的路徑錯誤訊息不帶成因」由使用者裁定另開 #51。
+          獨立複審三輪（/asp:review-work）：
+          - 第一輪 NEEDS_WORK，8 項 finding，含 Cargo.lock 未提交、gunzip 上限未計檔頭、zip 與掛載 OCI 目錄的文件與實作不符。
+          - 第二輪 NEEDS_WORK：CI 結論行待補、扁平 OCI layout 以 dir: 掃描的實測原文待補；low finding「預期失敗的路徑錯誤訊息
+            不帶成因」由使用者裁定另開 #51。
+          - 第三輪 PASS（15 項正面證據、0 項反面證據；CI 真引擎 job 18 passed）。
 
       - id: T928
         title: "軟體產品文件表與 ScanResult 排除 Syft 的 file 類元件"
@@ -1565,7 +1569,7 @@ milestones:
         spec: null
         srs_ref: NFR-09
         depends_on: []
-        status: pending
+        status: completed
         estimated_complexity: low
         source_type: manual
         source_ref: "使用者 2026-10-07 裁定：從報表與 ScanResult 排除，原始 sbom.cdx.json 保留"
@@ -1573,8 +1577,27 @@ milestones:
         sla_hours: 168
         imported_at: "2026-10-07"
         description: |
-          Syft 把 lockfile、二進位檔列成 type:"file" 元件，以主機絕對路徑為名，沒有版本、沒有 purl，不參與弱點比對。
+          Syft 把 lockfile、二進位檔列成 type:"file" 元件，以路徑為名（dir:／單檔目標時是主機絕對路徑），沒有版本、沒有 purl，不參與弱點比對。
           它們混在軟體產品文件表裡，Web 模式下還會暴露資料目錄路徑。parse_cyclonedx 改為略過，ADR-009 修訂節補記。
+
+          **結案（2026-10-07）**：
+          - `parse_cyclonedx` 略過 `type == "file"`；CLI 與 server 都只經這一個點產生 ScanResult。
+          - 驗證：單元測試，加上真引擎測試（先斷言 Syft 原始輸出有 file 元件，防止測試空轉）。拿掉過濾的突變會讓兩支都轉紅。
+          - 真實端到端（釘選三引擎、真實 DB）：alpine 映像從 96 元件（79 個 file）降到 17 個（16 library、1 operating-system），
+            弱點 30、CBOM 2904 不變；server 交付的原始 sbom.cdx.json 仍保留全部 79 個 file 元件。
+          - 獨立複審三輪（/asp:review-work）：
+            - 第一輪（程式碼與三份文件）PASS，12 項正面證據、0 項反面證據。
+            - 第二輪（合併前、整份 PR）NEEDS_WORK：ADR 外露清單漏了可下載的原始產物；起因寫法不精確（映像目標的
+              file 元件是映像內路徑）；另有 4 項待補證據，並更正 T927 第一輪 finding 數為 8。
+            - 第三輪 NEEDS_WORK，17 項正面證據、0 項 finding；唯一缺口是最終 head 的 CI 結論。補上 af98b4e 的 CI（8/8）後，
+              終判 PASS（21 項正面證據、0 項反面證據）。
+          - 合併前另做一次程式碼品質 review（Code Reviewer）：結論可合併，無 critical／high／medium。依使用者同意於合併前補上：
+            - application 類元件（執行檔；釘選 Syft 1.45.1 實測輸出為 application）保留的單元測試，防止過濾被改成白名單。
+            - 共用 fixture 加一筆 file 元件（golden 快照不變）；server 測試斷言交付的 sbom.cdx.json 與引擎輸出一字不差、
+              scan-result.json 與 /result 不含 file 元件。
+            - parse_cyclonedx 的 doc comment 寫明排除規則。
+            - 「重建舊版 JSON 時 file 元件照原樣呈現」併入 #53 一併考慮。
+          - 複審時揭露：Web 模式的 `meta.target`、CBOM `reason_detail`、可下載的原始產物仍帶主機路徑，另開 #53（T931）。
 
       - id: T929
         title: "發布 v0.6.0 與離線安裝包（Linux／Windows；含 DB 快照與 minisign 簽章）"
@@ -1583,7 +1606,7 @@ milestones:
         adr: ADR-007
         spec: null
         srs_ref: FR-008
-        depends_on: [T927, T928]
+        depends_on: [T927, T928, T931]
         status: pending
         estimated_complexity: medium
         source_type: manual
@@ -1592,7 +1615,7 @@ milestones:
         sla_hours: 168
         imported_at: "2026-10-07"
         description: |
-          把 #39 起的修正（T922 至 T928）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
+          把 #39 起的修正（T922 至 T928、T931）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
           終端機執行；Windows 包需要 Windows 建置機。DB 快照約 3 GB，媒體容量依此規劃。
 
       - id: T930
@@ -1613,6 +1636,31 @@ milestones:
         description: |
           完整離線安裝包從未在真正斷網的機器上走完驗章、安裝、掃描、報表這一輪，是交件前最大的未驗證項。演練前把 T927
           新增的映像掃描項目補進驗收清單；演練後依清單第 9 節的偏差紀錄開票。
+
+      - id: T931
+        title: "Web 模式的報表封面、CBOM 失敗成因與可下載的原始產物不帶伺服器主機路徑"
+        type: BUGFIX
+        priority: 1
+        adr: ADR-009
+        spec: null
+        srs_ref: NFR-09
+        depends_on: [T928]
+        status: pending
+        estimated_complexity: medium
+        source_type: review
+        source_ref: "T928 獨立複審時揭露；GitHub #53；使用者 2026-10-07 裁定擋 v0.6.0"
+        triggered_by: review
+        sla_hours: 168
+        imported_at: "2026-10-07"
+        description: |
+          ScanResult 的 `meta.target` 寫入的是交給引擎的內部字串（runner.rs）。Web 模式下它帶資料目錄（上傳）或掃描根
+          （掛載）的主機路徑，報表封面「受測目標」照樣顯示；CBOM 失敗的 `reason_detail` 也帶目標路徑。job 紀錄已有給人
+          看的描述（`upload:<檔名>`、`mounted:<root>/<path>`）。`meta.target` 屬 ADR-009 稽核契約，實作前先寫 ADR 修訂。
+          可下載的原始產物（sbom.cdx.json、sbom.spdx.json、grype.json）也帶同樣的主機路徑，包括來源描述，以及 dir:／
+          單檔目標的 file 元件名稱。使用者 2026-10-07 裁定併入本票：優先以 Syft 自己的參數（例如 --source-name、--base-path）
+          控制輸出，不事後改寫原始檔；用哪個參數須先實測。
+          另一併考慮：`cytrace report` 重建 v0.5.0 以前的 JSON 時，以伺服器路徑為名的 file 元件照原樣出現在文件表
+          （可在報表渲染端略過 file，代價是報表與 JSON 元件數不一致；ADR 修訂時裁定）。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"

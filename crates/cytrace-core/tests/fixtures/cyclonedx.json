@@ -26,6 +26,12 @@
         { "name": "syft:location:1:path", "value": "/web/package-lock.json" },
         { "name": "syft:location:0:path", "value": "/package-lock.json" }
       ]
+    },
+    {
+      "bom-ref": "3333cccc3333cccc",
+      "type": "file",
+      "name": "/srv/cytrace/jobs/fixture/input/extracted/package-lock.json",
+      "hashes": [ { "alg": "SHA-1", "content": "da39a3ee5e6b4b0d3255bfef95601890afd80709" } ]
     }
   ]
 }

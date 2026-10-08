@@ -148,6 +148,7 @@ ScanResult {
   }
   components: [ Component { name, version, type, licenses[],       // → 軟體產品文件表
                            bom_ref?, purl?, locations[] } ]      // v3：來源（ADR-009 修訂）
+                                                                 // 不含 Syft 的 type:"file" 元件（T928）
   findings:   [ Vulnerability { id, severity, cvss?, component, fixed_version?, source,
                                 component_version?, component_purl?, locations[] } ]
   summary:    { counts_by_severity, overall_risk }                // overall_risk = 最高等級
