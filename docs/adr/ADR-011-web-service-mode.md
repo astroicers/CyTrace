@@ -199,7 +199,11 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
   - gzip 壓縮的映像以**掛載**方式提供時，Syft 讀不了，且不加前綴時靜默得到 0 個元件。請改以上傳方式提供，或先解壓再掛載。
   - **zip 包的映像**不轉成 docker-archive：舊式匯出落到 `dir:`，靜默得到 0；Docker 25 起的匯出因帶 OCI layout 落到 `oci-dir:`，Syft 報錯。映像請以 tar 或 tar.gz 上傳。
   - **映像放在子目錄裡**（例如 tar 內是 `images/app.tar` 或 `app/manifest.json`）只看根目錄，落到 `dir:`，靜默得到 0。
-  - **多映像**（`docker save a b`）：Syft 以 `cannot process multiple docker manifests` 失敗，job 顯示失敗。請一個映像一個 tar。
+  - **多映像**（`docker save a b`）：**上傳**時 Syft 以 `cannot process multiple docker manifests` 失敗，job 顯示失敗；
+    **掛載**時檔案不加前綴、交給 Syft 自動辨識，**靜默得到 0**。請一個映像一個 tar。
+    （2026-10-09 更正：原寫兩種方式都失敗。v0.6.0 CHANGELOG 複審查出，伺服器端到端實測確認。）
+  - **只有 OCI layout、index 為巢狀**的 tar（例如多平台匯出，去掉 docker-save 清單者）：**上傳**時走 `oci-dir:`，Syft 失敗；
+    **掛載**時靜默得到 0。（2026-10-09 補記，伺服器端到端實測。）
   - 掛載**已解開的** Docker 匯出目錄：Docker 25 起的匯出因巢狀 index 明確失敗；更舊的匯出沒有 OCI layout，落到 `dir:`，靜默得到 0。請掛載 tar 檔本身。
   - 磁碟峰值：映像 tar 仍會完整解開到 `extracted/` 以判斷形態。tar 約佔兩份（原檔＋解開內容），tar.gz 約三份（再加 `image.tar`），都在 job 的 `input/` 底下、受解壓上限約束。
 - 原始上傳檔與解壓產物都在 `input/` 底下，掃描結束後照 #39 的規則刪除。

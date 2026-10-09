@@ -208,6 +208,8 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - Syft `--source-name <名稱>`：CycloneDX 與 SPDX 的來源描述不再含路徑。Grype 從 SBOM 讀來源描述，`source.target` 也跟著乾淨。元件數與弱點數不變。
 - Syft `--base-path`：對 file 元件名稱沒有作用，不採用。Grype `--name` 亦無作用，不採用。
 - 環境變數 `SYFT_FILE_METADATA_SELECTION=none`：Syft 不再輸出 file 元件，原始 CycloneDX 從此不含 file 元件的路徑。
+  SPDX 的 `files` 段仍在，但檔名是相對於掃描目標的路徑（例如 `bin/busybox`、`requirements.txt`），不含主機路徑
+  （2026-10-09 補記，v0.6.0 CHANGELOG 複審查出；伺服器端到端實測）。
   - 五種目標的套件清單、套件位置、弱點清單三組指紋前後完全相同，只少了 file 元件。
   - file 元件在 T928 已排除於 ScanResult 之外，報表不受影響。
 - 兩者都是引擎原生設定，不事後改寫原始檔，原始產物仍是「引擎的原樣輸出」。
@@ -230,7 +232,7 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - server 整合測試：CyTrace 自己寫出的內容（ScanResult、報表、job API、CBOM 失敗成因、引擎失敗細節）不含資料目錄與
   掃描根。反空轉：先斷言內部掃描目標確實含這些路徑。
   - 原始產物是引擎的原樣輸出，fake 引擎回傳的是固定 fixture，用它驗原始產物沒有意義，所以不在這一層。
-- 真引擎測試：以來源名稱呼叫 Syft 後，原始 CycloneDX／SPDX 不含掃描根、沒有 file 元件，套件與 Syft 預設呼叫相同。
+- 真引擎測試：以來源名稱呼叫 Syft 後，原始 CycloneDX／SPDX 不含掃描根；CycloneDX 沒有 file 元件；套件與 Syft 預設呼叫相同。
   - `grype.json` 的 `source.target` 取自 SBOM 的來源描述（實測），CycloneDX 的來源描述已由此斷言。
     CI 的真引擎 job 沒有漏洞 DB，Grype 無法比對，所以 `grype.json` 沒有自動化回歸，由真實端到端與場域驗收承接。
 - 真實端到端：上傳與掛載逐一掃描，逐檔搜尋主機路徑。
@@ -250,7 +252,10 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
   - `meta.target` 是 job 描述。
   - ScanResult、報表、job API 都不含主機路徑；CBOM 失敗成因與引擎失敗細節亦同。
   - 每支都先斷言內部目標確實含主機路徑，防止測試空轉。
-- 真引擎測試：以來源名稱呼叫時，原始 CycloneDX 與 SPDX 都不含掃描根，也沒有 file 元件；`sbom()`（CLI 路徑）同樣沒有 file 元件。
+- 真引擎測試：以來源名稱呼叫時，原始 CycloneDX 與 SPDX 都不含掃描根；CycloneDX 沒有 file 元件；`sbom()`（CLI 路徑）同樣沒有 file 元件。
+- SPDX 合規（2026-10-09，v0.6.0 發布前）：以 spdx-spec `support/2.3` 分支目前的 `schemas/spdx-schema.json`
+  （sha256 `4126dc29…3212`；與 2026-10-05 所用版本不同，分支已更新）驗證三種目標的輸出，皆零違規：映像 tar、Go 執行檔、
+  路徑含空白與中文的目錄。後者的 `documentNamespace` 由 Syft percent-encode，為合法 URI（#55）。
 - 突變測試：T931 自身的 10 個突變全部轉紅（另有 1 個驗 T928 的 server 測試改寫後仍有效），涵蓋關掉 file 選擇、不帶來源名稱、`meta.target` 用內部目標、不做遮蔽、遮蔽漏掉正規化路徑、
   named 路徑套件與預設不同、取不到 job 描述時退回空字串等情形。
 - 真實端到端：釘選三引擎、真實 DB、帶 CBOM，涵蓋上傳 zip／tar／tar.gz，以及掛載目錄、映像 tar、原始碼 tar、執行檔、扁平 OCI、巢狀目錄，共 9 個 job。每個 job 都先確認搜尋用的路徑確實是它的
