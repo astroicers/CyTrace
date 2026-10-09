@@ -80,8 +80,9 @@
 - OpenSSH 格式私鑰引擎偵測到但不建模；計入「引擎自承未建模」計數。
 - Windows 交付包的 CBOM 引擎已在 GitHub 的 Windows runner 上實際執行驗證，**尚未於場域 Windows 機器驗證**。
 - SPDX 輸出（Linux）：
-  - v0.6.0 發布前，以釘選版 syft 與官方 SPDX 2.3 JSON schema 重新驗證，零違規。
-  - 驗證的目標：映像 tar、Go 執行檔、路徑含空白與中文的目錄。
+  - v0.6.0 發布前，以釘選版 syft 與官方 SPDX 2.3 JSON schema 重新驗證結構，零違規。驗證時未啟用欄位格式檢查；
+    `documentNamespace` 另經檢查為合法 URI。
+  - 驗證的目標：映像 tar、Go 執行檔、路徑含空白與中文的目錄，皆以 Web 掛載方式產出。
   - **Windows 上尚未實測**。
 - `--help` 用法行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符，以及少數未逐一翻譯的參數錯誤類型，仍為英文。
 - `docker stop`（或 Ctrl-C）時，進行中的掃描不會等它跑完；重啟後該任務標為「中斷」，可重新送出。
@@ -89,15 +90,17 @@
   - **建議作法**：一個映像一個 tar（`docker save <單一映像>`），以 tar 或 tar.gz **上傳**，或**掛載未壓縮的 tar 檔**。
   - **以下情形掃描會失敗**（工作顯示失敗）：
     - 上傳多映像的 tar（`docker save a b`）。
-    - 上傳 zip 包裡、Docker 25 起匯出的映像。
-    - 上傳只有 OCI layout、而且 index 為巢狀的 tar（例如去掉 docker-save 清單的多平台匯出）。
+    - 上傳將匯出內容解開後再打成 zip、Docker 25 起匯出的映像。
+    - 上傳只有 OCI layout、而且 index 為巢狀的 tar（index.json 指向另一層 index 者，例如 Docker 25 起的匯出去掉
+      `manifest.json` 後的形態）。
     - 掛載已解開的、Docker 25 起匯出的目錄。
   - **以下情形會靜默得到 0 個元件**，報表看起來正常但沒有內容，**最需要注意**：
     - 掛載多映像的 tar。
     - 掛載只有 OCI layout、而且 index 為巢狀的 tar。
     - 掛載 gzip 壓縮的映像。
-    - 上傳 zip 包裡、Docker 25 以前匯出的映像。
-    - 映像放在壓縮包的子目錄裡（只檢查根目錄）。
+    - 上傳將匯出內容解開後再打成 zip、Docker 25 以前匯出的映像。
+    - 映像 tar 被包在壓縮包裡，例如 zip 裡放 `alpine.tar`（上傳與掛載皆已實測；外層為 tar 或 tar.gz 依同一路徑推論相同）；
+      或解開的匯出內容放在壓縮包的子目錄裡。只有 tar 或 tar.gz 本身就是映像時才會辨識。
     - 掛載已解開的、Docker 25 以前匯出的目錄。
 
     映像掃描得到 0 個元件時，請先確認是不是上述形態。

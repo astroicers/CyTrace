@@ -255,7 +255,8 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 - 真引擎測試：以來源名稱呼叫時，原始 CycloneDX 與 SPDX 都不含掃描根；CycloneDX 沒有 file 元件；`sbom()`（CLI 路徑）同樣沒有 file 元件。
 - SPDX 合規（2026-10-09，v0.6.0 發布前）：以 spdx-spec `support/2.3` 分支目前的 `schemas/spdx-schema.json`
   （sha256 `4126dc29…3212`；與 2026-10-05 所用版本不同，分支已更新）驗證三種目標的輸出，皆零違規：映像 tar、Go 執行檔、
-  路徑含空白與中文的目錄。後者的 `documentNamespace` 由 Syft percent-encode，為合法 URI（#55）。
+  路徑含空白與中文的目錄，皆以 Web 掛載方式產出。後者的 `documentNamespace` 由 Syft percent-encode，為合法 URI（#55）。
+  驗證時未啟用欄位格式檢查（jsonschema 未帶 format_checker）；`documentNamespace` 另以腳本檢查有 scheme、無空白、全 ASCII。
 - 突變測試：T931 自身的 10 個突變全部轉紅（另有 1 個驗 T928 的 server 測試改寫後仍有效），涵蓋關掉 file 選擇、不帶來源名稱、`meta.target` 用內部目標、不做遮蔽、遮蔽漏掉正規化路徑、
   named 路徑套件與預設不同、取不到 job 描述時退回空字串等情形。
 - 真實端到端：釘選三引擎、真實 DB、帶 CBOM，涵蓋上傳 zip／tar／tar.gz，以及掛載目錄、映像 tar、原始碼 tar、執行檔、扁平 OCI、巢狀目錄，共 9 個 job。每個 job 都先確認搜尋用的路徑確實是它的
