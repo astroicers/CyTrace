@@ -203,7 +203,8 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
 | `grype.json` | `source.target`（取自 SBOM 的來源描述）；`descriptor` 內的漏洞 DB 路徑 |
 | `cbom.cdx.json` | 無。theia 的資產位置本來就是相對路徑（實測含憑證的目錄） |
 
-**引擎參數實測**（釘選 Syft 1.45.1、Grype 0.114.0，真實漏洞 DB；目錄、映像 tar、單檔執行檔、原始碼 tar、扁平 OCI 五種目標）：
+**引擎參數實測**（釘選 Syft 1.45.1、Grype 0.114.0，真實漏洞 DB）：`--source-name`、`--base-path` 與 Grype `--name` 實測四種目標
+（目錄、映像 tar、單檔執行檔、原始碼 tar；扁平 OCI 由真實端到端涵蓋），file 選擇設定實測五種目標（另加扁平 OCI）：
 - Syft `--source-name <名稱>`：CycloneDX 與 SPDX 的來源描述不再含路徑。Grype 從 SBOM 讀來源描述，`source.target` 也跟著乾淨。元件數與弱點數不變。
 - Syft `--base-path`：對 file 元件名稱沒有作用，不採用。Grype `--name` 亦無作用，不採用。
 - 環境變數 `SYFT_FILE_METADATA_SELECTION=none`：Syft 不再輸出 file 元件，原始 CycloneDX 從此不含 file 元件的路徑。

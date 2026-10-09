@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "cytrace-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "cytrace-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cytrace-types",
  "serde",
@@ -346,14 +346,14 @@ dependencies = [
 
 [[package]]
 name = "cytrace-i18n"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "cytrace-report"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "cytrace-core",
  "cytrace-i18n",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "cytrace-server"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "cytrace-types"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",

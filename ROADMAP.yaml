@@ -1618,6 +1618,11 @@ milestones:
           把 #39 起的修正（T922 至 T928、T931）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
           終端機執行；Windows 包需要 Windows 建置機。DB 快照約 3 GB，媒體容量依此規劃。
 
+          **進度（2026-10-09）**：版本號 0.6.0 與 CHANGELOG 定稿（release/v0.6.0 PR）。待辦：
+          - 合併後推 `v0.6.0` tag，觸發 release 與容器 workflow。
+          - 使用者簽 Release 的 `SHA256SUMS`。
+          - 建 Linux 與 Windows 離線包並簽章。
+
       - id: T930
         title: "場域驗收演練（依 docs/FIELD_ACCEPTANCE.md，由人在斷網目標機執行）"
         type: GENERAL
@@ -1663,7 +1668,7 @@ milestones:
           （可在報表渲染端略過 file，代價是報表與 JSON 元件數不一致；ADR 修訂時裁定）。
 
           **結案（2026-10-08）**：
-          - 先實測引擎參數（釘選 Syft 1.45.1、Grype 0.114.0，五種目標）：
+          - 先實測引擎參數（釘選 Syft 1.45.1、Grype 0.114.0；來源名稱等參數四種目標，file 選擇五種目標）：
             - `--source-name` 讓 CycloneDX、SPDX 與 Grype `source.target` 的來源描述不帶路徑。
             - `SYFT_FILE_METADATA_SELECTION=none` 讓 Syft 不輸出 file 元件，套件、位置、弱點不變。
             - `--base-path` 與 Grype `--name` 無效，不採用。
