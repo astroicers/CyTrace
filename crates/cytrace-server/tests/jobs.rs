@@ -96,6 +96,44 @@ impl ScanEngine for RecordingEngine {
     }
 }
 
+/// T931：模擬引擎在細節裡引用目標路徑（Syft／theia 的錯誤訊息會這樣做），並記錄 server 給的來源名稱。
+#[derive(Default)]
+struct PathEchoEngine {
+    /// （內部掃描目標, 來源名稱）
+    calls: std::sync::Mutex<Vec<(String, String)>>,
+    fail_sbom: bool,
+}
+impl ScanEngine for PathEchoEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        Ok(CYCLONEDX.into())
+    }
+    fn sbom_with_spdx_named(
+        &self,
+        target: &str,
+        source_name: &str,
+    ) -> CoreResult<(String, Option<String>)> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((target.to_string(), source_name.to_string()));
+        if self.fail_sbom {
+            return Err(cytrace_core::CytraceError::Engine(format!(
+                "syft exit Some(1): could not determine source: {target}"
+            )));
+        }
+        Ok((CYCLONEDX.into(), Some(SPDX.into())))
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(GRYPE.into())
+    }
+    fn cbom(&self, target: &str) -> CoreResult<Option<cytrace_core::engine::CbomOutput>> {
+        Err(cytrace_core::CytraceError::Cbom {
+            key: "cbom.err.target_not_archive",
+            detail: Some(target.to_string()),
+        })
+    }
+}
+
 /// syft 失敗：job 以 `server.err.engine` 失敗（查詢時渲染 message 的測試用）。
 struct FailingSbomEngine;
 impl ScanEngine for FailingSbomEngine {
@@ -778,14 +816,24 @@ async fn uploaded_docker_save_is_scanned_as_docker_archive() {
     );
 }
 
-/// T928：server 交付的原始 `sbom.cdx.json` 是引擎輸出的原樣（含 Syft 的 file 元件），
-/// `scan-result.json` 與 `/result` 則不含 file 元件。共用 fixture 帶一筆以主機路徑為名的 file 元件。
+/// T928：server 交付的原始 `sbom.cdx.json` 是引擎輸出的原樣，`scan-result.json` 與 `/result` 則不含 file 元件。
+/// 共用 fixture 帶一筆以主機路徑為名的 file 元件，模擬引擎輸出含 file 元件的情形（真的 Syft 自 T931 起
+/// 已關閉 file 選擇；parse 這道過濾是第二道防線）。
 #[tokio::test]
 async fn file_components_stay_in_raw_sbom_but_not_in_scan_result() {
+    // 預期值由 fixture 推得：原始元件去掉 file 之後的類型序列（fixture 增減元件時不必改本測試）
+    let fixture: serde_json::Value = serde_json::from_str(CYCLONEDX).unwrap();
+    let fixture_types: Vec<String> = fixture["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"].as_str().unwrap_or_default().to_string())
+        .collect();
     assert!(
-        CYCLONEDX.contains(r#""type": "file""#),
+        fixture_types.iter().any(|t| t == "file"),
         "fixture 須含 file 元件，否則本測試空轉"
     );
+    let expected: Vec<String> = fixture_types.into_iter().filter(|t| t != "file").collect();
     let env = build_env(Arc::new(FakeEngine), true, 2);
     let cookie = login(&env.app).await;
     let (_, job) = create_job(&env.app, &cookie, "app", None).await;
@@ -812,7 +860,7 @@ async fn file_components_stay_in_raw_sbom_but_not_in_scan_result() {
     let on_disk: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(job_dir.join("scan-result.json")).unwrap())
             .unwrap();
-    assert_eq!(kinds(&on_disk), ["library", "library"], "scan-result.json");
+    assert_eq!(kinds(&on_disk), expected, "scan-result.json");
 
     let req = Request::get(format!("/api/v1/jobs/{id}/result"))
         .header(header::COOKIE, &cookie)
@@ -820,7 +868,106 @@ async fn file_components_stay_in_raw_sbom_but_not_in_scan_result() {
         .unwrap();
     let (status, v) = send_json(&env.app, req).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(kinds(&v), ["library", "library"], "/result");
+    assert_eq!(kinds(&v), expected, "/result");
+}
+
+async fn get_text(app: &Router, cookie: &str, path: &str) -> String {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(path)
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{path}");
+    String::from_utf8_lossy(&resp.into_body().collect().await.unwrap().to_bytes()).into_owned()
+}
+
+/// T931（ADR-009 修訂：Web 模式不外露伺服器主機路徑）：掛載與上傳的 job，交出去的東西只帶 job 描述——
+/// Syft 的來源名稱、ScanResult 的 `meta.target`、CBOM 失敗成因都用 job 描述；ScanResult、報表、job API
+/// 都不含資料目錄或掃描根的主機路徑。可下載的原始產物由引擎參數處理，見 cytrace-core 的真引擎測試。
+#[tokio::test]
+async fn web_outputs_name_the_job_instead_of_host_paths() {
+    let engine = Arc::new(PathEchoEngine::default());
+    let env = build_env(engine.clone(), true, 2);
+    let host = env.base.display().to_string();
+    let cookie = login(&env.app).await;
+
+    let (_, mounted) = create_job_with_cbom(&env.app, &cookie, "app").await;
+    let zip = make_zip_bytes(&[("app/main.py", b"print(1)")]);
+    let (status, uploaded) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body("----t931", "src.zip", &zip, None),
+        "----t931",
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{uploaded}");
+
+    for (job, desc) in [
+        (&mounted, "mounted:targets/app"),
+        (&uploaded, "upload:src.zip"),
+    ] {
+        let id = job["id"].as_str().unwrap();
+        assert_eq!(wait_terminal(&env.app, &cookie, id).await["status"], "done");
+        let calls = engine.calls.lock().unwrap().clone();
+        let (internal, source_name) = calls
+            .iter()
+            .find(|(_, n)| n == desc)
+            .unwrap_or_else(|| panic!("引擎應以 job 描述 {desc} 為來源名稱：{calls:?}"));
+        assert!(
+            internal.contains(&host),
+            "內部掃描目標應含主機路徑（否則本測試空轉）：{internal}"
+        );
+        assert_eq!(source_name, desc);
+
+        let result = get_text(&env.app, &cookie, &format!("/api/v1/jobs/{id}/result")).await;
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["meta"]["target"], desc, "meta.target");
+        let job_json = get_text(&env.app, &cookie, &format!("/api/v1/jobs/{id}")).await;
+        let report = get_text(&env.app, &cookie, &format!("/api/v1/jobs/{id}/report")).await;
+        for (name, text) in [("result", &result), ("job", &job_json), ("report", &report)] {
+            assert!(
+                !text.contains(&host),
+                "{desc} 的 {name} 不得含主機路徑 {host}"
+            );
+        }
+    }
+    // CBOM 失敗成因：引擎細節引用了目標路徑，交出去的是 job 描述
+    let id = mounted["id"].as_str().unwrap();
+    let v: serde_json::Value = serde_json::from_str(
+        &get_text(&env.app, &cookie, &format!("/api/v1/jobs/{id}/result")).await,
+    )
+    .unwrap();
+    assert_eq!(
+        v["crypto"]["status"]["Failed"]["reason_detail"],
+        "mounted:targets/app"
+    );
+}
+
+/// T931：引擎失敗時，job 錯誤細節裡的內部目標路徑換成 job 描述（#51 之後加入 Syft 錯誤摘要也適用）。
+#[tokio::test]
+async fn engine_failure_detail_does_not_carry_host_paths() {
+    let engine = Arc::new(PathEchoEngine {
+        fail_sbom: true,
+        ..Default::default()
+    });
+    let env = build_env(engine.clone(), true, 2);
+    let host = env.base.display().to_string();
+    let cookie = login(&env.app).await;
+    let (_, job) = create_job(&env.app, &cookie, "app", None).await;
+    let done = wait_terminal(&env.app, &cookie, job["id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "failed", "{done}");
+    let detail = done["error"]["detail"].as_str().unwrap();
+    assert!(
+        engine.calls.lock().unwrap()[0].0.contains(&host),
+        "內部掃描目標應含主機路徑（否則本測試空轉）"
+    );
+    assert!(!detail.contains(&host), "錯誤細節不得含主機路徑：{detail}");
+    assert!(detail.contains("mounted:targets/app"), "{detail}");
 }
 
 /// T925：server 管線同樣要把弱點對應到元件位置（ADR-009「修訂：schema v3」）。

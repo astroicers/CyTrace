@@ -27,6 +27,19 @@ pub trait ScanEngine: Send + Sync {
         Ok((self.sbom(target)?, None))
     }
 
+    /// 同 [`Self::sbom_with_spdx`]，另以 `source_name` 作為 SBOM 的來源名稱（Syft `--source-name`）。
+    ///
+    /// Web 模式傳 job 描述，原始產物因此不帶資料目錄或掃描根的主機路徑（ADR-009 修訂：Web 模式不外露
+    /// 伺服器主機路徑，T931）。預設實作忽略名稱，使既有 fake 引擎無須改動。
+    fn sbom_with_spdx_named(
+        &self,
+        target: &str,
+        source_name: &str,
+    ) -> Result<(String, Option<String>)> {
+        let _ = source_name;
+        self.sbom_with_spdx(target)
+    }
+
     /// 對目標產生 CycloneDX CBOM（ADR-013）。
     ///
     /// **降級語意**（決策 4）：引擎 binary 不存在 → `Ok(None)`（不影響 SBOM/CVE 主流程）；
@@ -52,15 +65,38 @@ impl ScanEngine for RealEngine {
     fn sbom_with_spdx(&self, target: &str) -> Result<(String, Option<String>)> {
         sbom_with_spdx(target).map(|(cdx, spdx)| (cdx, Some(spdx)))
     }
+    fn sbom_with_spdx_named(
+        &self,
+        target: &str,
+        source_name: &str,
+    ) -> Result<(String, Option<String>)> {
+        syft_cdx_and_spdx(target, Some(source_name)).map(|(cdx, spdx)| (cdx, Some(spdx)))
+    }
     fn cbom(&self, target: &str) -> Result<Option<CbomOutput>> {
         cbom(target)
     }
 }
 
+/// Syft 掃描指令的共同部分（輸出格式由呼叫端接上）。
+///
+/// - `SYFT_FILE_METADATA_SELECTION=none`：不輸出 file 元件。它們以路徑為名、無版本與 purl、不參與比對；
+///   `dir:` 與單檔目標時名稱是主機絕對路徑。實測套件、位置與弱點不變（ADR-009 修訂，T931）。
+/// - `source_name`：Syft `--source-name`。Web 模式傳 job 描述，來源描述就不帶主機路徑；
+///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
+fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
+    let mut cmd = Command::new("syft");
+    cmd.args(["scan", target]);
+    if let Some(name) = source_name {
+        cmd.args(["--source-name", name]);
+    }
+    cmd.env("SYFT_FILE_METADATA_SELECTION", "none");
+    cmd
+}
+
 /// 以 Syft 對目標產生 CycloneDX JSON SBOM。
 pub fn sbom(target: &str) -> Result<String> {
-    let out = Command::new("syft")
-        .args(["scan", target, "-o", "cyclonedx-json", "-q"])
+    let out = syft_scan(target, None)
+        .args(["-o", "cyclonedx-json", "-q"])
         .output()
         .map_err(|e| CytraceError::Engine(format!("syft: {e}")))?;
     check(out, "syft")
@@ -72,9 +108,13 @@ pub fn sbom(target: &str) -> Result<String> {
 /// 不必為 SPDX 再掃一次。SPDX 輸出若缺檔、不是 JSON、或沒有 `spdxVersion`，一律視為
 /// 引擎錯誤（fail-closed）——交件的 SBOM 不能是半成品。
 pub fn sbom_with_spdx(target: &str) -> Result<(String, String)> {
+    syft_cdx_and_spdx(target, None)
+}
+
+fn syft_cdx_and_spdx(target: &str, source_name: Option<&str>) -> Result<(String, String)> {
     let spdx_path = spdx_temp_path();
-    let out = Command::new("syft")
-        .args(["scan", target, "-o", "cyclonedx-json", "-o"])
+    let out = syft_scan(target, source_name)
+        .args(["-o", "cyclonedx-json", "-o"])
         .arg(format!("spdx-json={}", spdx_path.display()))
         .arg("-q")
         .output();
@@ -797,6 +837,30 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// T931（ADR-009 修訂）：Syft 一律不輸出 file 元件；有來源名稱時以 `--source-name` 帶入。
+    #[test]
+    fn syft_scan_sets_source_name_and_disables_file_metadata() {
+        let args = |c: &Command| -> Vec<String> {
+            c.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let file_selection_none = |c: &Command| {
+            c.get_envs().any(|(k, v)| {
+                k == "SYFT_FILE_METADATA_SELECTION" && v == Some(std::ffi::OsStr::new("none"))
+            })
+        };
+        let named = syft_scan("dir:/x", Some("upload:a.zip"));
+        assert_eq!(
+            args(&named),
+            ["scan", "dir:/x", "--source-name", "upload:a.zip"]
+        );
+        assert!(file_selection_none(&named));
+        let plain = syft_scan("dir:/x", None);
+        assert_eq!(args(&plain), ["scan", "dir:/x"]);
+        assert!(file_selection_none(&plain));
+    }
 
     #[test]
     fn spdx_temp_paths_are_unique_per_call() {
