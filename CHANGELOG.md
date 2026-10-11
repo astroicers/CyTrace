@@ -6,6 +6,15 @@
 
 ## [Unreleased]
 
+### 變更
+
+- **交付簽章金鑰更換**（2026-10-11）：v0.6.0 起的 Release `SHA256SUMS` 與離線安裝包，都改以新金鑰簽章。
+  - 新金鑰 ID `CE187AD55AF18DB0`，公鑰 `RWSwjfFa1XoYzuT985oJIvN4GEWd8ZT1iTJjmc+Jyx7TZ8C0H7Z8pbnJ`。
+  - 換鑰原因：舊金鑰（ID `055ACC6F1822B10E`）的私鑰密碼遺失，無法再簽章。
+  - v0.5.0 已簽的簽章仍有效，請以舊公鑰驗證：`keys/retired/cytrace-055ACC6F1822B10E.pub`。
+  - 場域請改用新的交付驗收單上抄錄的公鑰字串驗章；新驗收單須以帶外方式重新交付。
+  - 金鑰沿革見 DELIVERY_SOP §3。
+
 ## [0.6.0] - 2026-10-09
 
 > **升級須知**：

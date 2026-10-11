@@ -21,7 +21,7 @@
 ## 1. 事前準備（進場前備妥）
 
 - [ ] **交付驗收單（紙本）**，上面抄有交付公鑰字串與金鑰 ID。須與交付媒體**分開**遞交（SOP §3）。
-      公鑰字串應為：`RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX`，金鑰 ID `055ACC6F1822B10E`。
+      公鑰字串應為：`RWSwjfFa1XoYzuT985oJIvN4GEWd8ZT1iTJjmc+Jyx7TZ8C0H7Z8pbnJ`，金鑰 ID `CE187AD55AF18DB0`（v0.6.0 起；v0.5.0 用舊金鑰 `055ACC6F1822B10E`，見 SOP §3 金鑰沿革）。
 - [ ] **目標機上的 `minisign`**。安裝包**不附**驗章工具，須依場域核可流程另行攜入。
       來源與版本：________________
 - [ ] **交付媒體**：Linux 為 `cytrace-<版本>/`，Windows 為 `cytrace-<版本>-windows/`。

@@ -1618,10 +1618,21 @@ milestones:
           把 #39 起的修正（T922 至 T928、T931）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
           終端機執行；Windows 包需要 Windows 建置機。DB 快照約 3 GB，媒體容量依此規劃。
 
-          **進度（2026-10-09）**：版本號 0.6.0 與 CHANGELOG 定稿（release/v0.6.0 PR）。待辦：
-          - 合併後推 `v0.6.0` tag，觸發 release 與容器 workflow。
-          - 使用者簽 Release 的 `SHA256SUMS`。
-          - 建 Linux 與 Windows 離線包並簽章。
+          **進度（2026-10-11）**：
+          - v0.6.0 已發布：tag 指向 PR #57 的合併點 23a862b；Release 與 GHCR 映像的 workflow 皆成功。
+            Release 的 Linux binary 已以 SHA256SUMS 驗證，`--version` 為 0.6.0。
+          - CHANGELOG 經獨立核對四輪 PASS。
+          - **交付簽章金鑰更換**：
+            - 原因：舊金鑰 055ACC6F1822B10E 的私鑰密碼遺失。
+            - 使用者 2026-10-11 同意由 AI 產生新金鑰 CE187AD55AF18DB0，私鑰以隨機密碼保護；密碼只寫入權限 600 的檔案，不經對話顯示。
+            - 舊公鑰封存於 `keys/retired/`。DELIVERY_SOP §3 新增金鑰沿革。
+          - Release `SHA256SUMS` 與 Linux 離線包皆以新金鑰簽章，驗章通過。
+          - Linux 離線包已驗收：從 v0.6.0 tag 的 git archive 打包，3.2 GB；11 個檔的 SHA256SUMS 相符；
+            在無網路命名空間內以 `cytrace-offline run --cbom` 冒煙測試通過。
+          - 待辦：
+            - Release 上傳 `.minisig` 並更新 Release 說明中的金鑰 ID。
+            - 新公鑰以帶外方式交付場域。
+            - Windows 離線包。
 
       - id: T930
         title: "場域驗收演練（依 docs/FIELD_ACCEPTANCE.md，由人在斷網目標機執行）"
