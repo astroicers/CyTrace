@@ -81,6 +81,8 @@ impl ScanEngine for RealEngine {
 ///
 /// - `SYFT_FILE_METADATA_SELECTION=none`：不輸出 file 元件。它們以路徑為名、無版本與 purl、不參與比對；
 ///   `dir:` 與單檔目標時名稱是主機絕對路徑。實測套件、位置與弱點不變（ADR-009 修訂，T931）。
+/// - 不帶 `-q`：失敗原因只在 stderr 的 ERROR 行（`-q` 會連錯誤一起關掉；#51）。非終端機時 Syft 不畫進度列，
+///   stderr 只有記錄行；成功時的 WARN 行不進任何輸出。
 /// - `source_name`：Syft `--source-name`。Web 模式傳 job 描述，來源描述就不帶主機路徑；
 ///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
 fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
@@ -96,10 +98,10 @@ fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
 /// 以 Syft 對目標產生 CycloneDX JSON SBOM。
 pub fn sbom(target: &str) -> Result<String> {
     let out = syft_scan(target, None)
-        .args(["-o", "cyclonedx-json", "-q"])
+        .args(["-o", "cyclonedx-json"])
         .output()
         .map_err(|e| CytraceError::Engine(format!("syft: {e}")))?;
-    check(out, "syft")
+    check_syft(out)
 }
 
 /// 單次 syft 執行同時產 CycloneDX JSON（stdout）與 SPDX 2.3 JSON（寫入暫存檔後讀回）。
@@ -116,14 +118,10 @@ fn syft_cdx_and_spdx(target: &str, source_name: Option<&str>) -> Result<(String,
     let out = syft_scan(target, source_name)
         .args(["-o", "cyclonedx-json", "-o"])
         .arg(format!("spdx-json={}", spdx_path.display()))
-        .arg("-q")
         .output();
     let spdx = std::fs::read_to_string(&spdx_path);
     let _ = std::fs::remove_file(&spdx_path);
-    let cdx = check(
-        out.map_err(|e| CytraceError::Engine(format!("syft: {e}")))?,
-        "syft",
-    )?;
+    let cdx = check_syft(out.map_err(|e| CytraceError::Engine(format!("syft: {e}")))?)?;
     let spdx = spdx.map_err(|e| CytraceError::Engine(format!("syft spdx-json: {e}")))?;
     validate_spdx(&spdx)?;
     Ok((cdx, spdx))
@@ -834,9 +832,112 @@ fn check(out: std::process::Output, name: &str) -> Result<String> {
     }
 }
 
+/// Syft 專用：失敗細節取 stderr 的 ERROR 摘要（#51）。Grype 與 theia 仍走 [`check`]，細節維持原樣。
+fn check_syft(out: std::process::Output) -> Result<String> {
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Err(CytraceError::Engine(format!(
+            "syft exit {:?}: {}",
+            out.status.code(),
+            summarize_stderr(&String::from_utf8_lossy(&out.stderr))
+        )))
+    }
+}
+
+/// Syft stderr 的失敗摘要（#51）：只留記錄格式的 ERROR 行內容（去掉 `[0000] ERROR` 前綴與顏色碼），
+/// 連同其後的續行——Syft 試過多個 provider 都失敗時，原因在縮排的 `- …` 續行裡。沒有 ERROR 行時取最後一個非空行。
+/// WARN 等其他記錄行不進錯誤細節。**不截斷**：提示分類與 server 的路徑遮蔽都要看完整原文，截斷交給呈現端。
+fn summarize_stderr(stderr: &str) -> String {
+    let lines: Vec<String> = stderr
+        .lines()
+        .map(strip_ansi)
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    // 記錄行以 `[0000]` 這類序號起頭；不是記錄行的就是上一則記錄的續行
+    let is_log_line = |l: &str| {
+        let t = l.trim_start();
+        t.starts_with('[')
+            && t[1..]
+                .split_once(']')
+                .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+    };
+    let mut errors: Vec<String> = Vec::new();
+    let mut in_error = false;
+    for l in &lines {
+        if is_log_line(l) {
+            in_error = false;
+            if let Some((_, rest)) = l.split_once(" ERROR ") {
+                errors.push(rest.trim().to_string());
+                in_error = true;
+            }
+        } else if in_error {
+            if let Some(last) = errors.last_mut() {
+                last.push(' ');
+                last.push_str(l.trim());
+            }
+        }
+    }
+    if errors.is_empty() {
+        lines
+            .last()
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default()
+    } else {
+        errors.join("; ")
+    }
+}
+
+/// 去掉 ANSI 控制序列（`ESC [ … 字母`）。
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for d in chars.by_ref() {
+                if d.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #51：Syft 不帶 `-q` 時，失敗原因在 stderr 的 ERROR 行（帶顏色碼與 `[0000] ERROR` 前綴）；
+    /// 摘要只留 ERROR 行的內容（連同其後的續行），WARN 行與顏色碼去掉；核心層不截斷，上限由呈現端套用。
+    #[test]
+    fn stderr_summary_keeps_only_the_error_lines() {
+        let raw = "[0000]  WARN no explicit name and version provided for directory source\n\
+                   [0000] ERROR \u{1b}[31mcould not determine source: docker-archive: cannot process multiple docker manifests\u{1b}[0m\n";
+        assert_eq!(
+            summarize_stderr(raw),
+            "could not determine source: docker-archive: cannot process multiple docker manifests"
+        );
+        // 沒有 ERROR 行時取最後一個非空行（其他引擎或非記錄格式的輸出）
+        assert_eq!(summarize_stderr("first\n\nlast line  \n"), "last line");
+        assert_eq!(summarize_stderr("  \n"), "");
+        // 多行 ERROR：Syft 試過多個 provider 都失敗時，原因在 ERROR 行之後的縮排續行（釘選 1.45.1 實測原文）
+        let multi = "[0000] ERROR could not determine source: errors occurred attempting to resolve 'alpine.tar':\n\
+                     \x20 - oci-dir: unable to read image from OCI directory path \"alpine.tar\": stat alpine.tar/index.json: not a directory\n\
+                     \x20 - local-directory: not a directory source: alpine.tar\n";
+        assert_eq!(
+            summarize_stderr(multi),
+            "could not determine source: errors occurred attempting to resolve 'alpine.tar': \
+             - oci-dir: unable to read image from OCI directory path \"alpine.tar\": stat alpine.tar/index.json: not a directory \
+             - local-directory: not a directory source: alpine.tar"
+        );
+        // 核心層不截斷：分類與遮蔽要看完整原文（截斷交給呈現端，server 在遮蔽之後才截；#51 複審）
+        let long = format!("[0000] ERROR {}", "x".repeat(2000));
+        assert_eq!(summarize_stderr(&long).len(), 2000);
+    }
 
     /// T931（ADR-009 修訂）：Syft 一律不輸出 file 元件；有來源名稱時以 `--source-name` 帶入。
     #[test]

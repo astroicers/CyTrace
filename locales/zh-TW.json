@@ -123,6 +123,9 @@
     "plaintext_warning": "⚠️ 未設定 TLS——以 HTTP 明文提供服務（建議設定 CYTRACE_TLS_CERT/KEY 啟用 HTTPS）",
     "err": {
       "engine": "引擎子程序錯誤",
+      "engine_multi_image": "掃描目標是含多個映像的 tar，引擎無法處理；請一個映像一個 tar（docker save <單一映像>）",
+      "engine_nested_oci_index": "掃描目標是 index 為巢狀的 OCI layout，引擎無法解析；請改用 docker save 匯出的 tar",
+      "engine_image_unreadable": "引擎無法把掃描目標當成映像 tar 讀取：檔案可能壓縮過、不完整，或不是 docker save 的輸出；請提供未壓縮、完整的 docker save tar",
       "parse": "解析錯誤",
       "io": "I/O 錯誤",
       "config": "設定錯誤",

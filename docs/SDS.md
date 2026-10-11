@@ -94,7 +94,8 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 
 ### 3.2 Syft／Grype
 
-- `syft scan <target> -o cyclonedx-json -q`，輸出原樣落地為 `sbom.cdx.json`。一律帶環境變數
+- `syft scan <target> -o cyclonedx-json`，輸出原樣落地為 `sbom.cdx.json`。不帶 `-q`：失敗原因只在 stderr 的 ERROR 行，
+  CyTrace 取出放進錯誤細節，已知的不支援形態另對應到具體提示（#51）。一律帶環境變數
   `SYFT_FILE_METADATA_SELECTION=none`，不輸出 file 元件；Web 模式另加 `--source-name <job 描述>`，
   讓原始產物不帶伺服器主機路徑（ADR-009 修訂：Web 模式不外露伺服器主機路徑，T931）。
 - 需要 SPDX 時（CLI `scan --spdx`；Web 服務模式一律）改為同一次執行多重輸出：

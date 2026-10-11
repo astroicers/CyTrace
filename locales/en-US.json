@@ -123,6 +123,9 @@
     "plaintext_warning": "⚠️ TLS not configured — serving plaintext HTTP (set CYTRACE_TLS_CERT/KEY to enable HTTPS)",
     "err": {
       "engine": "Engine subprocess error",
+      "engine_multi_image": "The target is a tar with multiple images, which the engine cannot process; save one image per tar (docker save <image>)",
+      "engine_nested_oci_index": "The target is an OCI layout with a nested index, which the engine cannot parse; use a tar exported by docker save instead",
+      "engine_image_unreadable": "The engine cannot read the target as an image tar: the file may be compressed, incomplete, or not produced by docker save; provide an uncompressed, complete docker save tar",
       "parse": "Parse error",
       "io": "I/O error",
       "config": "Configuration error",
