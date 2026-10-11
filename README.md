@@ -45,11 +45,13 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 
 掃描另需 Syft／Grype 引擎與 grype DB 快照；`--cbom` 另需 CBOMkit-theia。場域交付請用離線安裝包或容器（見下方）。
 
-以 minisign 簽章（`SHA256SUMS.minisig`）的有兩處：自 v0.5.0 起，本 Release 的 `SHA256SUMS`（上列執行檔）由交付工作站於發布後簽章附上；離線安裝包的 `SHA256SUMS` 則在交付端打包時簽（DELIVERY_SOP §3）。兩者用同一把交付公鑰（金鑰 ID `055ACC6F1822B10E`，即 `keys/cytrace.pub`）：
+以 minisign 簽章（`SHA256SUMS.minisig`）的有兩處：自 v0.5.0 起，本 Release 的 `SHA256SUMS`（上列執行檔）由交付工作站於發布後簽章附上；離線安裝包的 `SHA256SUMS` 則在交付端打包時簽（DELIVERY_SOP §3）。兩者用同一把交付公鑰（金鑰 ID `CE187AD55AF18DB0`，即 `keys/cytrace.pub`）：
 
 ```
-RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX
+RWSwjfFa1XoYzuT985oJIvN4GEWd8ZT1iTJjmc+Jyx7TZ8C0H7Z8pbnJ
 ```
+
+自 v0.6.0 起改用此金鑰；v0.5.0 的簽章請以舊公鑰驗證（金鑰 ID `055ACC6F1822B10E`，`keys/retired/cytrace-055ACC6F1822B10E.pub`），沿革見 DELIVERY_SOP §3。
 
 驗章：`minisign -Vm SHA256SUMS -P <公鑰字串>`。場域請以交付驗收單上帶外抄錄的字串驗章（DELIVERY_SOP §3）。
 

@@ -57,21 +57,29 @@ CBOM 引擎比對 SHA256）與 grype DB 快照 → 產自產 SBOM → 寫 NOTICE
 ## 3. 簽章與離線信任錨（ADR-007 / NEW-3）
 
 - 簽章工具：**minisign**（detached，SHA-256）。
-- **交付公鑰**（金鑰 ID `055ACC6F1822B10E`；檔案為 repo 的 `keys/cytrace.pub`）：
+- **交付公鑰**（金鑰 ID `CE187AD55AF18DB0`；檔案為 repo 的 `keys/cytrace.pub`）：
 
   ```
-  RWQOsSIYb8xaBZvkvmUpX/X8RzYFHPVNujqCGCsg53ytFOc+btCvTlFX
+  RWSwjfFa1XoYzuT985oJIvN4GEWd8ZT1iTJjmc+Jyx7TZ8C0H7Z8pbnJ
   ```
 
   > 本字串與 `keys/cytrace.pub` 由 `scripts/pubkey-check.py` 在 CI 對帳，抄錯一個字元即紅。
-- **私鑰**：只在交付工作站的 `~/.minisign/cytrace.key`，以密碼保護（scrypt），不進 repo、不進 CI。
+- **私鑰**：只在交付工作站的 `~/.minisign/cytrace-2026-10.key`，以密碼保護（scrypt），不進 repo、不進 CI。
   私鑰與密碼另行備份；遺失時改用新金鑰簽章，並須重新以帶外方式交付新公鑰。
+- **金鑰沿革**（驗舊版產物時用對應的公鑰）：
+
+  | 金鑰 ID | 公鑰檔 | 簽過的版本 | 狀態 |
+  |---|---|---|---|
+  | `CE187AD55AF18DB0` | `keys/cytrace.pub` | v0.6.0 起 | 現行（2026-10-11 產生） |
+  | `055ACC6F1822B10E` | `keys/retired/cytrace-055ACC6F1822B10E.pub` | v0.5.0 | 停用（2026-10-11：私鑰密碼遺失，無法再簽；已簽的 v0.5.0 簽章仍有效） |
+
+  換鑰時，新公鑰字串與金鑰 ID 須重新抄在交付驗收單上，以帶外方式交付；場域不得沿用舊驗收單驗新版。
 - **簽章**（打包時自動，簽章時會詢問私鑰密碼）：
-  `CYTRACE_MINISIGN_SECKEY=~/.minisign/cytrace.key scripts/package.sh`
+  `CYTRACE_MINISIGN_SECKEY=~/.minisign/cytrace-2026-10.key scripts/package.sh`
   （Windows：`$env:CYTRACE_MINISIGN_SECKEY=...` 後跑 `package.ps1`）。產出 `SHA256SUMS.minisig`。
-  已有的檔案也可手動簽：`minisign -Sm SHA256SUMS -s ~/.minisign/cytrace.key`。
+  已有的檔案也可手動簽：`minisign -Sm SHA256SUMS -s ~/.minisign/cytrace-2026-10.key`。
 - **GitHub Release 的 `SHA256SUMS`**（自 v0.5.0 起）：發布後在交付工作站下載、簽章、附回 Release：
-  `gh release download vX.Y.Z -p SHA256SUMS && minisign -Sm SHA256SUMS -s ~/.minisign/cytrace.key && gh release upload vX.Y.Z SHA256SUMS.minisig`。
+  `gh release download vX.Y.Z -p SHA256SUMS && minisign -Sm SHA256SUMS -s ~/.minisign/cytrace-2026-10.key && gh release upload vX.Y.Z SHA256SUMS.minisig`。
 - **離線信任錨**：把上方公鑰字串與金鑰 ID **抄在交付驗收單上**（紙本即帶外管道），與交付媒體分開遞交；
   目標機驗收者以驗收單上的字串驗章，不使用交付媒體內附的任何公鑰。
 - 目標機驗證：
@@ -140,7 +148,7 @@ syft／grype／theia，並重檢 musl 價值主張（musl 限 Linux）。
 4. `sha256sum -c SHA256SUMS-image`（binaries 的校驗檔是另一份 `SHA256SUMS`——
    兩個 workflow 各附各的，檔名刻意錯開）。
 5. **minisign 簽 tar**（交付工作站私鑰，同 §3 信任錨；私鑰不進 CI）：
-   `minisign -Sm cytrace-vX.Y.Z-image.tar -s ~/.minisign/cytrace.key`。
+   `minisign -Sm cytrace-vX.Y.Z-image.tar -s ~/.minisign/cytrace-2026-10.key`。
 
 ### 7.2 攜入與載入（場域）
 1. 光碟 / 單向匣攜入 → `minisign -Vm cytrace-vX.Y.Z-image.tar -P <驗收單上的公鑰字串>`（§3）＋ `sha256sum -c`。
