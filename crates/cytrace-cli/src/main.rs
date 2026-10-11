@@ -196,7 +196,11 @@ fn render_core_error(e: &CytraceError, cat: &Catalog) -> String {
             match other.untranslatable_detail().filter(|d| !d.is_empty()) {
                 Some(detail) => cat.t(
                     "cli.err.with_detail",
-                    &[("what", &what), ("detail", &detail)],
+                    &[
+                        ("what", &what),
+                        // 與 server 同一個上限（#51 複審）；CLI 不遮蔽路徑，直接截斷無妨
+                        ("detail", &cytrace_core::error::bounded_detail(&detail)),
+                    ],
                 ),
                 None => what,
             }
@@ -827,6 +831,21 @@ mod tests {
             .any(|c| matches!(c as u32, 0x3000..=0x303F | 0x4E00..=0x9FFF | 0xFF00..=0xFFEF))
     }
 
+    /// #51 複審：引擎原因很長時，終端機的錯誤細節同樣有上限（與 server 同一個上限）。
+    #[test]
+    fn long_engine_detail_is_bounded_in_the_terminal() {
+        let long = format!("syft exit Some(1): {}", "x".repeat(3000));
+        for lang in ["zh-TW", "en-US"] {
+            let out = render_core_error(&CytraceError::Engine(long.clone()), &Catalog::load(lang));
+            assert!(out.contains('…'), "{lang}：{out}");
+            assert!(
+                !out.contains(&"x".repeat(cytrace_core::error::DETAIL_MAX_CHARS)),
+                "{lang}：細節未截斷"
+            );
+            assert!(out.chars().count() < 700, "{lang}：{}", out.chars().count());
+        }
+    }
+
     #[test]
     fn core_errors_render_in_the_operator_language() {
         let samples = [
@@ -836,6 +855,10 @@ mod tests {
             CytraceError::Config("x".into()),
             CytraceError::DbMissing("/db".into()),
             CytraceError::Engine(String::new()),
+            // #51：已知的 Syft 失敗對應到具體提示，同樣不得出現裸鍵、殘留佔位符
+            CytraceError::Engine("syft exit Some(1): docker-archive: cannot process multiple docker manifests".into()),
+            CytraceError::Engine("syft exit Some(1): oci-dir: unexpected media type for sha256:x: application/vnd.oci.image.index.v1+json".into()),
+            CytraceError::Engine("syft exit Some(1): docker-archive: unable to provide image from tarball: archive/tar: invalid tar header".into()),
         ];
         for lang in ["zh-TW", "en-US"] {
             let cat = Catalog::load(lang);

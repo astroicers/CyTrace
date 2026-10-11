@@ -951,6 +951,62 @@ fn pinned_syft_source_name_keeps_host_paths_out_of_raw_sboms() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// #51：Syft 失敗時，錯誤細節帶得出引擎的原因（不帶 `-q`，取 stderr 的 ERROR 行），並對應到具體提示。
+/// 以手工構造的兩映像 docker-save tar 實跑：Syft 以 `cannot process multiple docker manifests` 失敗。
+/// 若某次升級 Syft 改了字句，提示會退回通用鍵——這支會提醒更新 `error::engine_hint_key`。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_failure_cause_reaches_the_error_detail() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+
+    let (layer, config) = mini_image_layer_and_config();
+    let config_name = format!("{}.json", sha256_hex(config.as_bytes()));
+    let manifest = serde_json::json!([
+        { "Config": config_name, "RepoTags": ["cytrace-mini:1"], "Layers": ["layer.tar"] },
+        { "Config": config_name, "RepoTags": ["cytrace-mini:2"], "Layers": ["layer.tar"] }
+    ])
+    .to_string();
+    let image = tar_of(&[
+        ("manifest.json", manifest.as_bytes()),
+        (&config_name, config.as_bytes()),
+        ("layer.tar", &layer),
+    ]);
+    let dir = workspace("multi-image");
+    fs::create_dir_all(&dir).unwrap();
+    let tar_path = dir.join("two.tar");
+    fs::write(&tar_path, &image).unwrap();
+
+    let err = RealEngine
+        .sbom(&format!("docker-archive:{}", tar_path.display()))
+        .expect_err("兩映像的 docker-archive 應失敗");
+    let detail = err.untranslatable_detail().unwrap_or_default();
+    assert!(
+        detail.contains("cannot process multiple docker manifests"),
+        "錯誤細節應帶出 Syft 的原因：{detail}"
+    );
+    assert!(!detail.contains('\u{1b}'), "不得殘留顏色碼：{detail:?}");
+    assert_eq!(err.i18n_key(), "server.err.engine_multi_image");
+    // Web 走的是 sbom_with_spdx_named（另一條呼叫路徑），同樣不得帶 -q、同樣要帶出原因
+    let err = RealEngine
+        .sbom_with_spdx_named(
+            &format!("docker-archive:{}", tar_path.display()),
+            "upload:two.tar",
+        )
+        .expect_err("named 路徑同樣應失敗");
+    assert!(
+        err.untranslatable_detail()
+            .unwrap_or_default()
+            .contains("cannot process multiple docker manifests"),
+        "named 路徑的錯誤細節應帶出原因：{err:?}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// #49：釘選版 syft 掃 docker-save 映像時，`docker-archive:` 抓得到套件，解開後以 `dir:` 掃則一個都沒有。
 ///
 /// server 上傳映像 tar 時改給 `docker-archive:` 的依據就是這個行為。若某次升級 syft 讓 `dir:` 也能掃進
@@ -1113,11 +1169,14 @@ fn pinned_syft_oci_dir_reads_flat_layout_and_fails_loudly_on_nested_index() {
     );
 
     let nested = write_layout("oci-nested", &nested_index, &[index.as_bytes()]);
-    assert!(
-        RealEngine
-            .sbom(&format!("oci-dir:{}", nested.display()))
-            .is_err(),
-        "巢狀 index 以 oci-dir 應明確失敗——若 syft 開始支援，上傳 docker-save 可改回 oci-dir 並重新檢視"
+    let err = RealEngine
+        .sbom(&format!("oci-dir:{}", nested.display()))
+        .expect_err("巢狀 index 以 oci-dir 應明確失敗——若 syft 開始支援，上傳 docker-save 可改回 oci-dir 並重新檢視");
+    // #51：失敗要帶得出原因，且對應到巢狀 index 的提示
+    assert_eq!(
+        err.i18n_key(),
+        "server.err.engine_nested_oci_index",
+        "{err:?}"
     );
     assert!(
         syft_libraries(format!("dir:{}", nested.display())).is_empty(),

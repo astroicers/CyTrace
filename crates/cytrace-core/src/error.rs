@@ -64,7 +64,7 @@ impl CytraceError {
     /// 放進 `Localized`，也讓 i18n-check 看得到每一個鍵的字面值。
     pub fn i18n_key(&self) -> &'static str {
         match self {
-            CytraceError::Engine(_) => "server.err.engine",
+            CytraceError::Engine(msg) => engine_hint_key(msg),
             CytraceError::Parse(_) => "server.err.parse",
             CytraceError::Io(_) => "server.err.io",
             CytraceError::Config(_) => "server.err.config",
@@ -97,5 +97,65 @@ impl CytraceError {
     }
 }
 
+/// 對外呈現的錯誤細節長度上限（字元）。核心層的引擎摘要本身不截斷（提示分類要看完整原文），
+/// 由呈現端套用：server 在**遮蔽主機路徑之後**才截斷；CLI 沒有遮蔽，直接截斷（#51 複審）。
+pub const DETAIL_MAX_CHARS: usize = 500;
+
+/// 把錯誤細節限制在 [`DETAIL_MAX_CHARS`] 字元內，超過時以 `…` 結尾。
+pub fn bounded_detail(detail: &str) -> String {
+    if detail.chars().count() > DETAIL_MAX_CHARS {
+        format!(
+            "{}…",
+            detail.chars().take(DETAIL_MAX_CHARS).collect::<String>()
+        )
+    } else {
+        detail.to_string()
+    }
+}
+
+/// 引擎失敗的提示鍵（#51）：Syft 對已知的不支援形態以固定字句失敗，對應到告訴操作員怎麼改的提示；
+/// 其他失敗回通用鍵。字句取自釘選 Syft 1.45.1 的實測原文（ADR-011 修訂：映像 tar 的掃描目標形態）。
+/// 升級 Syft 時字句若改變，只會退回通用鍵，不會給錯提示；真引擎測試會提醒。
+fn engine_hint_key(msg: &str) -> &'static str {
+    if msg.contains("cannot process multiple docker manifests") {
+        "server.err.engine_multi_image"
+    } else if msg.contains("unexpected media type") && msg.contains("image.index") {
+        "server.err.engine_nested_oci_index"
+    } else if msg.contains("unable to provide image from tarball") {
+        // docker-archive 讀取失敗的泛用包裝：實測涵蓋 gzip 壓縮、不完整、缺 manifest.json、不是 tar 四種（#51 複審）
+        "server.err.engine_image_unreadable"
+    } else {
+        "server.err.engine"
+    }
+}
+
 /// core 統一回傳型別。
 pub type Result<T> = std::result::Result<T, CytraceError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #51：Syft 對已知的不支援形態會以固定字句失敗；對應到具體提示，讓操作員知道怎麼改，
+    /// 而不是只看到「引擎子程序錯誤」。其他失敗仍走通用鍵。訊息取自釘選 Syft 1.45.1 實測原文。
+    #[test]
+    fn engine_failures_map_to_actionable_hints() {
+        let key = |m: &str| CytraceError::Engine(m.into()).i18n_key();
+        assert_eq!(
+            key("syft exit Some(1): could not determine source: an error occurred attempting to resolve '/x/multi.tar': docker-archive: cannot process multiple docker manifests"),
+            "server.err.engine_multi_image"
+        );
+        assert_eq!(
+            key("syft exit Some(1): could not determine source: an error occurred attempting to resolve '/x': oci-dir: unable to parse OCI directory as an image: unexpected media type for sha256:294b: application/vnd.oci.image.index.v1+json"),
+            "server.err.engine_nested_oci_index"
+        );
+        assert_eq!(
+            key("syft exit Some(1): could not determine source: an error occurred attempting to resolve '/x/a.tar.gz': docker-archive: unable to provide image from tarball: archive/tar: invalid tar header"),
+            "server.err.engine_image_unreadable"
+        );
+        assert_eq!(key("syft exit Some(1): "), "server.err.engine");
+        assert_eq!(key("syft: not found"), "server.err.engine");
+        // 分類不變：kind 仍是 engine（server.err.{kind} 的退回鏈照舊）
+        assert_eq!(CytraceError::Engine("x".into()).kind(), "engine");
+    }
+}

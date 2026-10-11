@@ -1751,6 +1751,101 @@ async fn t909_method_not_allowed_is_json_and_auth_first() {
     assert_eq!(st, StatusCode::UNAUTHORIZED, "未登入應先 401：{v}");
 }
 
+/// #51：Syft 以已知字句失敗時，job 錯誤帶具體提示（告訴操作員怎麼改），細節保留引擎的原因；
+/// 細節裡引用的目標路徑經 T931 的遮蔽換成 job 描述。
+#[tokio::test]
+async fn known_syft_failure_carries_an_actionable_hint() {
+    struct MultiImageEngine;
+    impl ScanEngine for MultiImageEngine {
+        fn sbom(&self, _target: &str) -> CoreResult<String> {
+            Ok(CYCLONEDX.into())
+        }
+        fn sbom_with_spdx(&self, target: &str) -> CoreResult<(String, Option<String>)> {
+            let path = target.strip_prefix("dir:").unwrap_or(target);
+            Err(cytrace_core::CytraceError::Engine(format!(
+                "syft exit Some(1): could not determine source: an error occurred attempting to resolve '{path}': docker-archive: cannot process multiple docker manifests"
+            )))
+        }
+        fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+            Ok(GRYPE.into())
+        }
+    }
+    let env = build_env(Arc::new(MultiImageEngine), true, 2);
+    let host = env.base.display().to_string();
+    let cookie = login(&env.app).await;
+    let (_, v) = create_job(&env.app, &cookie, "app", None).await;
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        wait_terminal(&env.app, &cookie, &id).await["status"],
+        "failed"
+    );
+    for lang in LANGS {
+        let req = Request::get(format!("/api/v1/jobs/{id}?lang={lang}"))
+            .header(header::COOKIE, &cookie)
+            .body(Body::empty())
+            .unwrap();
+        let (_, job) = send_json(&env.app, req).await;
+        let e = &job["error"];
+        assert_eq!(
+            e["i18n_key"], "server.err.engine_multi_image",
+            "{lang}: {e}"
+        );
+        assert_eq!(
+            e["message"],
+            cytrace_i18n::Catalog::load(lang).t("server.err.engine_multi_image", &[]),
+            "{lang}: 提示應依語系渲染"
+        );
+        let detail = e["detail"].as_str().unwrap();
+        assert!(
+            detail.contains("cannot process multiple docker manifests"),
+            "{detail}"
+        );
+        assert!(!detail.contains(&host), "細節不得含主機路徑：{detail}");
+    }
+}
+
+/// #51 複審：job 錯誤細節在**遮蔽之後**才截斷，而且確實有上限。
+/// 細節構造成：前綴長度讓 500 字元的截斷點落在主機路徑正中間，路徑之後是原因與一長串雜訊。
+/// 順序反了會留下半截主機路徑；沒有截斷則長度超標——兩種退化都會讓這支轉紅。
+#[tokio::test]
+async fn long_engine_detail_is_redacted_then_bounded() {
+    struct LongDetailEngine;
+    impl ScanEngine for LongDetailEngine {
+        fn sbom(&self, _target: &str) -> CoreResult<String> {
+            Ok(CYCLONEDX.into())
+        }
+        fn sbom_with_spdx(&self, target: &str) -> CoreResult<(String, Option<String>)> {
+            let path = target.strip_prefix("dir:").unwrap_or(target);
+            let head = "syft exit Some(1): ";
+            let pad = "p".repeat(500 - head.len() - path.len() / 2);
+            Err(cytrace_core::CytraceError::Engine(format!(
+                "{head}{pad}{path}: cannot process multiple docker manifests {}",
+                "z".repeat(800)
+            )))
+        }
+        fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+            Ok(GRYPE.into())
+        }
+    }
+    let env = build_env(Arc::new(LongDetailEngine), true, 2);
+    let host = env.base.display().to_string();
+    let cookie = login(&env.app).await;
+    let (_, v) = create_job(&env.app, &cookie, "app", None).await;
+    let done = wait_terminal(&env.app, &cookie, v["id"].as_str().unwrap()).await;
+    let detail = done["error"]["detail"].as_str().unwrap();
+    assert!(
+        !detail.contains(&host[..host.len() / 2]),
+        "不得殘留主機路徑的任何前段：{detail}"
+    );
+    assert!(detail.contains("mounted:targets/app"), "{detail}");
+    assert!(
+        detail.chars().count() <= cytrace_core::error::DETAIL_MAX_CHARS + 1
+            && detail.ends_with('…'),
+        "細節應截到上限：{} 字元",
+        detail.chars().count()
+    );
+}
+
 /// job 失敗訊息依**查詢時**的請求語系渲染（get 與 list 都是），且不寫回 job.json。
 ///
 /// 原本 get / list 完全不看語系：兩種語系拿到逐位元組相同的 `{kind, i18n_key, detail}`，

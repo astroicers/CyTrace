@@ -211,3 +211,7 @@ CyTrace 目前是單機 CLI（`run/batch/scan/report`）。使用者需求：**�
   - 掛載**已解開的** Docker 匯出目錄：Docker 25 起的匯出因巢狀 index 明確失敗；更舊的匯出沒有 OCI layout，落到 `dir:`，靜默得到 0。請掛載 tar 檔本身。
   - 磁碟峰值：映像 tar 仍會完整解開到 `extracted/` 以判斷形態。tar 約佔兩份（原檔＋解開內容），tar.gz 約三份（再加 `image.tar`），都在 job 的 `input/` 底下、受解壓上限約束。
 - 原始上傳檔與解壓產物都在 `input/` 底下，掃描結束後照 #39 的規則刪除。
+- **失敗時的提示**（2026-10-11，#51）：Syft 改為不帶 `-q` 執行，失敗時取 stderr 的 ERROR 行放進錯誤細節。
+  上述會「明確失敗」的形態另對應到具體提示（`server.err.engine_multi_image`、`engine_nested_oci_index`、
+  `engine_image_unreadable`），告訴操作員怎麼改。細節引用的目標路徑在 Web 模式下照 ADR-009 修訂換成 job 描述。
+  「靜默得到 0」的形態 Syft 不報錯，本項幫不上；那些仍須依 CHANGELOG 已知限制判讀。

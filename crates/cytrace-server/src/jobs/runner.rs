@@ -75,7 +75,7 @@ pub fn spawn_with_cleanup(
                     r.status = JobStatus::Failed;
                     r.finished_at = Some(super::now_iso());
                     let mut err = job_error_of(&e);
-                    err.detail = redact(&err.detail, &scan_target, &display);
+                    err.detail = finalize_detail(&err.detail, &scan_target, &display);
                     r.error = Some(err);
                 });
             }
@@ -126,6 +126,12 @@ fn redact(detail: &str, target: &str, display: &str) -> String {
     forms.iter().fold(detail.to_string(), |acc, f| {
         acc.replace(f.as_str(), display)
     })
+}
+
+/// job 錯誤細節的最終形態：先把內部掃描目標換成 job 描述，**再**截到上限。
+/// 順序不能反：先截的話，跨過邊界的主機路徑比對不到、會留下半截（#51 複審）。
+fn finalize_detail(detail: &str, target: &str, display: &str) -> String {
+    cytrace_core::error::bounded_detail(&redact(detail, target, display))
 }
 
 /// `CytraceError` → 持久化的 `JobError`。
@@ -237,6 +243,27 @@ fn run_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #51 複審：主機路徑很長、整段細節超過上限時，遮蔽在截斷之前——不得留下半截主機路徑，原因也還在。
+    #[test]
+    fn long_host_path_is_redacted_before_truncation() {
+        let deep = format!("/data/{}/input/extracted", "d".repeat(600));
+        let target = format!("dir:{deep}");
+        let detail = format!(
+            "syft exit Some(1): could not determine source: an error occurred attempting to resolve '{deep}': docker-archive: cannot process multiple docker manifests"
+        );
+        let out = finalize_detail(&detail, &target, "upload:x.tar");
+        assert!(!out.contains("ddd"), "不得殘留主機路徑：{out}");
+        assert!(
+            out.contains("cannot process multiple docker manifests"),
+            "{out}"
+        );
+        let long = finalize_detail(&"y".repeat(900), &target, "upload:x.tar");
+        assert_eq!(
+            long.chars().count(),
+            cytrace_core::error::DETAIL_MAX_CHARS + 1
+        );
+    }
 
     /// T931 複審 N4：取不到 job 描述時用 `job:<id>`，不得為空。
     #[test]
