@@ -85,6 +85,8 @@ lint: fmt-check clippy
 	python3 scripts/release-notes.py check
 	@# 交付公鑰（keys/cytrace.pub）與 SOP／README 抄錄的字串一致（T402）
 	python3 scripts/pubkey-check.py
+	@# 手動補發（workflow_dispatch 帶 tag）時每個 checkout 都取指定的 tag，否則 Release 可能由 main 編出（#61）
+	python3 scripts/workflow-ref-check.py
 	@# 報表成因渲染：本組織 GitHub 為 free 方案、CI 無法設為 required（user-level 實查），
 	@# 故「只在 CI 跑」實質等於「只在事後偵測」；land 前的閘必須跑到（第八輪複審 finding K）。
 	@# 只呼叫這一支而非整個 frontend-check：pnpm 在部分環境會先做 deps check 並要求

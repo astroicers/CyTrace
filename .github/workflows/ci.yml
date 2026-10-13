@@ -48,6 +48,9 @@ jobs:
       # 場域驗章用的是驗收單上帶外抄錄的公鑰字串；文件抄錯一個字元，驗章就必然失敗（T402）
       - name: 交付簽章公鑰與文件一致（T402）
         run: python3 scripts/pubkey-check.py
+      # 手動補發 vX.Y.Z 時 checkout 不指定 ref 就會取觸發分支（預設 main），Release 可能由 main 編出（#61）
+      - name: 手動補發的 checkout 取指定 tag（#61）
+        run: python3 scripts/workflow-ref-check.py
 
   real-engine:
     name: 真引擎整合測試（CBOM × 真實輸入形態，ADR-013；SPDX，FR-001）

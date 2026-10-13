@@ -33,7 +33,11 @@ jobs:
     name: build / 冒煙 /（tag 時）push + Release 資產
     runs-on: ubuntu-latest
     steps:
+      # 手動補發時只認輸入的 tag（refs/tags/…，不會被同名分支搶走）；其他觸發時 inputs.tag 為空，
+      # ref 傳空字串，checkout 走預設行為（取觸發的 ref 並釘住 github.sha），與修改前等價（#61）
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || '' }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -53,11 +57,22 @@ jobs:
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # 實際建置的原始碼 commit。metadata-action 預設以 github.sha 填 revision 標籤；手動補發時那是觸發分支
+      # 的 HEAD，不是 checkout 出來的 tag（#61）。自訂 labels 會覆寫同名預設值（metadata-action v5 meta.ts）
+      - name: 建置來源 commit（OCI revision 標籤）
+        id: src
+        run: |
+          sha=$(git rev-parse HEAD)
+          test -n "$sha" || { echo "✗ 取不到建置來源 commit"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
       - name: metadata（image 名 + OCI labels + tags）
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/astroicers/cytrace
+          labels: |
+            org.opencontainers.image.revision=${{ steps.src.outputs.sha }}
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}

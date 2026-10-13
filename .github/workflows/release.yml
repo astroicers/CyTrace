@@ -31,7 +31,11 @@ jobs:
             bin: cytrace.exe
             asset: cytrace-x86_64-windows.exe
     steps:
+      # 手動補發時只認輸入的 tag（refs/tags/…，不會被同名分支搶走）；其他觸發時 inputs.tag 為空，
+      # ref 傳空字串，checkout 走預設行為（取觸發的 ref 並釘住 github.sha），與修改前等價（#61）
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || '' }}
 
       # tag 與 Cargo.toml 版本失同步已實際出貨兩次（v0.2.0/v0.2.1 的 binary 都自報
       # 0.1.0），且冒煙只印 --version 不比對——散文擋不住的用機械閘擋
@@ -109,7 +113,11 @@ jobs:
     name: build cbomkit-theia-windows-amd64.exe
     runs-on: ubuntu-latest
     steps:
+      # 手動補發時只認輸入的 tag（refs/tags/…，不會被同名分支搶走）；其他觸發時 inputs.tag 為空，
+      # ref 傳空字串，checkout 走預設行為（取觸發的 ref 並釘住 github.sha），與修改前等價（#61）
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || '' }}
       - name: 讀引擎釘選版本
         run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' scripts/versions.env >> "$GITHUB_ENV"
       - name: 建置並驗 SHA256
@@ -135,7 +143,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # 說明取自 CHANGELOG.md（scripts/release-notes.py），故需要原始碼
+      # 手動補發時只認輸入的 tag（refs/tags/…，不會被同名分支搶走）；其他觸發時 inputs.tag 為空，
+      # ref 傳空字串，checkout 走預設行為（取觸發的 ref 並釘住 github.sha），與修改前等價（#61）
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || '' }}
 
       - uses: actions/download-artifact@v4
         with:
