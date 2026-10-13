@@ -104,6 +104,11 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 - Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
   DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
   不走 stdin。
+- Syft、Grype 一律關閉 app update-check（`SYFT_CHECK_FOR_APP_UPDATE=false`、`GRYPE_CHECK_FOR_APP_UPDATE=false`）：
+  它在掃描時會連網檢查新版本，`-q` 也關不掉。離線變數只由 `syft_scan`、`grype_cmd` 兩處給定，
+  不依賴 wrapper 或容器 ENV（ADR-012 決策 2，#64）。單元測試另以結構檢查守門：各 crate 的產品原始碼中，
+  字面上的 `Command::new("syft")`、`Command::new("grype")` 只能出現在這兩處。以常數或變數傳入執行檔名的寫法
+  不在檢查範圍；`query_version` 即屬此類，它只執行 `--version`，實測不連網。
 - DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，
   不填假值（ADR-009 修訂節）。
 
