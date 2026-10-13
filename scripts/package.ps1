@@ -13,9 +13,21 @@
   grype DB 來源（預設 $env:LOCALAPPDATA\grype\db；需先在有網段 grype db update）。
 .PARAMETER SkipDb
   跳過數 GB 的 DB 複製（CI 冒煙用；產物結構/wrapper/SHA256SUMS 仍完整）。
+.PARAMETER CytraceExe
+  已建好的 cytrace.exe（例如 GitHub Release 的 cytrace-x86_64-windows.exe）。給了就不在本機編譯，
+  建置機不需要 Rust 與 Visual Studio Build Tools；腳本先核對它自報的版本等於 Cargo.toml，不符即中止。
+  Release 的 exe 由 release workflow 以相同條件編譯（msvc、crt-static、--locked、釘選 toolchain），
+  其真實性另以已簽章的 Release SHA256SUMS 核對（DELIVERY_SOP §2）。
+  包內的 CHANGELOG、自產 SBOM、引擎與 theia 的版本釘選（versions.env）取自工作樹，故工作樹必須正好停在
+  tag v<版本>，且除了本腳本以外沒有已追蹤的修改，否則中止——不然包內內容描述的不是那支 exe。
+  本腳本可以比被打包的版本新（例如以 main 的腳本打包 v0.6.0）。注意 NOTICE 與 cytrace-offline wrapper 的內容
+  由本腳本產生；換用較新的腳本前，先檢視它與 tag 版本的差異（DELIVERY_SOP §2）。
+.PARAMETER AllowUntaggedTree
+  僅供 CI：略過 -CytraceExe 的 tag 檢查（CI 的 checkout 不在 tag 上）。正式交付不得使用。
 .EXAMPLE
   pwsh scripts/package.ps1
   pwsh scripts/package.ps1 -SkipDb        # CI 冒煙
+  pwsh scripts/package.ps1 -CytraceExe C:\cytrace-build\cytrace-x86_64-windows.exe -DbPath C:\cytrace-build\grype-db
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +38,9 @@ param(
   [string]$GrypeVersion = "0.114.0",
   [string]$DbPath = "$env:LOCALAPPDATA\grype\db",
   [switch]$SkipDb,
-  [switch]$WithoutCbom
+  [switch]$WithoutCbom,
+  [string]$CytraceExe = "",
+  [switch]$AllowUntaggedTree
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,24 +52,80 @@ $Bundle = Join-Path $Root "$OutDir\cytrace-$Version-windows"
 
 function Say($m) { Write-Host "  -> $m" }
 
+# versions.env 以嚴格演算法讀入一次，供下方引擎版本檢查與後段 THEIA 解析共用。
+# 不用 Get-Content：它把裸 CR 也當換行、預設編碼隨 PowerShell 版本與系統語系而異。
+$VersionsBytes = [System.IO.File]::ReadAllBytes("$PSScriptRoot\versions.env")
+if ($VersionsBytes -contains 0) { throw "versions.env contains a NUL byte" }
+$VersionsText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($VersionsBytes)  # 非 UTF-8 即 throw
+
+# 引擎版本以工作樹的 versions.env 為準：腳本參數（預設值）與它不符即中止（不論是否使用 -CytraceExe；
+# 使用者 2026-10-13 裁定）。打包腳本可能比被打包的 tag 新，只信腳本預設值的話，main 升過引擎後再打包舊 tag
+# 會靜默收進新版引擎——版本漂移的 syft 會讓場域的 grype 讀不懂 SBOM（DELIVERY_SOP §2）。
+# 同時把「三處一起改」從註解變成機械檢查。在刪除舊包之前檢查。
+$Pinned = @{}
+foreach ($line in ($VersionsText -split "`n" | ForEach-Object { $_ -replace "`r$", '' })) {
+  if ($line -cmatch '^(SYFT_VERSION|GRYPE_VERSION)=(.+)$') { $Pinned[$Matches[1]] = $Matches[2].Trim() }
+}
+if ($Pinned['SYFT_VERSION'] -ne $SyftVersion -or $Pinned['GRYPE_VERSION'] -ne $GrypeVersion) {
+  throw "Engine versions differ from scripts/versions.env: syft $SyftVersion vs '$($Pinned['SYFT_VERSION'])', grype $GrypeVersion vs '$($Pinned['GRYPE_VERSION'])'"
+}
+
+# 預建 cytrace.exe 的前置檢查——在刪除舊包之前做：失敗時不毀掉上一次的完好包、不留半套目錄
+$PrebuiltExe = $null
+if ($CytraceExe) {
+  if (-not (Test-Path -LiteralPath $CytraceExe -PathType Leaf)) { throw "CytraceExe not found (or not a file): $CytraceExe" }
+  # 解析成完整路徑再執行：只寫檔名時 `&` 會走 PATH，驗到的可能不是要複製的那支
+  $PrebuiltExe = (Resolve-Path -LiteralPath $CytraceExe).ProviderPath
+  # 包內除了 exe，CHANGELOG／自產 SBOM／引擎與 theia 的版本釘選都取自工作樹：工作樹必須就是該版的 tag。
+  # 否則版號相同、內容不同（例如 main 已含 vX.Y.Z 之後的修正而版號未變），包內內容描述的就不是那支 exe
+  # 例外只有本腳本：打包工具可以比被打包的版本新（引擎版本已由上方對 versions.env 把關）
+  if ($AllowUntaggedTree) {
+    Say "WARNING: -AllowUntaggedTree (CI only) - source tree tag check skipped; not for delivery"
+  } else {
+    $tags = @(& git -C $Root tag --points-at HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $tags -notcontains "v$Version") {
+      throw "With -CytraceExe the source tree must be checked out at tag v$Version (git checkout v$Version); HEAD tags: '$($tags -join ',')'"
+    }
+    $dirty = @(& git -C $Root status --porcelain --untracked-files=no -- . ':(exclude)scripts/package.ps1')
+    if ($LASTEXITCODE -ne 0) { throw "git status failed (exit $LASTEXITCODE)" }
+    if ($dirty.Count -gt 0) {
+      throw "With -CytraceExe the source tree must have no tracked modifications (other than scripts/package.ps1): $($dirty -join '; ')"
+    }
+  }
+  # 先存 exit code 再篩選輸出：管線被提前結束時 $LASTEXITCODE 的值不可靠
+  $out = @(& $PrebuiltExe --version 2>&1)
+  $code = $LASTEXITCODE
+  if ($code -ne 0) { throw "CytraceExe --version failed (exit $code)" }
+  $reported = "$($out | Select-Object -First 1)".Trim()
+  if ($reported -ne "cytrace $Version") {
+    throw "CytraceExe reports '$reported' but Cargo.toml version is '$Version'"
+  }
+}
+
 Write-Host "Assembling CyTrace $Version (Windows) -> $Bundle"
 if (Test-Path $Bundle) { Remove-Item -Recurse -Force $Bundle }
 New-Item -ItemType Directory -Force -Path "$Bundle\bin", "$Bundle\db" | Out-Null
 
 # 1) cytrace.exe（靜態 CRT，單檔零依賴）
-Say "build cytrace.exe ($Target)"
-$env:RUSTFLAGS = "-C target-feature=+crt-static"
-rustup target add $Target | Out-Null
-Push-Location $Root
-# touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
-# 報表沿用舊的 theia 版號（T909 第三、四輪複審 build#0／build#4；Linux 側 package.sh 同理）
-(Get-Item "$PSScriptRoot\versions.env").LastWriteTime = Get-Date
-cargo build --release --locked --target $Target -p cytrace-cli
-# 原生指令失敗不會自動 throw——不檢查的話，build.rs 拒收 versions.env（或任何編譯錯誤）時
-# 照樣往下打包上一次的舊 binary（第四輪複審 build#3）
-if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build failed (exit $LASTEXITCODE)" }
-Pop-Location
-Copy-Item "$Root\target\$Target\release\cytrace.exe" "$Bundle\bin\cytrace.exe"
+if ($PrebuiltExe) {
+  # 預建 exe：不編譯，原樣收入（前置檢查已核對版本與 tag；真實性由已簽章的 Release SHA256SUMS 另行核對）
+  Say "use prebuilt cytrace.exe ($PrebuiltExe; $reported)"
+  Copy-Item -LiteralPath $PrebuiltExe "$Bundle\bin\cytrace.exe"
+} else {
+  Say "build cytrace.exe ($Target)"
+  $env:RUSTFLAGS = "-C target-feature=+crt-static"
+  rustup target add $Target | Out-Null
+  Push-Location $Root
+  # touch：同路徑重建時 cargo 依 mtime 判新鮮，versions.env 若比上次建置舊，build script 不重跑、
+  # 報表沿用舊的 theia 版號（T909 第三、四輪複審 build#0／build#4；Linux 側 package.sh 同理）
+  (Get-Item "$PSScriptRoot\versions.env").LastWriteTime = Get-Date
+  cargo build --release --locked --target $Target -p cytrace-cli
+  # 原生指令失敗不會自動 throw——不檢查的話，build.rs 拒收 versions.env（或任何編譯錯誤）時
+  # 照樣往下打包上一次的舊 binary（第四輪複審 build#3）
+  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build failed (exit $LASTEXITCODE)" }
+  Pop-Location
+  Copy-Item "$Root\target\$Target\release\cytrace.exe" "$Bundle\bin\cytrace.exe"
+}
 
 # 2) 釘選引擎（從 Anchore GitHub release 取 Windows 版）
 function Get-Engine($name, $ver) {
@@ -80,11 +150,8 @@ Get-Engine "grype" $GrypeVersion
 # 與 build.rs（crates/cytrace-core/theia_version_rule.rs）、package.sh（check-theia-version.sh）
 # 同一演算法：嚴格 UTF-8、不含 NUL、以 LF 切行並去一個行尾 CR、註解行（行首 ASCII 空白後接 #）
 # 不算、其餘只准一行以 ASCII 詞邊界提到 THEIA_VERSION 且逐字是 THEIA_VERSION=<數字(.數字)+>。
-# 不用 Get-Content：它把裸 CR 也當換行、預設編碼隨 PowerShell 版本與系統語系而異。
 # 本實作是對照實作：只在 windows-package CI job 以真實 versions.env 執行過，沒有對樣本表對帳。
-$VersionsBytes = [System.IO.File]::ReadAllBytes("$PSScriptRoot\versions.env")
-if ($VersionsBytes -contains 0) { throw "versions.env contains a NUL byte" }
-$VersionsText = (New-Object System.Text.UTF8Encoding($false, $true)).GetString($VersionsBytes)  # 非 UTF-8 即 throw
+# $VersionsText 已在前置檢查讀入（嚴格 UTF-8、不含 NUL；見該處）。
 $TheiaLines = @($VersionsText -split "`n" | ForEach-Object { $_ -replace "`r$", '' } |
   Where-Object { $_ -cnotmatch '^[ \t\x0B\x0C\r]*#' -and $_ -cmatch '(?<![A-Za-z0-9_])THEIA_VERSION(?![A-Za-z0-9_])' })
 if ($TheiaLines.Count -ne 1) { throw "versions.env: exactly one non-comment line may mention THEIA_VERSION (found $($TheiaLines.Count))" }

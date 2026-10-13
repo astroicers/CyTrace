@@ -37,22 +37,71 @@ build 機的 syft/grype **版本必須等於 versions.env 釘選版**，否則�
 ```bash
 make package            # 或 scripts/package.sh <輸出目錄>
 ```
-**Windows 版**（在 Windows build 機，先 `grype db update`）：
+**Windows 版**（在 Windows build 機以 **PowerShell 7（`pwsh`）** 執行）：
+
+> Windows 內建的 Windows PowerShell 5.1 會把不帶 BOM 的 UTF-8 腳本當成系統字碼頁讀取，中文註解被讀壞後腳本剖析失敗
+> （2026-10-13 實測；以 UTF-8 讀入則剖析無誤）。CI 同樣以 `pwsh` 執行。
 
 CBOM 引擎的 Windows 版同樣自源碼建置（T911），二擇一取得後放到 `dist\cbomkit-theia.exe`：
 - 取我方 GitHub Release 的資產 `cbomkit-theia-windows-amd64.exe`（release workflow 交叉編譯並驗 SHA256），
   改名為 `cbomkit-theia.exe`；
 - 或在有 Docker 的 Linux 機：`scripts/build-theia.sh dist windows`，再把 `dist/cbomkit-theia.exe` 帶過來。
 
+腳本取用前比對 `versions.env` 的 `THEIA_WINDOWS_AMD64_SHA256`，不符即中止。缺檔時腳本 fail-hard；
+刻意不含 CBOM 引擎時以 `-WithoutCbom` 顯式說出來（此包的 `--cbom` 降級為「未盤點」，不影響 SBOM 與弱點比對）。
+grype DB 快照以 `-DbPath` 指定（預設 `$env:LOCALAPPDATA\grype\db`，即先在建置機 `grype db update`）。
+
+**建議做法：使用 Release 的 `cytrace.exe`**（建置機不需要 Rust 與 Visual Studio Build Tools）。
+Release 的 `cytrace-x86_64-windows.exe` 由 release workflow 以相同條件編譯（msvc、`crt-static`、`--locked`、
+`rust-toolchain.toml` 釘選版）。**照下列步驟驗章後**，交付包內的執行檔即與公開、已簽章的 Release 為同一支：
+
+1. 原始碼停在該版的 tag：
+
+   ```powershell
+   git fetch --tags origin
+   git checkout vX.Y.Z
+   ```
+
+   若該 tag 的 `scripts/package.ps1` 還沒有 `-CytraceExe`（例如 v0.6.0），改用 main 的打包腳本。換之前先檢視差異：
+   NOTICE 與 `cytrace-offline` wrapper 的內容由打包腳本產生，引擎預設版本也寫在腳本裡。
+
+   ```powershell
+   git diff vX.Y.Z origin/main -- scripts/package.ps1   # 檢視 NOTICE、wrapper、引擎預設值有無差異
+   git checkout origin/main -- scripts/package.ps1
+   ```
+
+   包內的 CHANGELOG、自產 SBOM、引擎與 theia 的版本釘選（`versions.env`）取自工作樹。腳本檢查三件事，不符即中止：
+   - 工作樹正好在 `vX.Y.Z`；
+   - 除了 `scripts/package.ps1` 本身以外沒有已追蹤的修改；
+   - 腳本的 syft／grype 版本等於工作樹 `versions.env` 的釘選版（較新的腳本若升過引擎，打包舊 tag 會被擋下）。
+
+   打包完成後還原：`git checkout vX.Y.Z -- scripts/package.ps1`（同時還原索引與工作樹），再 `git switch main`。
+2. 下載 Release 的 `cytrace-x86_64-windows.exe`、`SHA256SUMS`、`SHA256SUMS.minisig`，以 §3 的公鑰驗章並比對雜湊。
+   minisign 取釘選版（`versions.env` 的 `MINISIGN_VERSION`，Windows 壓縮檔 SHA256 為 `MINISIGN_WINDOWS_SHA256`，
+   與 CI 相同），或在已裝 minisign 的交付工作站驗：
+
+   ```powershell
+   minisign -Vm SHA256SUMS -P <§3 的公鑰字串>
+   $want = (Select-String -Path SHA256SUMS -Pattern 'cytrace-x86_64-windows\.exe$').Line.Split(' ')[0]
+   $got  = (Get-FileHash cytrace-x86_64-windows.exe -Algorithm SHA256).Hash.ToLower()   # Get-FileHash 輸出為大寫
+   if ($got -ne $want) { throw "雜湊不符：$got ≠ $want" }
+   ```
+3. 以 `-CytraceExe` 指定該檔；腳本另核對其自報版本等於 `Cargo.toml`，不符即中止：
+
+   ```powershell
+   pwsh scripts/package.ps1 -CytraceExe <路徑>\cytrace-x86_64-windows.exe -DbPath <DB 快照目錄>
+   ```
+
+**從原始碼編譯**（不給 `-CytraceExe` 時；需 Rust 與 Visual Studio C++ Build Tools）：
+
 ```powershell
 pwsh scripts/package.ps1   # 產 delivery\cytrace-<版本>-windows\
 ```
-腳本取用前比對 `versions.env` 的 `THEIA_WINDOWS_AMD64_SHA256`，不符即中止。缺檔時腳本 fail-hard；
-刻意不含 CBOM 引擎時以 `-WithoutCbom` 顯式說出來（此包的 `--cbom` 降級為「未盤點」，
-不影響 SBOM 與弱點比對）。
-兩支腳本的步驟相同：build 靜態 binary（Linux：musl；Windows：msvc 靜態 CRT）→ 收集釘選引擎（syft／grype 核對自報版本，
-CBOM 引擎比對 SHA256）與 grype DB 快照 → 產自產 SBOM → 寫 NOTICE（依包內實際有無 CBOM 引擎）→ 收入 CHANGELOG →
-算 SHA256SUMS。minisign 簽章見 §3（在交付工作站以受管金鑰執行，不在 CI）。
+
+兩支腳本的其餘步驟相同：取得 `cytrace` 執行檔（Linux：musl 靜態編譯；Windows：msvc 靜態 CRT 編譯，或以 `-CytraceExe`
+沿用 Release 的同款產物）→ 收集釘選引擎（syft／grype 核對自報版本，CBOM 引擎比對 SHA256）與 grype DB 快照 →
+產自產 SBOM → 寫 NOTICE（依包內實際有無 CBOM 引擎）→ 收入 CHANGELOG → 算 SHA256SUMS。
+minisign 簽章見 §3（在交付工作站以受管金鑰執行，不在 CI）。
 
 ## 3. 簽章與離線信任錨（ADR-007 / NEW-3）
 
