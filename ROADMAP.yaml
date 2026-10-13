@@ -1607,7 +1607,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T927, T928, T931]
-        status: pending
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: "T925 後續規劃（2026-10-07）"
@@ -1617,6 +1617,8 @@ milestones:
         description: |
           把 #39 起的修正（T922 至 T928、T931）打包成可交付版本。Release 的 SHA256SUMS 與離線包的簽章，由使用者以私鑰在自己的
           終端機執行；Windows 包需要 Windows 建置機。DB 快照約 3 GB，媒體容量依此規劃。
+
+          **結案（2026-10-13）**：v0.6.0 Release、Linux 與 Windows 離線包都已完成、簽章並驗收。紀錄如下。
 
           **進度（2026-10-11）**：
           - v0.6.0 已發布：tag 指向 PR #57 的合併點 23a862b；Release 與 GHCR 映像的 workflow 皆成功。
@@ -1629,10 +1631,19 @@ milestones:
           - Release `SHA256SUMS` 與 Linux 離線包皆以新金鑰簽章，驗章通過。
           - Linux 離線包已驗收：從 v0.6.0 tag 的 git archive 打包，3.2 GB；11 個檔的 SHA256SUMS 相符；
             在無網路命名空間內以 `cytrace-offline run --cbom` 冒煙測試通過。
-          - 待辦：
-            - Release 上傳 `.minisig` 並更新 Release 說明中的金鑰 ID。
-            - 新公鑰以帶外方式交付場域。
-            - Windows 離線包。
+          - Release 已上傳 `.minisig`，Release 說明中的金鑰 ID 也已改為新金鑰（2026-10-11）。
+          - **Windows 離線包（2026-10-13）**：
+            - 做法：使用者在 Windows 主機上以 `package.ps1 -CytraceExe` 打包，沿用 Release 的 `cytrace-x86_64-windows.exe`，
+              不在本機編譯（PR #60）。原始碼停在 v0.6.0 tag，只換上 main 的打包腳本。
+            - Release 的 `SHA256SUMS` 已以新公鑰驗章，exe 雜湊與其相符。
+            - 包內 exe 與 Release 是同一支（雜湊 e128877c…）。Syft 1.45.1、Grype 0.114.0、theia 的 SHA256 都相符，DB 為 v6.1.10。
+            - 11 個檔的 SHA256SUMS 全部相符。已在 WSL 以新金鑰簽章，驗章通過。
+            - 在 Windows 主機上以 `cytrace-offline.ps1 run --cbom` 冒煙測試：1 個元件、5 個弱點、CBOM 6 項，與 Linux 包一致。
+              這是 Windows 版 CBOM 引擎第一次在 GitHub runner 以外的實體 Windows 機器上執行；場域的 Windows 機器仍待 T930 演練驗證。
+          - 交付物位置（不進 repo）：
+            - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.0/`
+            - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.0-windows\`
+          - 剩下由人處理的事（屬 T930）：新公鑰與金鑰 ID 抄在新的紙本驗收單上，以帶外方式交付場域。
 
       - id: T930
         title: "場域驗收演練（依 docs/FIELD_ACCEPTANCE.md，由人在斷網目標機執行）"
