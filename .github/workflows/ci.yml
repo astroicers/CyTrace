@@ -249,6 +249,65 @@ jobs:
           $need = @("bin\cytrace.exe","bin\syft.exe","bin\grype.exe","bin\cbomkit-theia.exe","cytrace-offline.ps1","SHA256SUMS","NOTICE","cytrace.sbom.cdx.json","CHANGELOG.md")
           foreach ($f in $need) { if (-not (Test-Path (Join-Path $b.FullName $f))) { throw "missing $f" } }
           & (Join-Path $b.FullName "bin\cytrace.exe") --version
+      # -CytraceExe（預建 exe，例如 Release 資產）：不編譯、原樣收入；各種不符必須在動到舊包之前中止
+      - name: 預建 cytrace.exe 路徑（-CytraceExe）
+        shell: pwsh
+        run: |
+          $b = Get-ChildItem -Directory delivery | Select-Object -First 1
+          $built = Join-Path $b.FullName "bin\cytrace.exe"
+          # 給定檔在尾端附加標記位元組（PE overlay，不影響執行），雜湊因此與任何本機編出的 exe 都不同：
+          # 腳本若誤收 target\ 下的編譯產物，雜湊比對才分得出來
+          $pre = "$env:RUNNER_TEMP\prebuilt\cytrace.exe"
+          New-Item -ItemType Directory -Force (Split-Path $pre) | Out-Null
+          Copy-Item $built $pre
+          $fs = [IO.File]::Open($pre, [IO.FileMode]::Append)
+          $mark = [Text.Encoding]::ASCII.GetBytes("CYTRACE-CI-PREBUILT-MARK")
+          $fs.Write($mark, 0, $mark.Length); $fs.Close()
+          $log = pwsh scripts/package.ps1 -SkipDb -OutDir delivery-prebuilt -CytraceExe $pre -AllowUntaggedTree 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "package.ps1 -CytraceExe failed: $log" }
+          if ($log -notmatch "use prebuilt cytrace.exe") { throw "prebuilt path not taken: $log" }
+          if ($log -match "build cytrace.exe") { throw "prebuilt path must not build: $log" }
+          if ($log -notmatch "WARNING: -AllowUntaggedTree") { throw "bypass must be visible in the log: $log" }
+          $nb = Get-ChildItem -Directory delivery-prebuilt | Select-Object -First 1
+          $got = (Get-FileHash (Join-Path $nb.FullName "bin\cytrace.exe") -Algorithm SHA256).Hash
+          if ($got -ne (Get-FileHash $pre -Algorithm SHA256).Hash) { throw "bundle cytrace.exe is not the given prebuilt exe" }
+          if ($got -eq (Get-FileHash $built -Algorithm SHA256).Hash) { throw "marker missing: cannot tell given exe from build output" }
+          # 反向：每一種不符都要中止，且訊息說得出原因；中止時不得動到上一次的完好包
+          function Expect-Fail($label, $extra, $pattern) {
+            $out = pwsh scripts/package.ps1 -SkipDb -OutDir delivery-prebuilt @extra 2>&1 | Out-String
+            if ($LASTEXITCODE -eq 0) { throw "$label was not rejected" }
+            if ($out -notmatch $pattern) { throw "$label failed for another reason: $out" }
+            if (-not (Test-Path (Join-Path $nb.FullName "bin\cytrace.exe"))) { throw "$label destroyed the previous bundle" }
+            Write-Host "OK rejected: $label"
+          }
+          Set-Content "$env:RUNNER_TEMP\fake.cmd" "@echo cytrace 9.9.9"
+          Set-Content "$env:RUNNER_TEMP\fail.cmd" "@echo cytrace 0.0.0`r`n@exit /b 3"
+          Expect-Fail "version mismatch" @("-CytraceExe", "$env:RUNNER_TEMP\fake.cmd", "-AllowUntaggedTree") "reports 'cytrace 9\.9\.9'"
+          Expect-Fail "missing file" @("-CytraceExe", "$env:RUNNER_TEMP\no-such.exe", "-AllowUntaggedTree") "CytraceExe not found"
+          Expect-Fail "--version exit code" @("-CytraceExe", "$env:RUNNER_TEMP\fail.cmd", "-AllowUntaggedTree") "--version failed \(exit 3\)"
+          # 腳本的引擎版本與 versions.env 不符（例如較新的腳本打包舊 tag）必須被擋下
+          Expect-Fail "engine drift" @("-CytraceExe", $pre, "-AllowUntaggedTree", "-SyftVersion", "0.0.1") "versions\.env"
+          # CI 的 checkout 不在 tag 上：不帶 -AllowUntaggedTree 必須被擋下
+          Expect-Fail "untagged tree" @("-CytraceExe", $pre) "must be checked out at tag"
+          # 正式交付唯一會走的路徑：在 tag 上、乾淨 → 放行（tag 只建在 runner 本機，不推送）
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          git tag "v$ver"
+          git tag "ci-extra-tag"   # 同一 commit 掛多個 tag 也要認得
+          $ok = pwsh scripts/package.ps1 -SkipDb -OutDir delivery-tagged -CytraceExe $pre 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "tagged clean tree was rejected: $ok" }
+          if ($ok -match "AllowUntaggedTree") { throw "tagged run must not mention the bypass: $ok" }
+          Write-Host "OK accepted: tagged clean tree"
+          # 打包腳本本身可以比被打包的版本新（改它不算工作樹不乾淨）
+          Add-Content scripts/package.ps1 "`n# ci: newer packager"
+          $ok = pwsh scripts/package.ps1 -SkipDb -OutDir delivery-tagged -CytraceExe $pre 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "modified package.ps1 alone was rejected: $ok" }
+          Write-Host "OK accepted: newer package.ps1 on tagged tree"
+          # 其他已追蹤檔案被改 → 擋下
+          Add-Content CHANGELOG.md "ci: tracked modification"
+          Expect-Fail "tracked modification" @("-CytraceExe", $pre) "no tracked modifications"
+          git checkout -- CHANGELOG.md scripts/package.ps1
+          $global:LASTEXITCODE = 0
+          Write-Host "OK: prebuilt exe used verbatim; mismatches rejected before touching the previous bundle"
       # NOTICE 與包內實際內容必須一致——否則會出一個授權聲明不實的交付包（ADR-013）
       - name: NOTICE 與包內引擎一致
         shell: pwsh

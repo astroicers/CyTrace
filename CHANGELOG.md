@@ -15,6 +15,17 @@
   - 場域請改用新的交付驗收單上抄錄的公鑰字串驗章；新驗收單須以帶外方式重新交付。
   - 金鑰沿革見 DELIVERY_SOP §3。
 
+### 新增
+
+- **Windows 離線包可直接使用 Release 的 `cytrace.exe`**：`package.ps1` 新增 `-CytraceExe` 參數，給了就不在本機編譯，
+  建置機不再需要 Rust 與 Visual Studio Build Tools。
+  - 腳本核對 exe 自報的版本等於 `Cargo.toml`，並要求原始碼正好停在 `vX.Y.Z` tag、除了打包腳本本身以外沒有已追蹤的修改，
+    否則中止。包內的 CHANGELOG、自產 SBOM 與版本釘選取自原始碼，必須與那支 exe 同版。
+  - 打包腳本可以比被打包的版本新，所以 v0.6.0 也能用這個做法；腳本的引擎版本必須等於該 tag 的 `versions.env`，
+    否則中止（不論是否使用 `-CytraceExe`）。NOTICE 與 wrapper 由打包腳本產生，換用較新的腳本前先檢視差異（DELIVERY_SOP §2）。
+  - 依 DELIVERY_SOP §2 先以公鑰驗 Release 的 `SHA256SUMS` 並比對 exe 雜湊，包內執行檔即與公開、已簽章的 Release 為同一支。
+  - Windows 上須以 PowerShell 7 執行打包腳本（內建的 5.1 會把腳本的中文讀壞）。
+
 ### 修正
 
 - **Syft 失敗時看得出原因**（#51）：
