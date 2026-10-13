@@ -849,6 +849,7 @@ fn pinned_syft_default_file_components_are_excluded_by_parse() {
             "cyclonedx-json",
             "-q",
         ])
+        .env("SYFT_CHECK_FOR_APP_UPDATE", "false") // 不連網檢查新版本（#64）
         .output()
         .unwrap();
     assert!(out.status.success(), "syft 應產出 CycloneDX");
@@ -897,6 +898,7 @@ fn pinned_syft_source_name_keeps_host_paths_out_of_raw_sboms() {
 
     let default = Command::new("syft")
         .args(["scan", &target, "-o", "cyclonedx-json", "-q"])
+        .env("SYFT_CHECK_FOR_APP_UPDATE", "false") // 不連網檢查新版本（#64）
         .output()
         .unwrap();
     let default = String::from_utf8(default.stdout).unwrap();

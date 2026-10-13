@@ -1,7 +1,8 @@
 //! Syft / Grype 子程序編排（SDS §3 / ADR-002/003）。
 //!
 //! 引擎為釘選版 Go binary，以子程序呼叫。Grype 強制離線：`GRYPE_DB_AUTO_UPDATE=false`、
-//! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。
+//! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。Syft、Grype 都關閉
+//! app update-check（`*_CHECK_FOR_APP_UPDATE=false`，#64），離線設定由 [`syft_scan`]、[`grype_cmd`] 統一給。
 //!
 //! 注意：本模組需安裝包內的引擎執行檔；無引擎時回 [`CytraceError::Engine`]，
 //! 由 CLI 對映為非 2 的錯誤退出碼（與 fail-on 的 2 區隔）。
@@ -85,13 +86,16 @@ impl ScanEngine for RealEngine {
 ///   stderr 只有記錄行；成功時的 WARN 行不進任何輸出。
 /// - `source_name`：Syft `--source-name`。Web 模式傳 job 描述，來源描述就不帶主機路徑；
 ///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
+/// - `SYFT_CHECK_FOR_APP_UPDATE=false`：不連網檢查新版本。釘選版實測 `syft scan` 有 DNS 與 443 連線（#64）；
+///   wrapper 與容器也設了，但產品不依賴它們（ADR-012 決策 2）。
 fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
     let mut cmd = Command::new("syft");
     cmd.args(["scan", target]);
     if let Some(name) = source_name {
         cmd.args(["--source-name", name]);
     }
-    cmd.env("SYFT_FILE_METADATA_SELECTION", "none");
+    cmd.env("SYFT_FILE_METADATA_SELECTION", "none")
+        .env("SYFT_CHECK_FOR_APP_UPDATE", "false");
     cmd
 }
 
@@ -139,6 +143,19 @@ pub fn validate_spdx(spdx: &str) -> Result<()> {
     }
 }
 
+/// Grype 指令的共同部分：一律離線（子命令與輸出格式由呼叫端接上）。
+///
+/// - `GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`：只用既有快照，舊快照不被年齡驗證中止（ADR-003）。
+/// - `GRYPE_CHECK_FOR_APP_UPDATE=false`：不連網檢查新版本。`-q` 關不掉它，釘選版實測 `grype sbom:` 有 DNS 與
+///   443 連線（#64）。wrapper 與容器也設了，但產品不依賴它們（ADR-012 決策 2）。
+fn grype_cmd() -> Command {
+    let mut cmd = Command::new("grype");
+    cmd.env("GRYPE_CHECK_FOR_APP_UPDATE", "false")
+        .env("GRYPE_DB_AUTO_UPDATE", "false")
+        .env("GRYPE_DB_VALIDATE_AGE", "false");
+    cmd
+}
+
 /// 以 Grype 對 SBOM（CycloneDX JSON）比對 CVE，回傳 grype JSON。離線設定已內建。
 ///
 /// 注意：grype 的 `sbom:-`（stdin）在部分版本不穩，故將 SBOM 寫入暫存檔以 `sbom:<path>` 餵入，
@@ -146,11 +163,9 @@ pub fn validate_spdx(spdx: &str) -> Result<()> {
 pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
     let tmp = sbom_temp_path();
     std::fs::write(&tmp, sbom_cyclonedx_json)?;
-    let out = Command::new("grype")
+    let out = grype_cmd()
         .arg(format!("sbom:{}", tmp.display()))
         .args(["-o", "json", "-q"])
-        .env("GRYPE_DB_AUTO_UPDATE", "false")
-        .env("GRYPE_DB_VALIDATE_AGE", "false")
         .output();
     let _ = std::fs::remove_file(&tmp);
     let out = out.map_err(|e| CytraceError::Engine(format!("grype: {e}")))?;
@@ -254,11 +269,8 @@ pub fn db_snapshot() -> cytrace_types::DbSnapshot {
     // （release-prep 複審 major #0/#3，反證者實測確認）。時效判斷是稽核者的事，
     // 我們負責如實轉錄；另補 VALIDATE_AGE=false 使函式不依賴 wrapper 的環境繼承。
     parse_db_status(
-        Command::new("grype")
+        grype_cmd()
             .args(["db", "status", "-o", "json"])
-            .env("GRYPE_CHECK_FOR_APP_UPDATE", "false")
-            .env("GRYPE_DB_AUTO_UPDATE", "false")
-            .env("GRYPE_DB_VALIDATE_AGE", "false")
             .output()
             .ok()
             .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
@@ -961,6 +973,68 @@ mod tests {
         let plain = syft_scan("dir:/x", None);
         assert_eq!(args(&plain), ["scan", "dir:/x"]);
         assert!(file_selection_none(&plain));
+    }
+
+    /// #64：引擎的 app update-check 會連網——釘選版實測 `syft scan` 與 `grype sbom:`（含 `-q`）
+    /// 各有 DNS 與 443 連線，設了變數即歸零。產品自己關掉，不依賴 wrapper 或容器 ENV（ADR-012 決策 2）。
+    #[test]
+    fn engine_commands_are_offline() {
+        let has = |c: &Command, key: &str| {
+            c.get_envs()
+                .any(|(k, v)| k == key && v == Some(std::ffi::OsStr::new("false")))
+        };
+        for syft in [syft_scan("dir:/x", None), syft_scan("dir:/x", Some("n"))] {
+            assert!(has(&syft, "SYFT_CHECK_FOR_APP_UPDATE"));
+        }
+        let grype = grype_cmd();
+        for key in [
+            "GRYPE_CHECK_FOR_APP_UPDATE",
+            "GRYPE_DB_AUTO_UPDATE",
+            "GRYPE_DB_VALIDATE_AGE",
+        ] {
+            assert!(has(&grype, key), "{key}");
+        }
+    }
+
+    /// 結構守門（#64）：syft、grype 只能經 [`syft_scan`]、[`grype_cmd`] 建立，離線變數才有單一出處。
+    /// 新增一處直接 `Command::new("grype")` 而漏設變數時轉紅。例外是 [`query_version`]：它以變數接收
+    /// 執行檔名，只跑 `--version`，實測不連網。
+    #[test]
+    fn engine_commands_are_built_only_by_offline_helpers() {
+        let prod = include_str!("engine.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        for engine in ["syft", "grype"] {
+            let needle = format!("Command::new(\"{engine}\")");
+            assert_eq!(prod.matches(&needle).count(), 1, "{needle}");
+        }
+        // 其他 crate 不得自行呼叫 syft、grype
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut stack = vec![crates];
+        let mut scanned = 0;
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                if path.is_dir() {
+                    if !["target", "node_modules", "tests", "assets"].contains(&name.as_str()) {
+                        stack.push(path);
+                    }
+                } else if name.ends_with(".rs") && name != "engine.rs" {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    scanned += 1;
+                    for engine in ["syft", "grype"] {
+                        assert!(
+                            !text.contains(&format!("Command::new(\"{engine}\")")),
+                            "{} 直接呼叫 {engine}",
+                            path.display()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(scanned >= 20, "只掃到 {scanned} 個 .rs，走訪可能失效");
     }
 
     #[test]
