@@ -104,9 +104,17 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 - Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
   DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
   不走 stdin。
-- Syft、Grype 一律關閉 app update-check（`SYFT_CHECK_FOR_APP_UPDATE=false`、`GRYPE_CHECK_FOR_APP_UPDATE=false`）：
-  它在掃描時會連網檢查新版本，`-q` 也關不掉。離線變數只由 `syft_scan`、`grype_cmd` 兩處給定，
-  不依賴 wrapper 或容器 ENV（ADR-012 決策 2，#64）。單元測試另以結構檢查守門：各 crate 的產品原始碼中，
+- Syft、Grype 會連網的功能一律明確關閉，清單為 `engine::SYFT_OFFLINE_ENV`、`GRYPE_OFFLINE_ENV`：
+  - app update-check：掃描時會連網檢查新版本，`-q` 也關不掉（#64）。
+  - 資料補強與各生態系的遠端查詢（`SYFT_ENRICH`、Maven、Go proxy、npm、PyPI）、Grype 外部資料來源（#67）。
+    這些項目預設關閉，明確設定是為了不依賴預設值，並蓋過父行程或 Syft 設定檔可能開啟的資料補強。
+  - Go packages 函式庫（`SYFT_GOLANG_USE_PACKAGES_LIB`）：預設**開啟**，會對目標執行主機的 `go list`，
+    模組不在快取時會連網，授權則讀自主機的 Go 模組快取（掃描目標以外）。關閉後，在有 Go 工具鏈的主機上，
+    Go 原始碼目標的 SBOM 少了主模組、部分遞移依賴、依賴關係與讀自主機快取的授權（使用者 2026-10-13 裁定接受；#67）。
+  - 讀取掃描目標以外主機檔案的授權查詢：Go 模組快取、vendor 目錄、Maven 本機倉庫（信任邊界，NFR-09；#67）。
+
+  離線變數只由 `syft_scan`、`grype_cmd` 兩處給定，不依賴 wrapper 或容器 ENV（ADR-012 決策 2）。
+  真引擎測試以釘選版的 `config --load` 確認引擎認得每個變數名稱：名稱拼錯時引擎會靜默忽略。單元測試另以結構檢查守門：各 crate 的產品原始碼中，
   字面上的 `Command::new("syft")`、`Command::new("grype")` 只能出現在這兩處。以常數或變數傳入執行檔名的寫法
   不在檢查範圍；`query_version` 即屬此類，它只執行 `--version`，實測不連網。
 - DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，

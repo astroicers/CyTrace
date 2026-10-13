@@ -1,8 +1,8 @@
 //! Syft / Grype 子程序編排（SDS §3 / ADR-002/003）。
 //!
 //! 引擎為釘選版 Go binary，以子程序呼叫。Grype 強制離線：`GRYPE_DB_AUTO_UPDATE=false`、
-//! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。Syft、Grype 都關閉
-//! app update-check（`*_CHECK_FOR_APP_UPDATE=false`，#64），離線設定由 [`syft_scan`]、[`grype_cmd`] 統一給。
+//! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。Syft、Grype 會連網的功能一律
+//! 明確關閉（#64、#67），清單見 [`SYFT_OFFLINE_ENV`]、[`GRYPE_OFFLINE_ENV`]，由 [`syft_scan`]、[`grype_cmd`] 統一帶上。
 //!
 //! 注意：本模組需安裝包內的引擎執行檔；無引擎時回 [`CytraceError::Engine`]，
 //! 由 CLI 對映為非 2 的錯誤退出碼（與 fail-on 的 2 區隔）。
@@ -78,6 +78,48 @@ impl ScanEngine for RealEngine {
     }
 }
 
+/// Syft 的離線設定：產品呼叫 Syft 時一律帶上，不依賴父行程環境、wrapper 或容器 ENV（ADR-012 決策 2）。
+///
+/// - `SYFT_CHECK_FOR_APP_UPDATE`：預設開啟。掃描時連網檢查新版本，`-q` 關不掉（#64）。
+/// - `SYFT_ENRICH` 設為空：不做任何資料補強。父行程或設定檔設了 `all` 時，釘選版實測 npm 目標會連 443；
+///   設為空會把清單覆寫成 `[]`（實測可蓋過設定檔的 `enrich: all`），日後新增、由 enrich 控制的生態系也一併關閉（#67）。
+/// - 各生態系的遠端查詢（Maven、Go proxy、npm、PyPI）：預設關閉，逐項明確關閉以免依賴預設值，
+///   也蓋過父行程的 `SYFT_ENRICH`（實測逐項設 false 後連線為 0；#67）。
+/// - `SYFT_GOLANG_USE_PACKAGES_LIB`：**預設開啟**。PATH 上有 Go 工具鏈時，Syft 會對目標執行主機的 `go list`；
+///   模組不在快取時會連網下載（實測斷網下 16 次 DNS 嘗試），授權則讀自主機的 Go 模組快取（掃描目標以外）。
+///   關閉後，在有 Go 的主機上 Go 原始碼目標會少掉主模組、部分遞移依賴、依賴關係，以及讀自主機模組快取的授權；
+///   沒有 Go 工具鏈的主機（含容器映像）不受影響。使用者 2026-10-13 裁定關閉，授權欄位一併確認（#67）。
+/// - 讀取主機上 Go 模組快取、vendor 目錄與 Maven 本機倉庫的授權查詢：預設關閉。這些位置在掃描目標以外
+///   （實測打開時會從 `~/go/pkg/mod`、`~/.m2` 讀到授權；vendor 依 Syft 自身說明位於 Syft 的工作目錄），
+///   Web 模式下是伺服器自己的檔案（信任邊界，NFR-09；#67）。
+///
+/// 每個名稱都由真引擎測試以 `syft config --load` 確認引擎認得：名稱拼錯時 Syft 會靜默忽略。
+pub const SYFT_OFFLINE_ENV: &[(&str, &str)] = &[
+    ("SYFT_CHECK_FOR_APP_UPDATE", "false"),
+    ("SYFT_ENRICH", ""),
+    ("SYFT_JAVA_USE_NETWORK", "false"),
+    ("SYFT_GOLANG_SEARCH_REMOTE_LICENSES", "false"),
+    ("SYFT_GOLANG_USE_PACKAGES_LIB", "false"),
+    ("SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES", "false"),
+    ("SYFT_PYTHON_SEARCH_REMOTE_LICENSES", "false"),
+    ("SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES", "false"),
+    ("SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES", "false"),
+    ("SYFT_JAVA_USE_MAVEN_LOCAL_REPOSITORY", "false"),
+];
+
+/// Grype 的離線設定（同 [`SYFT_OFFLINE_ENV`]，由 [`grype_cmd`] 帶上）。
+///
+/// - `GRYPE_DB_AUTO_UPDATE`、`GRYPE_DB_VALIDATE_AGE`：只用既有快照，舊快照不被年齡驗證中止（ADR-003）。
+/// - `GRYPE_CHECK_FOR_APP_UPDATE`：掃描時連網檢查新版本，`-q` 關不掉（#64）。
+/// - `GRYPE_EXTERNAL_SOURCES_ENABLE`：外部資料來源（查詢 search.maven.org）。預設關閉，明確關閉以防
+///   升級引擎時預設改變（#67）。名稱同樣由真引擎測試以 `grype config --load` 確認。
+pub const GRYPE_OFFLINE_ENV: &[(&str, &str)] = &[
+    ("GRYPE_CHECK_FOR_APP_UPDATE", "false"),
+    ("GRYPE_DB_AUTO_UPDATE", "false"),
+    ("GRYPE_DB_VALIDATE_AGE", "false"),
+    ("GRYPE_EXTERNAL_SOURCES_ENABLE", "false"),
+];
+
 /// Syft 掃描指令的共同部分（輸出格式由呼叫端接上）。
 ///
 /// - `SYFT_FILE_METADATA_SELECTION=none`：不輸出 file 元件。它們以路徑為名、無版本與 purl、不參與比對；
@@ -86,8 +128,7 @@ impl ScanEngine for RealEngine {
 ///   stderr 只有記錄行；成功時的 WARN 行不進任何輸出。
 /// - `source_name`：Syft `--source-name`。Web 模式傳 job 描述，來源描述就不帶主機路徑；
 ///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
-/// - `SYFT_CHECK_FOR_APP_UPDATE=false`：不連網檢查新版本。釘選版實測 `syft scan` 有 DNS 與 443 連線（#64）；
-///   wrapper 與容器也設了，但產品不依賴它們（ADR-012 決策 2）。
+/// - [`SYFT_OFFLINE_ENV`]：關閉所有會連網或讀取掃描目標以外主機檔案的功能。
 fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
     let mut cmd = Command::new("syft");
     cmd.args(["scan", target]);
@@ -95,7 +136,7 @@ fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
         cmd.args(["--source-name", name]);
     }
     cmd.env("SYFT_FILE_METADATA_SELECTION", "none")
-        .env("SYFT_CHECK_FOR_APP_UPDATE", "false");
+        .envs(SYFT_OFFLINE_ENV.iter().copied());
     cmd
 }
 
@@ -143,16 +184,10 @@ pub fn validate_spdx(spdx: &str) -> Result<()> {
     }
 }
 
-/// Grype 指令的共同部分：一律離線（子命令與輸出格式由呼叫端接上）。
-///
-/// - `GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`：只用既有快照，舊快照不被年齡驗證中止（ADR-003）。
-/// - `GRYPE_CHECK_FOR_APP_UPDATE=false`：不連網檢查新版本。`-q` 關不掉它，釘選版實測 `grype sbom:` 有 DNS 與
-///   443 連線（#64）。wrapper 與容器也設了，但產品不依賴它們（ADR-012 決策 2）。
+/// Grype 指令的共同部分：一律離線（子命令與輸出格式由呼叫端接上；變數見 [`GRYPE_OFFLINE_ENV`]）。
 fn grype_cmd() -> Command {
     let mut cmd = Command::new("grype");
-    cmd.env("GRYPE_CHECK_FOR_APP_UPDATE", "false")
-        .env("GRYPE_DB_AUTO_UPDATE", "false")
-        .env("GRYPE_DB_VALIDATE_AGE", "false");
+    cmd.envs(GRYPE_OFFLINE_ENV.iter().copied());
     cmd
 }
 
@@ -979,20 +1014,39 @@ mod tests {
     /// 各有 DNS 與 443 連線，設了變數即歸零。產品自己關掉，不依賴 wrapper 或容器 ENV（ADR-012 決策 2）。
     #[test]
     fn engine_commands_are_offline() {
-        let has = |c: &Command, key: &str| {
+        let has = |c: &Command, key: &str, val: &str| {
             c.get_envs()
-                .any(|(k, v)| k == key && v == Some(std::ffi::OsStr::new("false")))
+                .any(|(k, v)| k == key && v == Some(std::ffi::OsStr::new(val)))
         };
+        // 刻意與 SYFT_OFFLINE_ENV／GRYPE_OFFLINE_ENV 各寫一份：拿掉任一項須同時改兩處（#67）
+        let syft_expected = [
+            ("SYFT_CHECK_FOR_APP_UPDATE", "false"),
+            ("SYFT_ENRICH", ""),
+            ("SYFT_JAVA_USE_NETWORK", "false"),
+            ("SYFT_GOLANG_SEARCH_REMOTE_LICENSES", "false"),
+            ("SYFT_GOLANG_USE_PACKAGES_LIB", "false"),
+            ("SYFT_JAVASCRIPT_SEARCH_REMOTE_LICENSES", "false"),
+            ("SYFT_PYTHON_SEARCH_REMOTE_LICENSES", "false"),
+            ("SYFT_GOLANG_SEARCH_LOCAL_MOD_CACHE_LICENSES", "false"),
+            ("SYFT_GOLANG_SEARCH_LOCAL_VENDOR_LICENSES", "false"),
+            ("SYFT_JAVA_USE_MAVEN_LOCAL_REPOSITORY", "false"),
+        ];
+        assert_eq!(SYFT_OFFLINE_ENV, syft_expected);
         for syft in [syft_scan("dir:/x", None), syft_scan("dir:/x", Some("n"))] {
-            assert!(has(&syft, "SYFT_CHECK_FOR_APP_UPDATE"));
+            for (key, val) in syft_expected {
+                assert!(has(&syft, key, val), "{key}");
+            }
         }
+        let grype_expected = [
+            ("GRYPE_CHECK_FOR_APP_UPDATE", "false"),
+            ("GRYPE_DB_AUTO_UPDATE", "false"),
+            ("GRYPE_DB_VALIDATE_AGE", "false"),
+            ("GRYPE_EXTERNAL_SOURCES_ENABLE", "false"),
+        ];
+        assert_eq!(GRYPE_OFFLINE_ENV, grype_expected);
         let grype = grype_cmd();
-        for key in [
-            "GRYPE_CHECK_FOR_APP_UPDATE",
-            "GRYPE_DB_AUTO_UPDATE",
-            "GRYPE_DB_VALIDATE_AGE",
-        ] {
-            assert!(has(&grype, key), "{key}");
+        for (key, val) in grype_expected {
+            assert!(has(&grype, key, val), "{key}");
         }
     }
 

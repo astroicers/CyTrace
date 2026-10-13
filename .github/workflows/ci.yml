@@ -71,13 +71,16 @@ jobs:
           chmod +x /usr/local/bin/cbomkit-theia
           echo "${THEIA_LINUX_AMD64_SHA256}  /usr/local/bin/cbomkit-theia" | sha256sum -c -
       # SPDX（FR-001；T919）由 syft 產出：同樣取交付鏈的那支（Dockerfile engines stage 已驗 SHA256）
-      - name: 取出釘選 syft（Dockerfile engines stage）
+      # grype：離線變數名稱的案例要用（#67），同樣取交付鏈的那支
+      - name: 取出釘選 syft、grype（Dockerfile engines stage）
         run: |
           docker build --target engines -t engines .
           cid=$(docker create engines)
           docker cp "$cid:/engines/syft" /usr/local/bin/syft
+          docker cp "$cid:/engines/grype" /usr/local/bin/grype
           docker rm "$cid"
           /usr/local/bin/syft version | grep -E "^Version: +${SYFT_VERSION}$"
+          /usr/local/bin/grype version | grep -E "^Version: +${GRYPE_VERSION}$"
       # M9 六輪複審中，第四輪之後的全部阻斷級都只有真引擎跑得出來（零資產目標輸出 null、
       # dir 模式追隨 symlink、FIFO 掛死、OpenSSH 金鑰只在 stderr 留痕、憑證計數欄位名與想像不符）
       - name: 真引擎 × 真實輸入形態

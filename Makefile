@@ -60,6 +60,10 @@ test-real-engine:
 	@# 版本須等於釘選值：別版 syft 可能輸出別版 SPDX 而讓案例以不清楚的訊息失敗，或以未釘選的版本通過
 	@want=$$(sed -n 's/^SYFT_VERSION=//p' scripts/versions.env); got=$$(syft version | sed -n 's/^Version: *//p'); \
 	  [ "$$got" = "$$want" ] || { echo "✗ syft 版本 $$got ≠ 釘選 $$want（scripts/versions.env）"; exit 1; }
+	@# grype：離線變數名稱的案例需要（#67），同樣須等於釘選版本
+	@command -v grype >/dev/null || { echo "✗ 找不到 grype（離線變數案例需要；版本見 scripts/versions.env）"; exit 1; }
+	@want=$$(sed -n 's/^GRYPE_VERSION=//p' scripts/versions.env); got=$$(grype version | sed -n 's/^Version: *//p'); \
+	  [ "$$got" = "$$want" ] || { echo "✗ grype 版本 $$got ≠ 釘選 $$want（scripts/versions.env）"; exit 1; }
 	@# 案例缺工具時會 panic（本層不接受靜默略過），故前置一併檢查以給出清楚訊息
 	@for t in openssl ssh-keygen mkfifo; do 		command -v $$t >/dev/null || { echo "✗ 找不到 $$t（真引擎案例需要）"; exit 1; }; 	done
 	cargo test -p cytrace-core --test real_engine -- --ignored
