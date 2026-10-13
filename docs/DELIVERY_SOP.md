@@ -190,7 +190,8 @@ syft／grype／theia，並重檢 musl 價值主張（musl 限 Linux）。
    > **tag push 路徑**的 image tag 無 `v` 前綴（semver pattern 去前綴；v0.2.1 實證
    > 為 `0.2.1`），照舊文件 pull `:vX.Y.Z` 會 404。**workflow_dispatch 補發例外**：
    > raw 規則原樣用輸入值——輸入 `v0.3.0` 就發 `:v0.3.0`，且不更新 `latest`；
-   > 補發後請以實際 image tag 取代本節的 `X.Y.Z`。
+   > 補發後請以實際 image tag 取代本節的 `X.Y.Z`。補發會 checkout 輸入的 tag 來建置（#61），但用的是當下 main 的
+   > workflow 邏輯；較舊的 tag 若缺少新版 workflow 需要的建置設定，補發會直接失敗，需另行處理。
 2. 核對 digest：`docker buildx imagetools inspect ... --format '{{.Manifest.Digest}}'`
    對 GitHub Release 的 `IMAGE_DIGEST.txt`。
 3. 取 Release 附的 `cytrace-vX.Y.Z-image.tar`（CI 產物即權威）或本機 `docker save`。

@@ -28,6 +28,14 @@
 
 ### 修正
 
+- **手動補發的 Release 與容器映像改為從指定的 tag 建置**（#61）：
+  - 以 `workflow_dispatch` 補發 `vX.Y.Z` 時，原本 checkout 的是觸發時選的分支（預設 main），執行檔可能不是由該 tag 的原始碼編出。
+  - 現在 release 與容器 workflow 的每個 checkout，補發時只認 `refs/tags/<tag>`（不會被同名分支搶走）；
+    tag 不存在時直接失敗。其他觸發（tag push、PR）的 checkout 行為不變，仍釘住觸發的 commit。
+  - 補發的容器映像，OCI 標籤 `org.opencontainers.image.revision` 改記實際建置的 commit（原本會記成觸發分支的 HEAD）。
+  - 新增檢查 `scripts/workflow-ref-check.py`（`make lint` 與 CI 都會跑），日後新增的 checkout 漏寫或寫錯 ref 會被擋下。
+  - 補發使用的是當下 main 的 workflow 邏輯，原始碼則是該 tag；較舊的 tag 若缺少新版 workflow 需要的建置設定會直接失敗。
+  - 已發布的 v0.6.0 由 tag push 觸發，不受影響。
 - **Syft 失敗時看得出原因**（#51）：
   - 原本只顯示「引擎子程序錯誤」。現在錯誤細節會帶出 Syft 的錯誤原文，例如 `cannot process multiple docker manifests`。
   - 已知的不支援形態另顯示具體提示，告訴操作員怎麼改：
