@@ -1652,7 +1652,7 @@ milestones:
         adr: null
         spec: null
         srs_ref: null
-        depends_on: [T929]
+        depends_on: [T929, T932]
         status: pending
         estimated_complexity: medium
         source_type: manual
@@ -1709,6 +1709,29 @@ milestones:
             - 第一輪 NEEDS_WORK，14 項正面證據、5 項反面證據：ADR 的 job 數寫錯（12→9）、真引擎測試的套件比對沒驗到 named
               路徑、驗證計畫與實際分工不一致、job 描述為空時沒有防線、端到端缺反空轉。
             - 第二輪 PASS，17 項正面證據、0 項反面證據。
+
+      - id: T932
+        title: "發布 v0.6.1 與離線安裝包（#51、#60、#61、#64、#67；Linux／Windows 重新打包並簽章）"
+        type: GENERAL
+        priority: 1
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T929]
+        status: in_progress
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "使用者 2026-10-13 同意發 v0.6.1，T930 演練改以 v0.6.1 執行"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-13"
+        description: |
+          v0.6.0 之後 main 累積的修正要交到場域：Syft 失敗原因（#51）、Windows 包沿用 Release exe（#60）、
+          手動補發取指定 tag（#61）、直接執行時零外連（#64、#67）。#67 在有 Go 工具鏈的主機上會讓 Go 原始碼目標的
+          SBOM 變少（使用者 2026-10-13 裁定接受），CHANGELOG 升級須知已註明。流程同 T929：
+          - 版號 0.6.1、CHANGELOG 定稿（本 PR），合併後推 `v0.6.1` tag，觸發 release 與容器 workflow。
+          - 使用者以交付金鑰（CE187AD55AF18DB0）簽 Release 的 `SHA256SUMS`，上傳 `.minisig`。
+          - Linux 包：從 v0.6.1 tag 打包並簽章、斷網冒煙。Windows 包：依 DELIVERY_SOP §2 以 `-CytraceExe` 沿用 Release exe。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
