@@ -823,6 +823,58 @@ fn pinned_syft_components_carry_purl_and_locations() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// #67：產品帶給引擎的每個離線變數，釘選版引擎都必須認得——名稱拼錯時引擎靜默忽略，單元測試也照樣綠。
+/// 判準是 `config --load` 的輸出：整組變數套上後要能通過驗證；其中任一變數換成相反值，輸出必須改變。
+/// 對照組：不存在的變數名換值時輸出必須**不變**，否則「輸出改變」這個判準本身就是恆真。
+#[test]
+#[ignore = "需要 syft、grype 在 PATH（make test-real-engine）"]
+fn pinned_engines_recognize_every_offline_env_name() {
+    for (bin, vars, bogus) in [
+        ("syft", engine::SYFT_OFFLINE_ENV, "SYFT_CYTRACE_NO_SUCH_KEY"),
+        (
+            "grype",
+            engine::GRYPE_OFFLINE_ENV,
+            "GRYPE_CYTRACE_NO_SUCH_KEY",
+        ),
+    ] {
+        let present = Command::new(bin)
+            .arg("version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        require(bin, present);
+        let load = |overrides: &[(&str, &str)]| -> String {
+            let out = Command::new(bin)
+                .args(["config", "--load"])
+                .envs(vars.iter().copied())
+                .envs(overrides.iter().copied())
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{bin} config --load 失敗（{overrides:?}）：{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8(out.stdout).unwrap()
+        };
+        let base = load(&[]);
+        assert_eq!(load(&[(bogus, "true")]), base, "{bin}：對照組的輸出應不變");
+        assert!(!vars.is_empty());
+        for &(key, val) in vars {
+            let flipped = match val {
+                "false" => "true",
+                "" => "all",
+                other => panic!("{key}={other}：沒有定義相反值，請補上"),
+            };
+            assert_ne!(
+                load(&[(key, flipped)]),
+                base,
+                "{bin} 不認得 {key}（換成 {flipped} 後設定不變）"
+            );
+        }
+    }
+}
+
 /// T928：以 Syft **預設**呼叫（未關 file 選擇）產出的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機
 /// 絕對路徑為名），經 `parse_cyclonedx` 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有**
 /// file 元件，免得 syft 哪天不再輸出時這支空轉成恆真。
