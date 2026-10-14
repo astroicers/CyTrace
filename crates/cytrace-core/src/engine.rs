@@ -2,7 +2,8 @@
 //!
 //! 引擎為釘選版 Go binary，以子程序呼叫。Grype 強制離線：`GRYPE_DB_AUTO_UPDATE=false`、
 //! `GRYPE_DB_VALIDATE_AGE=false`（否則舊快照會被年齡驗證中止，ADR-003）。Syft、Grype 會連網的功能一律
-//! 明確關閉（#64、#67），清單見 [`SYFT_OFFLINE_ENV`]、[`GRYPE_OFFLINE_ENV`]，由 [`syft_scan`]、[`grype_cmd`] 統一帶上。
+//! 明確關閉（#64、#67），清單見 [`SYFT_OFFLINE_ENV`]、[`GRYPE_OFFLINE_ENV`]，由 [`syft_scan`]、[`grype_cmd`] 統一帶上；
+//! 兩者也一律以 `-c` 指向空設定檔，不讀任何外部設定檔（[`EngineConfig`]，#70）。
 //!
 //! 注意：本模組需安裝包內的引擎執行檔；無引擎時回 [`CytraceError::Engine`]，
 //! 由 CLI 對映為非 2 的錯誤退出碼（與 fail-on 的 2 區隔）。
@@ -129,12 +130,14 @@ pub const GRYPE_OFFLINE_ENV: &[(&str, &str)] = &[
 /// - `source_name`：Syft `--source-name`。Web 模式傳 job 描述，來源描述就不帶主機路徑；
 ///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
 /// - [`SYFT_OFFLINE_ENV`]：關閉所有會連網或讀取掃描目標以外主機檔案的功能。
-fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
+/// - `-c <config>`：只用 [`EngineConfig`] 的空設定檔，不讀任何外部設定檔（#70）。
+fn syft_scan(target: &str, source_name: Option<&str>, config: &std::path::Path) -> Command {
     let mut cmd = Command::new("syft");
     cmd.args(["scan", target]);
     if let Some(name) = source_name {
         cmd.args(["--source-name", name]);
     }
+    cmd.arg("-c").arg(config);
     cmd.env("SYFT_FILE_METADATA_SELECTION", "none")
         .envs(SYFT_OFFLINE_ENV.iter().copied());
     cmd
@@ -142,7 +145,8 @@ fn syft_scan(target: &str, source_name: Option<&str>) -> Command {
 
 /// 以 Syft 對目標產生 CycloneDX JSON SBOM。
 pub fn sbom(target: &str) -> Result<String> {
-    let out = syft_scan(target, None)
+    let config = EngineConfig::new()?;
+    let out = syft_scan(target, None, &config.path())
         .args(["-o", "cyclonedx-json"])
         .output()
         .map_err(|e| CytraceError::Engine(format!("syft: {e}")))?;
@@ -160,7 +164,8 @@ pub fn sbom_with_spdx(target: &str) -> Result<(String, String)> {
 
 fn syft_cdx_and_spdx(target: &str, source_name: Option<&str>) -> Result<(String, String)> {
     let spdx_path = spdx_temp_path();
-    let out = syft_scan(target, source_name)
+    let config = EngineConfig::new()?;
+    let out = syft_scan(target, source_name, &config.path())
         .args(["-o", "cyclonedx-json", "-o"])
         .arg(format!("spdx-json={}", spdx_path.display()))
         .output();
@@ -185,10 +190,34 @@ pub fn validate_spdx(spdx: &str) -> Result<()> {
 }
 
 /// Grype 指令的共同部分：一律離線（子命令與輸出格式由呼叫端接上；變數見 [`GRYPE_OFFLINE_ENV`]）。
-fn grype_cmd() -> Command {
+///
+/// `-c <config>` 放在子命令之前：只用 [`EngineConfig`] 的空設定檔，不讀任何外部設定檔（#70）。
+/// 釘選版實測 `grype -c <檔> db status`、`grype -c <檔> sbom:…` 皆可解析。
+fn grype_cmd(config: &std::path::Path) -> Command {
     let mut cmd = Command::new("grype");
+    cmd.arg("-c").arg(config);
     cmd.envs(GRYPE_OFFLINE_ENV.iter().copied());
     cmd
+}
+
+/// 交給 Syft／Grype 的空設定檔（每次呼叫一份，離開作用域即刪）。
+///
+/// 引擎預設會從工作目錄、家目錄、`~/.config/<引擎>/`、`/etc/xdg/<引擎>/` 讀設定檔（各 12 種副檔名）。
+/// 受測專案自帶的 `.grype.yaml` 曾讓 CyTrace 套用受測方的 ignore 清單，報表靜默少掉弱點（實測 7→2；#70）。
+/// 以 `-c` 明確指定設定檔後，釘選版不再查找上述任何位置（strace 實測），環境變數照常生效；
+/// 空設定檔與「沒有設定檔」的設定除了 `config` 欄位外完全相同。`/dev/null` 無法使用（Syft 以副檔名決定格式），
+/// 故寫一個空的 `.yaml`。每次呼叫一份，併發 job 不共用、也不怕暫存目錄被清掉。
+struct EngineConfig(TempDir);
+
+impl EngineConfig {
+    fn new() -> std::io::Result<Self> {
+        let dir = TempDir::new("cytrace-engine-config")?;
+        std::fs::write(dir.path().join("config.yaml"), "")?;
+        Ok(Self(dir))
+    }
+    fn path(&self) -> std::path::PathBuf {
+        self.0.path().join("config.yaml")
+    }
 }
 
 /// 以 Grype 對 SBOM（CycloneDX JSON）比對 CVE，回傳 grype JSON。離線設定已內建。
@@ -198,7 +227,14 @@ fn grype_cmd() -> Command {
 pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
     let tmp = sbom_temp_path();
     std::fs::write(&tmp, sbom_cyclonedx_json)?;
-    let out = grype_cmd()
+    let config = match EngineConfig::new() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+    };
+    let out = grype_cmd(&config.path())
         .arg(format!("sbom:{}", tmp.display()))
         .args(["-o", "json", "-q"])
         .output();
@@ -303,8 +339,12 @@ pub fn db_snapshot() -> cytrace_types::DbSnapshot {
     // 讓時效稽核欄位**恰在 DB 一舊就整欄消失**——NFR-03 要稽核的正是 DB 多舊
     // （release-prep 複審 major #0/#3，反證者實測確認）。時效判斷是稽核者的事，
     // 我們負責如實轉錄；另補 VALIDATE_AGE=false 使函式不依賴 wrapper 的環境繼承。
+    // 設定檔建不出來時同樣回 sentinel（fail-closed），不改以讀外部設定檔的方式查詢。
+    let Ok(config) = EngineConfig::new() else {
+        return parse_db_status(None);
+    };
     parse_db_status(
-        grype_cmd()
+        grype_cmd(&config.path())
             .args(["db", "status", "-o", "json"])
             .output()
             .ok()
@@ -999,14 +1039,22 @@ mod tests {
                 k == "SYFT_FILE_METADATA_SELECTION" && v == Some(std::ffi::OsStr::new("none"))
             })
         };
-        let named = syft_scan("dir:/x", Some("upload:a.zip"));
+        let cfg = std::path::Path::new("/cfg/config.yaml");
+        let named = syft_scan("dir:/x", Some("upload:a.zip"), cfg);
         assert_eq!(
             args(&named),
-            ["scan", "dir:/x", "--source-name", "upload:a.zip"]
+            [
+                "scan",
+                "dir:/x",
+                "--source-name",
+                "upload:a.zip",
+                "-c",
+                "/cfg/config.yaml"
+            ]
         );
         assert!(file_selection_none(&named));
-        let plain = syft_scan("dir:/x", None);
-        assert_eq!(args(&plain), ["scan", "dir:/x"]);
+        let plain = syft_scan("dir:/x", None, cfg);
+        assert_eq!(args(&plain), ["scan", "dir:/x", "-c", "/cfg/config.yaml"]);
         assert!(file_selection_none(&plain));
     }
 
@@ -1032,7 +1080,11 @@ mod tests {
             ("SYFT_JAVA_USE_MAVEN_LOCAL_REPOSITORY", "false"),
         ];
         assert_eq!(SYFT_OFFLINE_ENV, syft_expected);
-        for syft in [syft_scan("dir:/x", None), syft_scan("dir:/x", Some("n"))] {
+        let cfg = std::path::Path::new("/cfg/config.yaml");
+        for syft in [
+            syft_scan("dir:/x", None, cfg),
+            syft_scan("dir:/x", Some("n"), cfg),
+        ] {
             for (key, val) in syft_expected {
                 assert!(has(&syft, key, val), "{key}");
             }
@@ -1044,10 +1096,81 @@ mod tests {
             ("GRYPE_EXTERNAL_SOURCES_ENABLE", "false"),
         ];
         assert_eq!(GRYPE_OFFLINE_ENV, grype_expected);
-        let grype = grype_cmd();
+        let grype = grype_cmd(cfg);
         for (key, val) in grype_expected {
             assert!(has(&grype, key, val), "{key}");
         }
+    }
+
+    /// #70：Syft、Grype 一律以 `-c` 指向空設定檔，不讀工作目錄、家目錄、`~/.config`、`/etc/xdg` 的設定檔——
+    /// 受測專案自帶的 `.grype.yaml` 曾讓報表靜默少掉弱點（實測 7→2）。設定檔每次呼叫一份（併發 job 不共用）、
+    /// 內容為空、離開作用域即刪。
+    #[test]
+    fn engine_commands_use_isolated_empty_config() {
+        let args = |c: &Command| -> Vec<String> {
+            c.get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let a = EngineConfig::new().unwrap();
+        let b = EngineConfig::new().unwrap();
+        assert_ne!(a.path(), b.path(), "併發呼叫不得共用設定檔");
+        assert_eq!(std::fs::read_to_string(a.path()).unwrap(), "");
+        assert_eq!(
+            a.path().extension().unwrap(),
+            "yaml",
+            "引擎依副檔名決定解析格式"
+        );
+        let p = a.path().to_string_lossy().into_owned();
+        assert_eq!(args(&grype_cmd(&a.path())), ["-c", p.as_str()]);
+        let syft = args(&syft_scan("dir:/x", None, &a.path()));
+        assert_eq!(syft[syft.len() - 2..], ["-c", p.as_str()]);
+        let path = a.path();
+        drop(a);
+        assert!(!path.exists(), "設定檔須在離開作用域時刪除");
+    }
+
+    /// 結構守門（#70）：[`syft_scan`]、[`grype_cmd`] 的每個呼叫點都必須在同一個函式內就地建立 [`EngineConfig`]，
+    /// 並傳入它的路徑——改成行程共用（`static`）或傳固定路徑（等於又讀外部設定檔）時轉紅。
+    /// 單元測試只驗 helper 本身；這裡把關 `sbom`、`syft_cdx_and_spdx`、`vuln`、`db_snapshot` 四個呼叫點。
+    #[test]
+    fn every_engine_call_site_creates_its_own_config() {
+        let prod = include_str!("engine.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(
+            !prod
+                .lines()
+                .any(|l| l.trim_start().starts_with("static") && l.contains("EngineConfig")),
+            "EngineConfig 不得以 static 共用"
+        );
+        let mut sites = 0;
+        for helper in ["syft_scan(", "grype_cmd("] {
+            for (pos, _) in prod.match_indices(helper) {
+                if prod[..pos].ends_with("fn ") {
+                    continue; // 定義本身
+                }
+                sites += 1;
+                let call = &prod[pos..pos + prod[pos..].find('\n').unwrap()];
+                assert!(
+                    call.contains("&config.path())"),
+                    "{helper} 的呼叫須傳入就地建立的 EngineConfig：{call}"
+                );
+                let fn_start = prod[..pos]
+                    .rfind("\nfn ")
+                    .max(prod[..pos].rfind("\npub fn "));
+                let body = &prod[fn_start.unwrap()..pos];
+                assert!(
+                    body.contains("EngineConfig::new()"),
+                    "{helper} 的呼叫點所在函式沒有建立 EngineConfig：{call}"
+                );
+            }
+        }
+        assert_eq!(
+            sites, 4,
+            "預期 sbom、syft_cdx_and_spdx、vuln、db_snapshot 四個呼叫點"
+        );
     }
 
     /// 結構守門（#64）：syft、grype 只能經 [`syft_scan`]、[`grype_cmd`] 建立，離線變數才有單一出處。

@@ -875,6 +875,72 @@ fn pinned_engines_recognize_every_offline_env_name() {
     }
 }
 
+/// #70：產品以 `-c <空的 config.yaml>` 呼叫引擎（`engine::EngineConfig`），釘選版必須因此不讀任何外部設定檔。
+/// 受測專案自帶的 `.grype.yaml` 曾讓報表靜默少掉弱點（ignore 規則；實測 7→2）。
+/// 三個位置各放一個哨兵設定：工作目錄、家目錄、`~/.config/<引擎>/`。對照組（不帶 `-c`）必須讀到哨兵，
+/// 證明該位置確實會被讀取、本案例不是空轉；帶 `-c` 時必須讀不到。
+#[test]
+#[ignore = "需要 syft、grype 在 PATH（make test-real-engine）"]
+fn pinned_engines_ignore_external_config_files() {
+    for (bin, sentinel_yaml) in [
+        (
+            "syft",
+            "golang:\n  proxy: 'http://cytrace-sentinel.invalid'\n",
+        ),
+        ("grype", "ignore:\n  - vulnerability: CYTRACE-SENTINEL\n"),
+    ] {
+        let present = Command::new(bin)
+            .arg("version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        require(bin, present);
+        for location in ["cwd", "home", "xdg"] {
+            let root = workspace(&format!("engine-config-{bin}-{location}"));
+            let (cwd, home) = (root.join("cwd"), root.join("home"));
+            fs::create_dir_all(&cwd).unwrap();
+            fs::create_dir_all(home.join(".config").join(bin)).unwrap();
+            let file = match location {
+                "cwd" => cwd.join(format!(".{bin}.yaml")),
+                "home" => home.join(format!(".{bin}.yaml")),
+                _ => home.join(".config").join(bin).join("config.yaml"),
+            };
+            fs::write(&file, sentinel_yaml).unwrap();
+            let empty = root.join("isolated").join("config.yaml");
+            fs::create_dir_all(empty.parent().unwrap()).unwrap();
+            fs::write(&empty, "").unwrap();
+            let load = |extra: &[&std::ffi::OsStr]| -> String {
+                let out = Command::new(bin)
+                    .args(["config", "--load"])
+                    .args(extra)
+                    .current_dir(&cwd)
+                    .env("HOME", &home)
+                    .env_remove("XDG_CONFIG_HOME")
+                    .env_remove("XDG_CONFIG_DIRS")
+                    .output()
+                    .unwrap();
+                assert!(
+                    out.status.success(),
+                    "{bin} config --load 失敗（{location}）：{}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                String::from_utf8(out.stdout).unwrap().to_lowercase()
+            };
+            assert!(
+                load(&[]).contains("cytrace-sentinel"),
+                "{bin}：對照組沒讀到 {} 的哨兵，本案例已失去作用",
+                file.display()
+            );
+            assert!(
+                !load(&["-c".as_ref(), empty.as_os_str()]).contains("cytrace-sentinel"),
+                "{bin}：帶 -c 空設定檔仍讀了 {}",
+                file.display()
+            );
+            let _ = fs::remove_dir_all(&root);
+        }
+    }
+}
+
 /// T928：以 Syft **預設**呼叫（未關 file 選擇）產出的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機
 /// 絕對路徑為名），經 `parse_cyclonedx` 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有**
 /// file 元件，免得 syft 哪天不再輸出時這支空轉成恆真。

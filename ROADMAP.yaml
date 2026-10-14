@@ -1711,7 +1711,7 @@ milestones:
             - 第二輪 PASS，17 項正面證據、0 項反面證據。
 
       - id: T932
-        title: "發布 v0.6.1 與離線安裝包（#51、#60、#61、#64、#67；Linux／Windows 重新打包並簽章）"
+        title: "發布 v0.6.1 與離線安裝包（#51、#60、#61、#64、#67、#70；Linux／Windows 重新打包並簽章）"
         type: GENERAL
         priority: 1
         adr: ADR-007
@@ -1727,7 +1727,9 @@ milestones:
         imported_at: "2026-10-13"
         description: |
           v0.6.0 之後 main 累積的修正要交到場域：Syft 失敗原因（#51）、Windows 包沿用 Release exe（#60）、
-          手動補發取指定 tag（#61）、直接執行時零外連（#64、#67）。#67 在有 Go 工具鏈的主機上會讓 Go 原始碼目標的
+          手動補發取指定 tag（#61）、直接執行時零外連（#64、#67）、不讀外部引擎設定檔（#70）。
+          #70 於發布複審時發現（受測專案自帶的 `.grype.yaml`／`.syft.yaml` 會讓報表靜默少掉弱點或元件），
+          使用者 2026-10-13 裁定先修再發版。#67 在有 Go 工具鏈的主機上會讓 Go 原始碼目標的
           SBOM 變少（使用者 2026-10-13 裁定接受），CHANGELOG 升級須知已註明。流程同 T929：
           - 版號 0.6.1、CHANGELOG 定稿（本 PR），合併後推 `v0.6.1` tag，觸發 release 與容器 workflow。
           - 使用者以交付金鑰（CE187AD55AF18DB0）簽 Release 的 `SHA256SUMS`，上傳 `.minisig`。
