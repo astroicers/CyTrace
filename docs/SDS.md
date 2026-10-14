@@ -107,7 +107,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 - Syft、Grype 會連網的功能一律明確關閉，清單為 `engine::SYFT_OFFLINE_ENV`、`GRYPE_OFFLINE_ENV`：
   - app update-check：掃描時會連網檢查新版本，`-q` 也關不掉（#64）。
   - 資料補強與各生態系的遠端查詢（`SYFT_ENRICH`、Maven、Go proxy、npm、PyPI）、Grype 外部資料來源（#67）。
-    這些項目預設關閉，明確設定是為了不依賴預設值，並蓋過父行程或 Syft 設定檔可能開啟的資料補強。
+    這些項目預設關閉，明確設定是為了不依賴預設值，並蓋過父行程可能開啟的資料補強（設定檔則由下述 `-c` 一律不讀）。
   - Go packages 函式庫（`SYFT_GOLANG_USE_PACKAGES_LIB`）：預設**開啟**，會對目標執行主機的 `go list`，
     模組不在快取時會連網，授權則讀自主機的 Go 模組快取（掃描目標以外）。關閉後，在有 Go 工具鏈的主機上，
     Go 原始碼目標的 SBOM 少了主模組、部分遞移依賴、依賴關係與讀自主機快取的授權（使用者 2026-10-13 裁定接受；#67）。
@@ -117,6 +117,12 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   真引擎測試以釘選版的 `config --load` 確認引擎認得每個變數名稱：名稱拼錯時引擎會靜默忽略。單元測試另以結構檢查守門：各 crate 的產品原始碼中，
   字面上的 `Command::new("syft")`、`Command::new("grype")` 只能出現在這兩處。以常數或變數傳入執行檔名的寫法
   不在檢查範圍；`query_version` 即屬此類，它只執行 `--version`，實測不連網。
+- Syft、Grype 一律以 `-c` 指向每次呼叫一份的空設定檔（`EngineConfig`，暫存目錄內的 `config.yaml`），不讀任何外部設定檔：
+  引擎預設會讀工作目錄（`.<引擎>.*`、`.<引擎>/config.*`）、家目錄（`.<引擎>.*`）、`~/.config/<引擎>/config.*`、
+  `/etc/xdg/<引擎>/config.*`，各 12 種副檔名。受測專案自帶的忽略清單（Grype `ignore`）或排除規則（Syft `exclude`）
+  會讓報表靜默少掉弱點或元件（#70）。釘選版實測：指定 `-c` 後不再查找上述位置，環境變數照常生效，
+  空設定檔與無設定檔的設定等價。真引擎測試對工作目錄、家目錄、`~/.config` 三個位置各放哨兵，對照組讀得到、帶 `-c` 讀不到；
+  單元測試另以結構檢查要求每個呼叫點都就地建立 `EngineConfig` 並傳入其路徑。
 - DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，
   不填假值（ADR-009 修訂節）。
 

@@ -28,6 +28,19 @@
 
 ### 修正
 
+- **掃描結果不再受執行環境中的 Syft、Grype 設定檔影響**（#70）：
+  - 原本引擎會讀取工作目錄、家目錄、`~/.config/syft`、`~/.config/grype`、`/etc/xdg/syft`、`/etc/xdg/grype` 的設定檔。
+    受測專案若自帶設定檔，在該目錄內執行 CyTrace 時就會直接套用。以釘選版實測：
+    - 專案自帶 `.grype.yaml` 忽略清單：7 個弱點的目標只報 2 個。
+    - 專案自帶 `.syft.yaml` 排除 lockfile：報表為 0 個元件、0 個弱點。
+    - 兩種情況報表都沒有任何提示。
+  - 現在 CyTrace 呼叫引擎時一律指定一份空設定檔，不讀任何外部設定檔。沒有設定檔時，掃描結果與修正前相同。
+  - **v0.6.0 及更早版本**（含離線安裝包與容器映像）都受影響。執行前請確認以下位置都沒有 Syft、Grype 設定檔
+    （副檔名不限，`.yaml`、`.yml`、`.json`、`.toml` 等皆會被讀取）：
+    - 執行時所在的工作目錄：`.syft.*`、`.grype.*`，以及 `.syft/`、`.grype/` 目錄內的 `config.*`。
+      受測專案常自帶這類檔案，請勿在受測專案目錄內執行。
+    - 家目錄：`.syft.*`、`.grype.*`。
+    - `~/.config/syft/`、`~/.config/grype/`（或 `$XDG_CONFIG_HOME` 下同名目錄）、`/etc/xdg/syft/`、`/etc/xdg/grype/`。
 - **引擎其他會連網的功能改為明確關閉，不再依賴預設值**（#67）：
   - Syft 的資料補強（`SYFT_ENRICH`）、各生態系的遠端查詢（Maven、Go proxy、npm、PyPI），以及 Grype 的外部資料來源，
     CyTrace 呼叫引擎時一律關閉。
