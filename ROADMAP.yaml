@@ -1718,7 +1718,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T929]
-        status: in_progress
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: "使用者 2026-10-13 同意發 v0.6.1，T930 演練改以 v0.6.1 執行"
@@ -1734,6 +1734,30 @@ milestones:
           - 版號 0.6.1、CHANGELOG 定稿（本 PR），合併後推 `v0.6.1` tag，觸發 release 與容器 workflow。
           - 使用者以交付金鑰（CE187AD55AF18DB0）簽 Release 的 `SHA256SUMS`，上傳 `.minisig`。
           - Linux 包：從 v0.6.1 tag 打包並簽章、斷網冒煙。Windows 包：依 DELIVERY_SOP §2 以 `-CytraceExe` 沿用 Release exe。
+
+          **結案（2026-10-14）**：
+          - 發布準備 PR #75（合併點 63fe994）。獨立唯讀複審兩輪，第二輪 PASS（紀錄見 PR #75 說明）。
+            第一輪揭露 #70，經使用者裁定先修（PR #72）再發版。
+          - tag `v0.6.1` → 63fe994；Release 與 GHCR 映像 workflow 皆成功。映像 digest：
+            `sha256:3a9548d2111ae58daf5b520e545b74eed24aa20ae2b8320b9f2200af3a9489b6`。
+          - Release：3 個執行檔與 `SHA256SUMS` 相符，Linux 執行檔 `--version` 為 0.6.1。使用者以 CE187AD55AF18DB0 簽章；
+            `.minisig` 上傳後，AI 自公開 Release 重新下載驗章通過。
+          - 直接執行 Release 的 Linux 執行檔（不經 wrapper，環境設 `SYFT_ENRICH=all`），以 strace 實測 `scan dir:`
+            一個 npm 目標：對外連線 0（未帶 `--cbom`）。
+          - Linux 包：AI 以 `git archive v0.6.1` 取得原始碼打包（與 tag 逐檔相同），3.2 GB；11 個檔的 SHA256SUMS 相符。
+            使用者簽章、AI 驗章通過。在無網路命名空間內以 `cytrace-offline run --cbom` 冒煙：CBOM 6 項、7 個弱點、連線嘗試 0。
+            執行目錄放了會忽略 lodash 的 `.grype.yaml` 與會排除 lockfile 的 `.syft.yaml`，結果仍為 7 個弱點；
+            對照 #70 實測，未修正的版本在同樣設定下為 2 個弱點，或 0 個元件、0 個弱點，可見 #70 在交付包上生效。
+          - Windows 包：使用者在 Windows 主機以 `package.ps1 -CytraceExe` 沿用 Release exe（v0.6.1 的腳本已內建，不必換用 main 的腳本）。
+            - AI 驗證：包內 exe 與 Release 逐位元組相同；Syft 1.45.1、Grype 0.114.0；11 個檔的 SHA256SUMS 相符。
+              使用者簽章、AI 驗章通過。
+            - 使用者執行並貼上：打包腳本的引擎與 theia SHA256 驗證通過；`cytrace-offline.ps1 run --cbom` 冒煙結果為
+              5 個弱點、CBOM 6 項。AI 從該次報表交叉確認：1 個元件、5 個弱點、CBOM 6 項，DB 快照 v6.1.10。
+            - 冒煙目標為 `C:\cytrace-build\smoke`。v0.6.0 冒煙掃的是其下的 `target\`，結果同為 1 個元件、5 個弱點、CBOM 6 項。
+          - 交付物位置（不進 repo）：
+            - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.1/`
+            - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.1-windows\`
+          - 剩下由人處理的事屬 T930：以 v0.6.1 交付物進行場域演練。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
