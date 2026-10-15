@@ -8,6 +8,20 @@
 
 ### 安全性
 
+- **掃描目標一律只取本機來源，不再改連 docker daemon、Docker Hub 或 snapcraft**（#79）：
+  - 原本交給 Syft 的目標若在本機找不到或讀不了（路徑打錯、檔案損壞無法辨識），Syft 會依序改試 docker daemon、
+    containerd、podman、OCI registry 與 snap。以釘選版實測，直接執行 v0.6.1 掃描不存在的檔案，在無網路環境中有
+    56 次連線嘗試，損壞的壓縮檔有 8 次，兩者都另連 docker daemon；有網路時會實際向 Docker Hub 與
+    api.snapcraft.io 送出目標名稱——Web 模式下是伺服器的檔案路徑。
+  - 現在 CyTrace 呼叫 Syft 時一律限定本機來源（目錄、檔案、docker save／OCI 映像檔、singularity）。
+    不存在的目標、損壞的檔案、`registry:`、`docker:` 目標皆實測直接報錯，網路與 docker daemon 的連線嘗試皆為 0。
+    目標不存在或為遠端參照時，提示「引擎在本機找不到可讀的掃描目標……請先以 docker save 匯出成 tar」；
+    檔案存在但無法解析時，沿用既有的映像讀取提示。帶前綴與不帶前綴的既有目標（目錄、映像 tar、單一檔案）掃描結果不變。
+  - **這會拿掉既有能力**：`docker:`、`podman:`、`containerd:`（直接掃本機 daemon 裡的映像）、`registry:`、
+    `oci-model:`，以及 `snap:`（掃 .snap 檔）不再支援。daemon 缺映像時會自行從 registry 拉取，snap 與 oci-model
+    來源本身會連網，違反零外連。映像請先以 `docker save` 匯出成 tar，再以 `docker-archive:<檔案>` 掃描；
+    .snap 檔目前沒有替代做法。
+
 - **Web 上傳的單一檔案不再由 Syft 自行解壓；Syft 會自行解壓的壓縮格式改為當場拒收**（#77）。
   **這會拿掉既有能力**：RAR、7z、xz（含 tar.xz）、bzip2（含 tar.bz2）、zstd、lz4、lzip、minlz、snappy／s2、
   brotli、zlib 這些格式原本可以上傳並掃出結果，現在必須先轉成 zip 或 tar 再上傳。

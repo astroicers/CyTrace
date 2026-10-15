@@ -131,9 +131,11 @@ pub const GRYPE_OFFLINE_ENV: &[(&str, &str)] = &[
 ///   CLI 不傳，維持 Syft 預設（使用者給的目標）。
 /// - [`SYFT_OFFLINE_ENV`]：關閉所有會連網或讀取掃描目標以外主機檔案的功能。
 /// - `-c <config>`：只用 [`EngineConfig`] 的空設定檔，不讀任何外部設定檔（#70）。
+/// - `--from`：只允許本機來源（[`syft_source`]，#79）。
 fn syft_scan(target: &str, source_name: Option<&str>, config: &std::path::Path) -> Command {
+    let (from, path) = syft_source(target);
     let mut cmd = Command::new("syft");
-    cmd.args(["scan", target]);
+    cmd.args(["scan", path, "--from", from]);
     if let Some(name) = source_name {
         cmd.args(["--source-name", name]);
     }
@@ -141,6 +143,34 @@ fn syft_scan(target: &str, source_name: Option<&str>, config: &std::path::Path) 
     cmd.env("SYFT_FILE_METADATA_SELECTION", "none")
         .envs(SYFT_OFFLINE_ENV.iter().copied());
     cmd
+}
+
+/// Syft 只能使用的本機來源（#79）。釘選版 Syft 1.45.1 在本機解析失敗時，會依序改試 docker daemon、
+/// containerd、podman、OCI registry（`GET https://index.docker.io/…/<目標字串>`）與 snap
+/// （`GET https://api.snapcraft.io/…/<目標字串>`）——違反零外連，且把檔名、伺服器路徑送出（NFR-09）。
+/// 以 `--from` 限定後，實測不存在的目標、解壓失敗的目標、`registry:` 目標都直接失敗，連線嘗試為 0。
+/// snap 不在清單內：它自己會連 api.snapcraft.io；oci-model 會連 index.docker.io。
+/// 順序與 Syft 預設的嘗試順序一致（映像類在前、檔案與目錄在後），不帶前綴的映像 tar 仍以映像掃描。
+pub const SYFT_LOCAL_SOURCES: &str = "docker-archive,oci-archive,oci-dir,singularity,file,dir";
+
+/// 把目標拆成（`--from` 的值、交給 Syft 的路徑）（#79）。加了 `--from` 後 Syft 不再解析目標的前綴，
+/// 所以已知的本機前綴（`dir:` 等）轉成對應的 `--from`；其餘——無前綴、`registry:` 等遠端前綴、
+/// Windows 的 `C:`——整串當路徑，只允許全部本機來源：找不到即失敗，不會改連外部。
+fn syft_source(target: &str) -> (&'static str, &str) {
+    const LOCAL_SCHEMES: &[&str] = &[
+        "dir",
+        "file",
+        "docker-archive",
+        "oci-archive",
+        "oci-dir",
+        "singularity",
+    ];
+    if let Some((scheme, rest)) = target.split_once(':') {
+        if let Some(s) = LOCAL_SCHEMES.iter().find(|s| **s == scheme) {
+            return (s, rest);
+        }
+    }
+    (SYFT_LOCAL_SOURCES, target)
 }
 
 /// 以 Syft 對目標產生 CycloneDX JSON SBOM。
@@ -1045,7 +1075,9 @@ mod tests {
             args(&named),
             [
                 "scan",
-                "dir:/x",
+                "/x",
+                "--from",
+                "dir",
                 "--source-name",
                 "upload:a.zip",
                 "-c",
@@ -1054,8 +1086,72 @@ mod tests {
         );
         assert!(file_selection_none(&named));
         let plain = syft_scan("dir:/x", None, cfg);
-        assert_eq!(args(&plain), ["scan", "dir:/x", "-c", "/cfg/config.yaml"]);
+        assert_eq!(
+            args(&plain),
+            ["scan", "/x", "--from", "dir", "-c", "/cfg/config.yaml"]
+        );
         assert!(file_selection_none(&plain));
+    }
+
+    /// #79：Syft 在本機解析失敗時會改連 docker daemon、Docker Hub 與 snapcraft，並送出目標字串。
+    /// 一律以 `--from` 限定本機來源；加了 `--from` 後 Syft 不再解析前綴，故把已知的本機前綴轉成 `--from`。
+    /// 其餘（無前綴、`registry:` 等遠端前綴、Windows 的 `C:`）整串當路徑，只允許本機來源——找不到即失敗。
+    #[test]
+    fn syft_targets_are_restricted_to_local_sources() {
+        for (target, from, path) in [
+            ("dir:/x", "dir", "/x"),
+            ("file:/x/a.bin", "file", "/x/a.bin"),
+            ("docker-archive:/x/img_tar", "docker-archive", "/x/img_tar"),
+            ("oci-archive:/x/o.tar", "oci-archive", "/x/o.tar"),
+            ("oci-dir:/x/layout", "oci-dir", "/x/layout"),
+            ("singularity:/x/s.sif", "singularity", "/x/s.sif"),
+            ("/abs/upload_bin", SYFT_LOCAL_SOURCES, "/abs/upload_bin"),
+            ("relative.tar", SYFT_LOCAL_SOURCES, "relative.tar"),
+            (
+                "registry:alpine:3.12",
+                SYFT_LOCAL_SOURCES,
+                "registry:alpine:3.12",
+            ),
+            ("docker:alpine", SYFT_LOCAL_SOURCES, "docker:alpine"),
+            (r"C:\scan\app", SYFT_LOCAL_SOURCES, r"C:\scan\app"),
+        ] {
+            assert_eq!(syft_source(target), (from, path), "{target}");
+        }
+        // 白名單：清單逐項、依序固定（新增任何 provider 都要改這裡並說明它不會連網；#79 複審 N2）
+        assert_eq!(
+            SYFT_LOCAL_SOURCES.split(',').collect::<Vec<_>>(),
+            [
+                "docker-archive",
+                "oci-archive",
+                "oci-dir",
+                "singularity",
+                "file",
+                "dir"
+            ]
+        );
+        // 已知會連網的 provider（snap→api.snapcraft.io、oci-model／registry→index.docker.io、daemon 會自行 pull）
+        for remote in [
+            "snap",
+            "oci-model",
+            "registry",
+            "docker",
+            "podman",
+            "containerd",
+        ] {
+            assert!(
+                !SYFT_LOCAL_SOURCES.split(',').any(|s| s == remote),
+                "{remote} 不得在本機來源清單"
+            );
+        }
+        let cfg = std::path::Path::new("/c.yaml");
+        let a: Vec<String> = syft_scan("registry:alpine", None, cfg)
+            .get_args()
+            .map(|x| x.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            a[..4],
+            ["scan", "registry:alpine", "--from", SYFT_LOCAL_SOURCES]
+        );
     }
 
     /// #64：引擎的 app update-check 會連網——釘選版實測 `syft scan` 與 `grype sbom:`（含 `-q`）

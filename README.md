@@ -54,6 +54,9 @@ CyTrace 設計成在**完全斷網**的環境執行，執行期、報表與 CI �
 - **離線安裝包**：一個目錄內含執行檔、三個釘選版引擎與漏洞資料庫快照，外加離線執行 wrapper（`cytrace-offline`），目標機不需要另外安裝任何東西。
 - **Web 服務模式**：控制台以內嵌方式隨執行檔提供。上傳的掃描目標只送到同場域的 CyTrace 伺服器，掃描結束即刪除（NFR-09）。
 - **CBOM**：`--cbom` 只接受本地目錄、docker save 的 tar 或 OCI layout，不接受 registry 參照，所以不會為了拉映像而連網。
+- **掃描目標只取本機來源**：產品呼叫 Syft 時以 `--from` 限定本機的目錄、檔案與映像檔（#79）。目標不存在、打錯字，
+  或寫成 `registry:`、`docker:` 等遠端來源時直接報錯，不會改去 docker daemon、Docker Hub 或 snapcraft 查詢。
+  **v0.6.1 及更早版本**會改去這些地方查詢，並把目標名稱送出。
 
 **需要準備的**：漏洞資料庫快照解開後約 3.0 GB（2026-10 實測 v6.1.10，會隨時間成長）。
 離線安裝包已內含快照；容器版則要另以 volume 掛入 `/db`。
@@ -171,7 +174,8 @@ cargo build --release
 
 - **目標格式**：
   - 目錄：`dir:/路徑`
-  - 容器映像：`docker-archive:映像.tar`、`oci-dir:目錄`，或其他 Syft 支援的本地形式
+  - 容器映像：`docker-archive:映像.tar`、`oci-dir:目錄`（`oci-archive:`、`singularity:` 同屬本機來源，尚未實測）
+  - 不支援從 registry 或 docker／podman／containerd daemon 直接取映像：請先 `docker save` 匯出成 tar（#79）
   - 檔案系統
 - **語言**：`--lang zh-TW｜en-US`，是全域旗標，可以放在子命令後面。
   - 未指定時讀環境變數 `CYTRACE_LANG`，兩者都沒有就用 zh-TW。
