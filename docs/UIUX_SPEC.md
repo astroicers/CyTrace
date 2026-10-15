@@ -103,7 +103,7 @@
 |------|------|------|----------------|
 | （未登入） | 登入 | 單一管理帳號的密碼登入 | `console.login` |
 | `#/` | 掃描任務 | job 列表：目標、狀態、風險、建立時間；重新整理、新增掃描、檢視 | `console.jobs` |
-| `#/scans/new` | 新增掃描 | 兩種來源：上傳封存檔（zip／tar／tar.gz，顯示進度）或掛載目錄白名單（root + 相對路徑）；`fail_on` 門檻；CBOM 勾選項 | `console.scan` |
+| `#/scans/new` | 新增掃描 | 兩種來源：上傳封存檔（zip／tar／tar.gz，顯示進度；RAR、7z、xz、bzip2、zstd、lz4、lzip、minlz、snappy／s2 依檔頭，brotli、zlib 等依副檔名辨識後拒收並顯示 server 訊息，#77）或掛載目錄白名單（root + 相對路徑）；`fail_on` 門檻；CBOM 勾選項 | `console.scan` |
 | `#/jobs/{id}` | 任務詳情 | 狀態、時間、風險與計數；失敗時顯示依語系渲染的原因；下載報表與 ScanResult | `console.job` |
 | `#/reports` | 報表 | 已完成掃描的報表列表 | `console.reports` |
 | `#/system` | 系統 | CyTrace 版本、DB 快照狀態、掃描白名單、上傳上限 | `console.system` |

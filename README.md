@@ -207,7 +207,9 @@ docker run -d --name cytrace --read-only \
 ```
 
 - **送掃描**：控制台提供兩種方式。
-  - **上傳**：接受 zip、tar、tar.gz，或單一檔案。
+  - **上傳**：接受 zip、tar、tar.gz，或單一檔案。其他壓縮格式會在上傳時被拒收，請先轉成 zip 或 tar：
+    RAR、7z、xz、bzip2、zstd、lz4、lzip、minlz、snappy／s2 依檔頭辨識，brotli、zlib 依副檔名辨識。
+    不論是否被辨識，單一檔案都不會被引擎自行解壓（#77）。
   - **指定伺服器上的路徑**：路徑必須在 `CYTRACE_SCAN_ROOTS` 白名單內，以 `/scan-targets` 掛入。
 - **映像 tar**：用 `docker save` 匯出的 tar，上傳或掛載都會以映像方式掃描，結果與命令列 `run docker-archive:` 相同。
   建議**一個映像一個 tar**。多映像 tar、巢狀 index 等形態的限制見 CHANGELOG 最新版的「已知限制」。

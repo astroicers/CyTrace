@@ -941,6 +941,67 @@ fn pinned_engines_ignore_external_config_files() {
     }
 }
 
+/// #77：Syft 只在**檔名**符合壓縮格式時才自行解壓（而且沒有總量上限），Web 上傳因此以不含那些字串的檔名
+/// 交給 Syft（`cytrace-server::upload::syft_safe_name`）。同一份 tar：`v.tar` 會被解開、掃出 lodash（對照組，
+/// 證明本案例咬得到）；`v_tar` 不會。走產品實際的 `engine::sbom`（含 `-c` 空設定與離線變數）。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_unarchives_only_when_file_name_matches() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("unarchive-by-name");
+    let lock = br#"{"name":"v","version":"1.0.0","lockfileVersion":2,"requires":true,
+ "packages":{"":{"name":"v","version":"1.0.0","dependencies":{"lodash":"4.17.20"}},
+  "node_modules/lodash":{"version":"4.17.20"}}}"#;
+    let mut tarball = Vec::new();
+    {
+        let mut b = tar::Builder::new(&mut tarball);
+        let mut h = tar::Header::new_gnu();
+        h.set_size(lock.len() as u64);
+        h.set_mode(0o644);
+        h.set_cksum();
+        b.append_data(&mut h, "v/package-lock.json", &lock[..])
+            .unwrap();
+        b.finish().unwrap();
+    }
+    let names = |file: &str| -> Vec<String> {
+        let p = dir.join(file);
+        fs::write(&p, &tarball).unwrap();
+        let sbom = engine::sbom(&p.display().to_string()).expect("syft 掃描失敗");
+        let v: serde_json::Value = serde_json::from_str(&sbom).unwrap();
+        v["components"]
+            .as_array()
+            .map(|c| {
+                c.iter()
+                    .filter_map(|x| x["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let named = names("v.tar");
+    assert!(
+        named.iter().any(|n| n == "lodash"),
+        "對照組：檔名為 v.tar 時 Syft 應自行解開並找到 lodash，否則本案例已失去作用：{named:?}"
+    );
+    let neutral = names("v_tar");
+    assert!(
+        !neutral.iter().any(|n| n == "lodash"),
+        "檔名不含壓縮格式字串時 Syft 不得自行解壓：{neutral:?}"
+    );
+    // 上層目錄名含比對字串（資料目錄可由管理者設定，例如家目錄 /home/a.brown）不影響：Syft 只看檔名本身
+    // （#77 第三輪複審 R2；另以 brotli、lz4 內容實測相同）
+    fs::create_dir_all(dir.join("x.tar.d")).unwrap();
+    let parent = names("x.tar.d/v_tar");
+    assert!(
+        !parent.iter().any(|n| n == "lodash"),
+        "上層目錄名不得讓 Syft 自行解壓：{parent:?}"
+    );
+}
+
 /// T928：以 Syft **預設**呼叫（未關 file 選擇）產出的原始 CycloneDX 含 `type:"file"` 元件（`dir:` 目標時以主機
 /// 絕對路徑為名），經 `parse_cyclonedx` 後一個都不留，套件照常保留（ADR-009 修訂）。先斷言原始輸出**確實有**
 /// file 元件，免得 syft 哪天不再輸出時這支空轉成恆真。
