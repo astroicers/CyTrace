@@ -986,6 +986,82 @@ fn pinned_syft_never_falls_back_to_remote_sources() {
     }
 }
 
+/// #79 後續：本機的 snap 套件檔以 `--from snap` 掃描，Syft 就地讀取、不連 snapcraft。Syft 的 snap 來源分本機
+/// 與遠端兩個、`--from snap` 兩個都會選，本機那個不接受時就拿目標字串查 api.snapcraft.io（實測副檔名為
+/// `.bin`、`.SNAP` 時各 2 次 443 連線）——所以那些目標必須留在本機來源清單：成功但不讀 squashfs 內容，
+/// 或以「本機找不到」失敗，錯誤裡不得出現 snap 遠端來源的字句。
+/// `fixtures/mini.snap` 以 `mksquashfs <root> mini.snap -noappend -comp gzip -all-root -no-xattrs
+/// -mkfs-time 0 -all-time 0` 產生（可重現），內含 `meta/snap.yaml` 與列出 openssl 3.0.2-0ubuntu1 的
+/// `var/lib/dpkg/status`。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_scans_local_snap_files_without_snapcraft() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mini.snap");
+    let dir = workspace("local-snap");
+    let has_openssl = |target: &str| -> bool {
+        let sbom = engine::sbom(target).unwrap_or_else(|e| panic!("{target}：{e}"));
+        let v: serde_json::Value = serde_json::from_str(&sbom).unwrap();
+        v["components"].as_array().is_some_and(|c| {
+            c.iter()
+                .any(|x| x["name"] == "openssl" && x["version"] == "3.0.2-0ubuntu1")
+        })
+    };
+    let plain = fixture.display().to_string();
+    let squashfs = dir.join("img.squashfs");
+    fs::copy(&fixture, &squashfs).unwrap();
+    for target in [
+        plain.clone(),
+        format!("snap:{plain}"),
+        squashfs.display().to_string(),
+    ] {
+        assert!(
+            has_openssl(&target),
+            "{target}：應就地讀出 squashfs 內的 openssl"
+        );
+    }
+    // Web 模式（T931）：以來源名稱呼叫時，snap 目標的原始 CycloneDX 與 SPDX（產出時已過 validate_spdx）同樣
+    // 不含伺服器路徑。釘選版的 snap 來源即使不給來源名稱也不帶路徑（CLI 呼叫一併斷言，行為改變時這裡會先紅）。
+    let upload = dir.join("app.snap");
+    fs::copy(&fixture, &upload).unwrap();
+    let host = dir.display().to_string();
+    let cli = engine::sbom(&upload.display().to_string()).unwrap();
+    assert!(
+        !cli.contains(&host),
+        "snap 來源的 CycloneDX 不含主機路徑：{cli}"
+    );
+    let (cdx, spdx) = RealEngine
+        .sbom_with_spdx_named(&upload.display().to_string(), "upload:app.snap")
+        .expect("snap 目標應產出 SBOM");
+    let spdx = spdx.expect("RealEngine 應產出 SPDX");
+    assert!(!cdx.contains(&host), "CycloneDX 不得含主機路徑：{cdx}");
+    assert!(!spdx.contains(&host), "SPDX 不得含主機路徑：{spdx}");
+    assert!(cdx.contains("\"openssl\""), "{cdx}");
+    // 內容同為 squashfs、但 Syft 本機 snap 來源不接受的檔名：當一般檔案掃，不讀內容、不換遠端
+    for name in ["image.bin", "image.SNAP"] {
+        let p = dir.join(name);
+        fs::copy(&fixture, &p).unwrap();
+        let target = p.display().to_string();
+        assert!(!has_openssl(&target), "{target}：不應以 snap 來源讀取");
+    }
+    let missing = dir.join("missing.snap").display().to_string();
+    for target in [missing.clone(), format!("snap:{missing}")] {
+        let err = engine::sbom(&target).expect_err(&target).to_string();
+        assert!(
+            err.contains("no source providers were able to resolve the input"),
+            "{target}：不存在的 .snap 應以「本機找不到」失敗：{err}"
+        );
+        for remote in ["snapcraft", "no snap found"] {
+            assert!(!err.contains(remote), "{target}：不得嘗試 {remote}：{err}");
+        }
+    }
+}
+
 /// #77：Syft 只在**檔名**符合壓縮格式時才自行解壓（而且沒有總量上限），Web 上傳因此以不含那些字串的檔名
 /// 交給 Syft（`cytrace-server::upload::syft_safe_name`）。同一份 tar：`v.tar` 會被解開、掃出 lodash（對照組，
 /// 證明本案例咬得到）；`v_tar` 不會。走產品實際的 `engine::sbom`（含 `-c` 空設定與離線變數）。

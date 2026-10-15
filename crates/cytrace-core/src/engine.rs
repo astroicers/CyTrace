@@ -135,7 +135,7 @@ pub const GRYPE_OFFLINE_ENV: &[(&str, &str)] = &[
 fn syft_scan(target: &str, source_name: Option<&str>, config: &std::path::Path) -> Command {
     let (from, path) = syft_source(target);
     let mut cmd = Command::new("syft");
-    cmd.args(["scan", path, "--from", from]);
+    cmd.args(["scan", path.as_str(), "--from", from]);
     if let Some(name) = source_name {
         cmd.args(["--source-name", name]);
     }
@@ -149,14 +149,16 @@ fn syft_scan(target: &str, source_name: Option<&str>, config: &std::path::Path) 
 /// containerd、podman、OCI registry（`GET https://index.docker.io/…/<目標字串>`）與 snap
 /// （`GET https://api.snapcraft.io/…/<目標字串>`）——違反零外連，且把檔名、伺服器路徑送出（NFR-09）。
 /// 以 `--from` 限定後，實測不存在的目標、解壓失敗的目標、`registry:` 目標都直接失敗，連線嘗試為 0。
-/// snap 不在清單內：它自己會連 api.snapcraft.io；oci-model 會連 index.docker.io。
+/// snap 不在清單內：找不到本機檔時它會連 api.snapcraft.io，只在 [`local_snap_file`] 確認後單獨使用；
+/// oci-model 會連 index.docker.io。
 /// 順序與 Syft 預設的嘗試順序一致（映像類在前、檔案與目錄在後），不帶前綴的映像 tar 仍以映像掃描。
 pub const SYFT_LOCAL_SOURCES: &str = "docker-archive,oci-archive,oci-dir,singularity,file,dir";
 
 /// 把目標拆成（`--from` 的值、交給 Syft 的路徑）（#79）。加了 `--from` 後 Syft 不再解析目標的前綴，
-/// 所以已知的本機前綴（`dir:` 等）轉成對應的 `--from`；其餘——無前綴、`registry:` 等遠端前綴、
-/// Windows 的 `C:`——整串當路徑，只允許全部本機來源：找不到即失敗，不會改連外部。
-fn syft_source(target: &str) -> (&'static str, &str) {
+/// 所以已知的本機前綴（`dir:` 等）轉成對應的 `--from`；本機的 snap 套件檔（[`local_snap_file`]，可帶 `snap:`）
+/// 用 `snap`；其餘——無前綴、`registry:` 等遠端前綴、Windows 的 `C:`——整串當路徑，只允許全部本機來源：
+/// 找不到即失敗，不會改連外部。
+fn syft_source(target: &str) -> (&'static str, String) {
     const LOCAL_SCHEMES: &[&str] = &[
         "dir",
         "file",
@@ -167,10 +169,58 @@ fn syft_source(target: &str) -> (&'static str, &str) {
     ];
     if let Some((scheme, rest)) = target.split_once(':') {
         if let Some(s) = LOCAL_SCHEMES.iter().find(|s| **s == scheme) {
-            return (s, rest);
+            return (s, rest.to_string());
         }
     }
-    (SYFT_LOCAL_SOURCES, target)
+    // 不帶前綴的 .snap 原本會落到 file 來源、靜默得到 0 個元件（v0.6.2 發布複審 N1）
+    let snap_path = target.strip_prefix("snap:").unwrap_or(target);
+    if let Some(path) = local_snap_file(snap_path) {
+        return ("snap", path);
+    }
+    (SYFT_LOCAL_SOURCES, target.to_string())
+}
+
+/// 目標是 Syft 必定在本機讀取的 snap 套件檔時，回傳要交給 `--from snap` 的路徑（#79 後續）。
+///
+/// Syft 的 snap 來源有本機、遠端兩個，名稱與標籤相同，`--from snap` 兩個都會選。本機那個只要下列任一項
+/// 不成立就換遠端那個，以目標字串查 `api.snapcraft.io`（釘選版實測：副檔名是 `.bin` 或 `.SNAP`、目標是
+/// 名為 `x.snap` 的目錄，都各有 2 次 443 連線）：路徑存在、是一般檔案、可開啟、副檔名為 `.snap` 或
+/// `.squashfs`（區分大小寫；Syft 認不出 squashfs 的 MIME，實際只看副檔名）。這些都成立後，內容損毀或缺
+/// `meta/snap.yaml` 只會讓掃描失敗或少了 snap 本身的資訊，不會再換來源（實測連線 0；就地讀取，strace 實測 Syft 不在暫存目錄建立檔案）。
+/// 所以這裡逐項先查，另外要求檔頭是 squashfs 的魔數 `hsqs`。
+///
+/// Syft 會把路徑轉成絕對路徑並以字面消去 `..`，開頭的 `~` 會展開成家目錄；這裡先做同樣的轉換（`~` 開頭的
+/// 相對路徑轉成絕對路徑後就不再以 `~` 開頭），兩邊檢查的是同一個檔案。剩下的空窗都需要外力介入：檔案在檢查後、
+/// Syft 讀取前被移除、改名或換成目錄；或 Syft 為算摘要讀完整個檔案時發生 I/O 錯誤（這裡只讀前 4 bytes）。
+fn local_snap_file(target: &str) -> Option<String> {
+    use std::io::Read;
+    use std::path::{Component, PathBuf};
+    let abs = std::path::absolute(target).ok()?;
+    let mut path = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            Component::ParentDir => {
+                path.pop();
+            }
+            Component::CurDir => {}
+            other => path.push(other),
+        }
+    }
+    let ext = path.extension()?;
+    if ext != "snap" && ext != "squashfs" {
+        return None;
+    }
+    if !std::fs::metadata(&path).ok()?.is_file() {
+        return None;
+    }
+    let mut head = [0u8; 4];
+    std::fs::File::open(&path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .ok()?;
+    if &head != b"hsqs" {
+        return None;
+    }
+    path.into_os_string().into_string().ok()
 }
 
 /// 以 Syft 對目標產生 CycloneDX JSON SBOM。
@@ -1115,7 +1165,7 @@ mod tests {
             ("docker:alpine", SYFT_LOCAL_SOURCES, "docker:alpine"),
             (r"C:\scan\app", SYFT_LOCAL_SOURCES, r"C:\scan\app"),
         ] {
-            assert_eq!(syft_source(target), (from, path), "{target}");
+            assert_eq!(syft_source(target), (from, path.to_string()), "{target}");
         }
         // 白名單：清單逐項、依序固定（新增任何 provider 都要改這裡並說明它不會連網；#79 複審 N2）
         assert_eq!(
@@ -1152,6 +1202,70 @@ mod tests {
             a[..4],
             ["scan", "registry:alpine", "--from", SYFT_LOCAL_SOURCES]
         );
+    }
+
+    /// #79 後續（v0.6.2 發布複審 N1）：不帶前綴的 `.snap` 原本會落到 `file` 來源、靜默得到 0 個元件。
+    /// 只有 Syft 必定在本機讀取的檔案才改用 `--from snap`（[`local_snap_file`]）；其餘任何一種——副檔名不是
+    /// 小寫 `.snap`／`.squashfs`、是目錄、不存在、檔頭不是 squashfs——snap 的遠端來源會拿目標字串查
+    /// api.snapcraft.io（釘選版實測），一律留在本機來源清單。
+    #[test]
+    fn only_local_snap_files_are_scanned_as_snap() {
+        let dir = std::env::temp_dir().join(format!("cytrace-snap-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("x.snap")).unwrap();
+        let squashfs = b"hsqs\x00\x00\x00\x00rest";
+        for name in [
+            "app.snap",
+            "img.squashfs",
+            "app.bin",
+            "app.SNAP",
+            "app_snap",
+        ] {
+            std::fs::write(dir.join(name), squashfs).unwrap();
+        }
+        std::fs::write(dir.join("text.snap"), b"plain text").unwrap();
+        let at = |name: &str| dir.join(name).display().to_string();
+        let snap = at("app.snap");
+        let local = |t: String| (t.clone(), SYFT_LOCAL_SOURCES, t);
+        let mut cases = vec![
+            (snap.clone(), "snap", snap.clone()),
+            (format!("snap:{snap}"), "snap", snap.clone()),
+            (at("img.squashfs"), "snap", at("img.squashfs")),
+            // Syft 與這裡都以字面消去 `..`（中間的 nosuch 不存在也一樣）
+            (at("nosuch/../app.snap"), "snap", snap.clone()),
+            (format!("file:{snap}"), "file", snap.clone()),
+        ];
+        for name in [
+            "app.bin",
+            "app.SNAP",
+            "app_snap",
+            "x.snap",
+            "text.snap",
+            "missing.snap",
+        ] {
+            cases.push(local(at(name)));
+        }
+        cases.push(local(format!("snap:{}", at("missing.snap"))));
+        for (target, from, path) in cases {
+            assert_eq!(syft_source(&target), (from, path), "{target}");
+        }
+        // 名為 .snap 的 FIFO：不得為了讀檔頭而開啟它（沒有寫入端時會永久阻塞），先確認是一般檔案
+        #[cfg(unix)]
+        {
+            let fifo = at("pipe.snap");
+            assert!(std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .is_ok_and(|s| s.success()));
+            let (tx, rx) = std::sync::mpsc::channel();
+            let t = fifo.clone();
+            std::thread::spawn(move || tx.send(syft_source(&t)));
+            let got = rx
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("FIFO 目標不得阻塞");
+            assert_eq!(got, (SYFT_LOCAL_SOURCES, fifo));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// #64：引擎的 app update-check 會連網——釘選版實測 `syft scan` 與 `grype sbom:`（含 `-q`）
