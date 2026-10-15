@@ -1776,9 +1776,9 @@ milestones:
         imported_at: "2026-10-15"
         description: |
           v0.6.1 之後的安全修正要交到場域：Web 上傳不再由 Syft 自行解壓、Syft 能解的壓縮格式改為拒收（#77，
-          解壓炸彈）；Syft 一律只取本機來源，不再改連 docker daemon、Docker Hub、snapcraft（#79）；rustls 升級
-          修補 RUSTSEC-2026-0346～0349（PR #81）。#77、#79 皆拿掉既有能力（使用者 2026-10-15 裁定），CHANGELOG
-          升級須知已列出替代做法。流程同 T932：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.2` tag → 使用者簽 Release
+          解壓炸彈）；Syft 一律只取本機來源，不再改連 docker daemon、Docker Hub、snapcraft（#79）；本機的 .snap 檔恢復可掃描、
+          不查 snapcraft（PR #83，發布複審 N1）；rustls 升級修補 RUSTSEC-2026-0346～0349（PR #81）。#77、#79 皆拿掉既有能力（使用者 2026-10-15 裁定），CHANGELOG
+          升級須知已列出替代做法（`oci-model:` 沒有替代做法）。流程同 T932：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.2` tag → 使用者簽 Release
           `SHA256SUMS` → Linux 包（AI 打包、使用者簽章、斷網冒煙）→ Windows 包（使用者以 `-CytraceExe` 打包）。
 
   - id: M6

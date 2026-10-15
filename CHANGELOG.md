@@ -11,8 +11,10 @@
 > **升級須知**：
 > - **拿掉了兩組既有能力**（皆為安全修正，見下方「安全性」）：
 >   - Web 上傳 RAR、7z、xz、bzip2、zstd、lz4、lzip、minlz、snappy／s2、brotli、zlib 改為拒收（#77），請先轉成 zip 或 tar 再上傳。
->   - 目標 `docker:`、`podman:`、`containerd:`、`registry:`、`oci-model:`、`snap:` 不再支援（#79）。映像請先以 `docker save`
->     匯出成 tar，再以 `docker-archive:<檔案>` 掃描。
+>   - 目標 `docker:`、`podman:`、`containerd:`、`registry:`、`oci-model:` 不再支援（#79）。映像請先以 `docker save`
+>     匯出成 tar，再以 `docker-archive:<檔案>` 掃描；`oci-model:` 沒有替代做法。
+> - `.snap` 檔仍可掃描，但只限本機、副檔名為小寫 `.snap` 或 `.squashfs` 的檔案。其他檔名的 snap 檔會當一般檔案掃描、
+>   **得到 0 個元件且不報錯**，請先改名（#79 後續）。
 > - 目標不存在或寫成遠端來源時，錯誤訊息改為「引擎在本機找不到可讀的掃描目標……」，並且不再嘗試任何網路連線。
 
 ### 安全性
@@ -20,8 +22,10 @@
 - **掃描目標一律只取本機來源，不再改連 docker daemon、Docker Hub 或 snapcraft**（#79）：
   - 原本交給 Syft 的目標若在本機找不到或讀不了（路徑打錯、檔案損壞無法辨識），Syft 會依序改試 docker daemon、
     containerd、podman、OCI registry 與 snap。以釘選版實測，直接執行 v0.6.1 掃描不存在的檔案，在無網路環境中有
-    56 次連線嘗試，損壞的壓縮檔有 8 次，兩者都另連 docker daemon；有網路時會實際向 Docker Hub 與
-    api.snapcraft.io 送出目標名稱——Web 模式下是伺服器的檔案路徑。
+    56 次連線嘗試，損壞的壓縮檔有 8 次，兩者都另連 docker daemon。這些連線的對象包括 OCI registry（預設為 Docker Hub）
+    與 api.snapcraft.io。snapcraft 的查詢網址直接帶目標路徑（釘選版的錯誤原文為
+    `Get "https://api.snapcraft.io/v2/snaps/info/<目標>"`；有網路時實測得到「找不到名為 <路徑> 的 snap」的回覆），
+    Web 模式下即伺服器的檔案路徑。Docker Hub 是否收到目標名稱，未在有網路的環境實測。
   - 現在 CyTrace 呼叫 Syft 時一律限定本機來源（目錄、檔案、docker save／OCI 映像檔、singularity）。
     不存在的目標、損壞的檔案、`registry:`、`docker:` 目標皆實測直接報錯，網路與 docker daemon 的連線嘗試皆為 0。
     目標不存在或為遠端參照時，提示「引擎在本機找不到可讀的掃描目標……請先以 docker save 匯出成 tar」；
@@ -49,13 +53,14 @@
     以釘選版實測，458 KB 的 tar.xz 在 15 秒內解出 3 GiB 到暫存目錄。在上傳上限 512 MB 下，這足以塞滿容器的 `/tmp`
     或主機磁碟，並影響同時進行的其他掃描。Syft 自己的路徑穿越檢查實測有效。
   - **現在**：
-    - 單一檔案存檔時，檔名中會讓 Syft 認出壓縮格式的字串（例如 `.tar`、`.xz`、`.br`）改為 `_`，Syft 便不會自行解壓。
+    - 單一檔案存檔時，檔名中會讓 Syft 認出壓縮格式的字串（例如 `.tar`、`.xz`、`.br`），把其中的 `.` 改為 `_`
+      （例如 `a.tar.xz` 存成 `a_tar_xz`），Syft 便不會自行解壓。
       這不依賴下面的格式清單是否完整。以釘選版實測，12 種格式在中性檔名下都不會被解開。
       不含這些字串的檔名照原樣保留，例如 `package-lock.json`、`tool.exe`、`pkg.rpm`，仍可被正確辨識。
     - 認得的壓縮格式直接拒收（HTTP 415，訊息為「不支援的壓縮格式（僅 zip / tar / tar.gz）」），不建立工作，
       也不保留上傳的檔案。有固定檔頭的格式依檔頭辨識，brotli、zlib 等沒有可靠檔頭的格式依結尾副檔名辨識。
       這一層是為了讓使用者知道原因，不再只得到 0 個元件。
-  - 以「BZh」「Rar!」等字元開頭的一般文字檔，以及檔名中間含有這些字串的檔案（例如 `my.brand.exe`），不會被拒收。
+  - 以「BZh」或「Rar!」開頭的一般文字檔，以及檔名中間含有這些字串的檔案（例如 `my.brand.exe`），不會被拒收。
   - 不受本項影響：
     - 命令列：`cytrace run` 的目標由使用者指定。對壓縮檔而言，Syft 同樣會自行解壓、沒有總量上限，
       請只掃描來源可信的壓縮檔，或先自行解開。
@@ -82,6 +87,8 @@
   - 驗證的目標：映像 tar、Go 執行檔、路徑含空白與中文的目錄，皆以 Web 掛載方式產出。
   - v0.6.1 調整了 Syft 的呼叫方式（#64、#67、#70），未重跑上述 schema 驗證。改以 npm、Python、Java 三個目標比對
     v0.6.0 與 v0.6.1 的 SPDX 輸出：排除隨機 ID、時間戳與工具版本後內容相同。Go 原始碼目標依 #67 會有差異。
+  - v0.6.2 再以 `--from` 限定來源（#79），未重跑 schema 驗證，也未重新比對 SPDX 輸出。真引擎測試持續驗證
+    SPDX 與 CycloneDX 列出相同的套件，Web 模式下兩者都不含伺服器路徑（含 .snap 目標）。
   - **Windows 上尚未實測**。
 - `--help` 用法行裡的 `[OPTIONS]`、`<TARGET>` 等佔位符，以及少數未逐一翻譯的參數錯誤類型，仍為英文。
 - `docker stop`（或 Ctrl-C）時，進行中的掃描不會等它跑完；重啟後該任務標為「中斷」，可重新送出。
@@ -108,7 +115,8 @@
 - **命令列與掛載目標的單一壓縮檔仍由 Syft 自行解壓，沒有總量上限**（#77 的防護只涵蓋 Web 上傳）：
   `cytrace run`／`scan` 的目標由使用者指定，Web 服務模式的掛載根目錄由管理者設定。請只掃描來源可信的壓縮檔，或先自行解開。
 - `oci-archive:`、`singularity:` 目標屬本機來源、可使用，但尚未實測。
-- `.snap` 檔不再能掃描（#79），目前沒有替代做法。
+- 內容是 snap（squashfs）、但副檔名不是小寫 `.snap`／`.squashfs` 的檔案，當一般檔案掃描，**得到 0 個元件且不報錯**
+  （#79 後續）。這類檔案不能改走 snap 來源：Syft 會拿路徑向 api.snapcraft.io 查詢。請先改名為 `.snap`。
 
 ## [0.6.1] - 2026-10-14
 
