@@ -30,6 +30,62 @@ pub fn sanitize_filename(name: &str) -> String {
     }
 }
 
+/// Syft 1.45.1 內建的 mholt/archives v0.1.5 以**檔名**辨識壓縮格式時比對的字串（各格式 `Extension()`，
+/// sz 另含 `.s2`；`Match` 對多數格式用子字串比對）。實測：Syft 只在檔名符合時才自行解壓——同一份內容改成
+/// 不含這些字串的檔名，12 種格式都不解（#77）。Syft 自行解壓沒有總量上限（458 KB 的 tar.xz 解出 3 GiB），
+/// 所以單一檔案上傳一律以不含這些字串的檔名交給 Syft。升級 Syft 時須對照新版清單（#71）。
+pub const SYFT_ARCHIVE_NAME_TOKENS: &[&str] = &[
+    ".7z", ".br", ".bz2", ".gz", ".lz", ".lz4", ".mz", ".rar", ".sz", ".s2", ".tar", ".xz", ".zip",
+    ".zst", ".zz",
+];
+
+/// 交給 Syft 的存檔名（#77）：檔名含 [`SYFT_ARCHIVE_NAME_TOKENS`] 時，把最後一個 `.` 以外的 `.` 換成 `_`；
+/// 若仍含（最後的副檔名本身就是壓縮格式），連最後一個 `.` 也換掉。不含時原樣保留——`package-lock.json`
+/// 靠完整檔名、`*.exe`／`*.rpm` 靠副檔名讓 Syft 辨識，不能動。
+pub fn syft_safe_name(name: &str) -> String {
+    let has_token = |s: &str| {
+        let s = s.to_lowercase();
+        SYFT_ARCHIVE_NAME_TOKENS.iter().any(|t| s.contains(t))
+    };
+    if !has_token(name) {
+        return name.to_string();
+    }
+    let keep_last = match name.rfind('.') {
+        Some(i) => format!("{}{}", name[..i].replace('.', "_"), &name[i..]),
+        None => name.to_string(),
+    };
+    if has_token(&keep_last) {
+        name.replace('.', "_")
+    } else {
+        keep_last
+    }
+}
+
+/// 沒有可靠檔頭、只能依副檔名認出的壓縮格式（#77）：brotli 完全沒有檔頭、zlib 只有 2 bytes（拿來判斷會誤判
+/// 一般的二進位檔）。有固定檔頭的格式也一併列入，副檔名與內容不一致時同樣拒收。只看**結尾**副檔名，
+/// 檔名中間含有字串（`my.brand.exe`）不算。
+pub fn unsupported_by_name(name: &str) -> Option<&'static str> {
+    const BY_EXT: &[(&str, &str)] = &[
+        (".br", "brotli"),
+        (".zz", "zlib"),
+        (".lz4", "lz4"),
+        (".lz", "lzip"),
+        (".mz", "minlz"),
+        (".sz", "snappy"),
+        (".s2", "snappy"),
+        (".zst", "zstd"),
+        (".xz", "xz"),
+        (".bz2", "bzip2"),
+        (".rar", "rar"),
+        (".7z", "7z"),
+    ];
+    let lower = name.to_lowercase();
+    BY_EXT
+        .iter()
+        .find(|(ext, _)| lower.ends_with(ext))
+        .map(|(_, fmt)| *fmt)
+}
+
 /// 落盤後的上傳，決定掃描目標。
 pub struct PreparedUpload {
     /// syft 掃描目標（`dir:<extracted>` 或單檔路徑）。
@@ -48,10 +104,16 @@ pub fn prepare(
     let kind =
         archive::detect_kind(saved).map_err(|e| archive::ArchiveError::Malformed(e.to_string()))?;
     match kind {
-        UploadKind::PlainFile => Ok(PreparedUpload {
-            scan_target: saved.display().to_string(),
-            original_name: original_name.to_string(),
-        }),
+        // 不建 job：回到 api::jobs 以 415 + 在地化訊息拒收，detail 帶格式名（#77）
+        UploadKind::Unsupported(name) => Err(archive::ArchiveError::Unsupported(name.into())),
+        UploadKind::PlainFile => match unsupported_by_name(original_name) {
+            // 沒有可靠檔頭的格式依副檔名拒收（#77）
+            Some(fmt) => Err(archive::ArchiveError::Unsupported(fmt.into())),
+            None => Ok(PreparedUpload {
+                scan_target: saved.display().to_string(),
+                original_name: original_name.to_string(),
+            }),
+        },
         UploadKind::Zip | UploadKind::Tar | UploadKind::TarGz => {
             let extracted = input_dir.join("extracted");
             std::fs::create_dir_all(&extracted)
@@ -99,7 +161,7 @@ fn image_aware_target(
                 gunzip_to(saved, &image, tar_stream_budget)?;
                 return Ok(format!("docker-archive:{}", image.display()));
             }
-            UploadKind::Zip | UploadKind::PlainFile => {}
+            UploadKind::Zip | UploadKind::PlainFile | UploadKind::Unsupported(_) => {}
         }
     }
     if cytrace_core::engine::is_oci_layout(extracted) {
@@ -152,7 +214,10 @@ fn gunzip_to(src: &Path, dest: &Path, max: u64) -> Result<(), archive::ArchiveEr
 
 /// 上傳原檔的落點：`<input_dir>/original/<sanitized>`。
 pub fn original_path(input_dir: &Path, filename: &str) -> PathBuf {
-    input_dir.join("original").join(sanitize_filename(filename))
+    // 單一檔案上傳會以此路徑直接交給 Syft，檔名不得讓 Syft 自行解壓（#77）
+    input_dir
+        .join("original")
+        .join(syft_safe_name(&sanitize_filename(filename)))
 }
 
 #[cfg(test)]
@@ -166,6 +231,95 @@ mod tests {
         assert_eq!(sanitize_filename("/abs/x.tar.gz"), "x.tar.gz");
         assert_eq!(sanitize_filename("..."), "upload");
         assert_eq!(sanitize_filename(""), "upload");
+    }
+
+    /// #77：上傳檔名含 Syft（mholt/archives）以檔名辨識壓縮格式的字串時，存檔名把 `.` 換成 `_`，
+    /// Syft 就不會自行解壓（釘選版實測 12 種格式：原名會解、中性名不解）。其餘檔名原樣保留——
+    /// `package-lock.json`、`*.exe`、`*.rpm` 這類靠完整檔名或副檔名辨識的目標不受影響。
+    #[test]
+    fn syft_safe_name_strips_archive_extensions_only() {
+        for (given, want) in [
+            ("foo.tar.xz", "foo_tar_xz"),
+            ("img.tar", "img_tar"),
+            ("a.tar.br", "a_tar_br"),
+            ("x.7z", "x_7z"),
+            ("my.brand.exe", "my_brand.exe"),
+            ("FOO.TAR.GZ", "FOO_TAR_GZ"),
+            ("package-lock.json", "package-lock.json"),
+            ("tool.exe", "tool.exe"),
+            ("pkg.rpm", "pkg.rpm"),
+            ("app.min.js", "app.min.js"),
+            ("ziti-edge-tunnel", "ziti-edge-tunnel"),
+        ] {
+            assert_eq!(syft_safe_name(given), want, "{given}");
+        }
+        // 清單本身的防退化：另寫一份，照抄 mholt/archives v0.1.5 各格式的 Extension()（sz 另含 .s2）。
+        // 只靠迭代 SYFT_ARCHIVE_NAME_TOKENS 的話，從清單拿掉一項只會讓那一項不再被測（#77 第三輪複審 R1）。
+        const MHOLT_V0_1_5: [&str; 15] = [
+            ".7z", ".br", ".bz2", ".gz", ".lz", ".lz4", ".mz", ".rar", ".sz", ".s2", ".tar", ".xz",
+            ".zip", ".zst", ".zz",
+        ];
+        let mut ours = SYFT_ARCHIVE_NAME_TOKENS.to_vec();
+        ours.sort_unstable();
+        let mut want = MHOLT_V0_1_5.to_vec();
+        want.sort_unstable();
+        assert_eq!(
+            ours, want,
+            "比對字串須與 mholt/archives v0.1.5 一致；升級 Syft 時重新核對（#71）"
+        );
+        for ext in MHOLT_V0_1_5 {
+            let name = format!("x{ext}");
+            assert_ne!(syft_safe_name(&name), name, "{name} 必須被改名");
+        }
+        // 性質：任何含比對字串的名字，轉換後都不再含任一比對字串
+        for tok in SYFT_ARCHIVE_NAME_TOKENS {
+            for name in [
+                format!("x{tok}"),
+                format!("x{tok}.exe"),
+                format!("a.b{tok}.c"),
+            ] {
+                let safe = syft_safe_name(&name).to_lowercase();
+                assert!(
+                    SYFT_ARCHIVE_NAME_TOKENS.iter().all(|t| !safe.contains(t)),
+                    "{name} → {safe}"
+                );
+            }
+        }
+        assert!(original_path(Path::new("/in"), "a.tar.xz").ends_with("original/a_tar_xz"));
+        assert!(original_path(Path::new("/in"), "package-lock.json")
+            .ends_with("original/package-lock.json"));
+    }
+
+    /// #77：沒有可靠檔頭的格式（brotli 完全沒有、zlib 只有 2 bytes）以結尾副檔名拒收；有檔頭的格式另由
+    /// `archive::detect_kind` 依檔頭拒收。檔名只是中間含有字串（`my.brand.exe`）不算。
+    #[test]
+    fn unsupported_by_name_matches_trailing_extension() {
+        for (name, fmt) in [
+            ("x.tar.br", "brotli"),
+            ("x.zz", "zlib"),
+            ("x.tar.lz4", "lz4"),
+            ("x.tar.lz", "lzip"),
+            ("x.mz", "minlz"),
+            ("x.tar.sz", "snappy"),
+            ("x.tar.s2", "snappy"),
+            ("x.tar.zst", "zstd"),
+            ("x.tar.xz", "xz"),
+            ("x.tar.bz2", "bzip2"),
+            ("X.RAR", "rar"),
+            ("x.7z", "7z"),
+        ] {
+            assert_eq!(unsupported_by_name(name), Some(fmt), "{name}");
+        }
+        for name in [
+            "my.brand.exe",
+            "package-lock.json",
+            "tool",
+            "app.zip",
+            "a.tar",
+            "a.tar.gz",
+        ] {
+            assert_eq!(unsupported_by_name(name), None, "{name}");
+        }
     }
 
     /// 測試用的 job input 目錄，測試結束時整個移除。

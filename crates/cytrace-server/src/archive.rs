@@ -27,6 +27,8 @@ pub enum ArchiveError {
     TooLarge(String),
     /// 讀取/解壓 I/O 或格式錯誤。
     Malformed(String),
+    /// 認得但不支援的壓縮格式（RAR、7z、xz、bzip2、zstd；#77），內容為格式名。
+    Unsupported(String),
 }
 
 impl ArchiveError {
@@ -34,21 +36,24 @@ impl ArchiveError {
         match self {
             ArchiveError::PathViolation(_) => "server.err.forbidden_path",
             ArchiveError::TooLarge(_) => "server.err.extract_too_large",
-            ArchiveError::Malformed(_) => "server.err.unsupported_archive",
+            ArchiveError::Malformed(_) | ArchiveError::Unsupported(_) => {
+                "server.err.unsupported_archive"
+            }
         }
     }
     pub fn kind(&self) -> &'static str {
         match self {
             ArchiveError::PathViolation(_) => "forbidden_path",
             ArchiveError::TooLarge(_) => "extract_too_large",
-            ArchiveError::Malformed(_) => "unsupported_archive",
+            ArchiveError::Malformed(_) | ArchiveError::Unsupported(_) => "unsupported_archive",
         }
     }
     pub fn detail(&self) -> &str {
         match self {
             ArchiveError::PathViolation(s)
             | ArchiveError::TooLarge(s)
-            | ArchiveError::Malformed(s) => s,
+            | ArchiveError::Malformed(s)
+            | ArchiveError::Unsupported(s) => s,
         }
     }
 }
@@ -61,6 +66,36 @@ pub enum UploadKind {
     Tar,
     /// 非壓縮包：直接以該檔為掃描目標。
     PlainFile,
+    /// 認得但不支援的壓縮格式（#77）：上傳時拒收。原本落到 PlainFile 交給 Syft，由 Syft 自行解壓後掃描——
+    /// 繞過本模組的條目數與總量上限：釘選版實測 458 KB 的 tar.xz 解出 3 GiB 到 `TMPDIR`（解壓炸彈）。
+    /// 內容為格式名（rar、7z、xz、bzip2、zstd）。
+    Unsupported(&'static str),
+}
+
+/// 認得但不支援的壓縮格式的檔頭（#77），涵蓋 Syft 1.45.1 內建 mholt/archives v0.1.5 能自行解壓、且有固定檔頭者。
+/// RAR5、7z 取自真實檔案；xz 由 xz 實際壓縮產生；zstd、lz4、lzip、minlz、snappy、s2 由 Syft 所依賴的同版本
+/// 函式庫實際壓縮產生；RAR4 與 RAR5 前 6 bytes 相同。bzip2 另見 [`is_bzip2`]。沒有可靠檔頭的 brotli、zlib
+/// 由 `upload::unsupported_by_name` 依副檔名拒收。
+const UNSUPPORTED_MAGIC: &[(&str, &[u8])] = &[
+    ("rar", b"Rar!\x1a\x07"),
+    ("7z", b"7z\xbc\xaf\x27\x1c"),
+    ("xz", b"\xfd7zXZ\x00"),
+    ("zstd", b"\x28\xb5\x2f\xfd"),
+    ("lz4", b"\x04\x22\x4d\x18"),
+    ("lzip", b"LZIP"),
+    ("minlz", b"\xff\x06\x00\x00MinLz"),
+    ("snappy", b"\xff\x06\x00\x00sNaPpY"),
+    ("s2", b"\xff\x06\x00\x00S2sTwO"),
+];
+
+/// bzip2：`BZh` + 區塊大小 `1`–`9`，其後必須是區塊標頭（π 的 BCD）或空串流的結尾標記（√π）。
+/// 只比 `BZh` 會把以「BZh」開頭的文字檔誤判成壓縮檔而拒收。
+fn is_bzip2(head: &[u8]) -> bool {
+    head.len() >= 10
+        && &head[0..3] == b"BZh"
+        && (b'1'..=b'9').contains(&head[3])
+        && (head[4..10] == [0x31, 0x41, 0x59, 0x26, 0x53, 0x59]
+            || head[4..10] == [0x17, 0x72, 0x45, 0x38, 0x50, 0x90])
 }
 
 /// 讀檔頭辨識格式：zip=`PK\x03\x04`、gzip=`\x1f\x8b`、tar=offset 257 `ustar`。
@@ -76,6 +111,13 @@ pub fn detect_kind(path: &Path) -> std::io::Result<UploadKind> {
     }
     if n >= 262 && &head[257..262] == b"ustar" {
         return Ok(UploadKind::Tar);
+    }
+    let head = &head[..n];
+    if let Some((name, _)) = UNSUPPORTED_MAGIC.iter().find(|(_, m)| head.starts_with(m)) {
+        return Ok(UploadKind::Unsupported(name));
+    }
+    if is_bzip2(head) {
+        return Ok(UploadKind::Unsupported("bzip2"));
     }
     Ok(UploadKind::PlainFile)
 }
@@ -108,6 +150,7 @@ pub fn extract(
             )
         }
         UploadKind::PlainFile => Err(ArchiveError::Malformed("not an archive".into())),
+        UploadKind::Unsupported(name) => Err(ArchiveError::Unsupported(name.into())),
     }
 }
 
@@ -219,6 +262,7 @@ mod tests {
             ArchiveError::PathViolation(String::new()),
             ArchiveError::TooLarge(String::new()),
             ArchiveError::Malformed(String::new()),
+            ArchiveError::Unsupported(String::new()),
         ] {
             for lang in ["zh-TW", "en-US"] {
                 let m = cytrace_i18n::Catalog::load(lang).t(e.i18n_key(), &[]);
@@ -226,6 +270,51 @@ mod tests {
                 assert!(!m.contains("{{"), "{lang} {}：{m}", e.i18n_key());
             }
         }
+    }
+
+    /// #77：已知但不支援的壓縮格式要被認出來，上傳時拒收；原本一律落到 PlainFile，由 Syft 自行解壓、
+    /// 沒有總量上限。檔頭取自實際檔案：RAR5、7z 取自真實壓縮檔，xz、bzip2 由 xz／bzip2 實際壓縮產生；
+    /// RAR4 依 RAR 規格（與 RAR5 前 6 bytes 相同），zstd 依 RFC 8878。
+    #[test]
+    fn known_unsupported_archives_are_detected() {
+        let cases: &[(&str, &[u8])] = &[
+            ("rar", b"Rar!\x1a\x07\x01\x00rest"),
+            ("rar", b"Rar!\x1a\x07\x00rest"),
+            ("7z", b"7z\xbc\xaf\x27\x1c\x00\x04rest"),
+            ("xz", b"\xfd7zXZ\x00\x00\x04\xe6\xd6"),
+            ("bzip2", b"BZh91AY&SYrest"),
+            ("bzip2", b"BZh9\x17\x72\x45\x38\x50\x90rest"),
+            ("zstd", b"\x28\xb5\x2f\xfdrest"),
+            // 以下取自 Syft 1.45.1 所依賴的同版本函式庫實際壓縮產生的檔案（#77 第三輪）
+            ("lz4", b"\x04\x22\x4d\x18\x64\x70\xb9\xda"),
+            ("lzip", b"LZIP\x01\x17\x00\x3b"),
+            ("minlz", b"\xff\x06\x00\x00MinLz\x0b"),
+            ("snappy", b"\xff\x06\x00\x00sNaPpY"),
+            ("s2", b"\xff\x06\x00\x00S2sTwO"),
+        ];
+        for (name, head) in cases {
+            let p = tmp().join("upload.bin");
+            std::fs::write(&p, head).unwrap();
+            assert_eq!(
+                detect_kind(&p).unwrap(),
+                UploadKind::Unsupported(name),
+                "{name}：{head:?}"
+            );
+        }
+        // 反例：單一執行檔、開頭剛好是 BZh 的文字檔仍是 PlainFile；zip 照舊
+        for head in [
+            &b"\x7fELF\x02\x01\x01\x00rest"[..],
+            b"BZh9 is not bzip2 text",
+            b"Rar! plain",
+        ] {
+            let p = tmp().join("upload.bin");
+            std::fs::write(&p, head).unwrap();
+            assert_eq!(detect_kind(&p).unwrap(), UploadKind::PlainFile, "{head:?}");
+        }
+        assert_eq!(
+            detect_kind(&make_zip(&[("a", b"x")])).unwrap(),
+            UploadKind::Zip
+        );
     }
 
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

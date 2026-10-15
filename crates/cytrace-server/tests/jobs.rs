@@ -805,11 +805,12 @@ async fn uploaded_docker_save_is_scanned_as_docker_archive() {
     let id = v["id"].as_str().unwrap().to_string();
     wait_terminal(&env.app, &cookie, &id).await;
     let targets = engine.targets.lock().unwrap().clone();
+    // 存檔名不含會讓 Syft 自行解壓的字串（#77）；docker-archive 不依副檔名讀取，釘選版實測 alpine 16 個套件不變
     let original = env
         .base
         .join("data/jobs")
         .join(&id)
-        .join("input/original/img.tar");
+        .join("input/original/img_tar");
     assert_eq!(
         targets,
         vec![format!("docker-archive:{}", original.display())]
@@ -1164,6 +1165,100 @@ async fn upload_zip_slip_rejected() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{v}");
     assert_eq!(v["error"]["kind"], "forbidden_path");
+}
+
+/// #77：RAR／7z／xz／bzip2／zstd 原本交給 Syft 自行解壓，繞過解壓總量上限（解壓炸彈）。
+/// 現在上傳當下即拒收：415、在地化訊息、detail 帶格式名，不建 job、不留上傳暫存目錄。
+#[tokio::test]
+async fn upload_unsupported_archive_rejected_without_job() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let rar5 = b"Rar!\x1a\x07\x01\x00not-really-extractable".to_vec();
+    let boundary = "----cytracerar";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "tlkio_protocol.rar", &rar5, None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{v}");
+    assert_eq!(v["error"]["kind"], "unsupported_archive");
+    assert!(
+        v["error"]["detail"].as_str().unwrap_or("").contains("rar"),
+        "detail 應帶格式名：{v}"
+    );
+    let msg = v["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("zip"), "訊息應指出支援的格式：{msg}");
+
+    let resp = env
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/api/v1/jobs")
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(json_of(resp).await["total"], 0, "不得建立 job");
+    let jobs_dir = env.base.join("data/jobs");
+    // registry 啟動時即建立 jobs/；讀不到代表路徑錯了，必須失敗而不是當成「沒有殘留」
+    let leftovers = std::fs::read_dir(&jobs_dir)
+        .unwrap_or_else(|e| panic!("讀不到 {}：{e}", jobs_dir.display()))
+        .count();
+    assert_eq!(leftovers, 0, "不得留下上傳暫存目錄：{}", jobs_dir.display());
+}
+
+/// #77：沒有檔頭的格式（brotli）依結尾副檔名拒收。
+#[tokio::test]
+async fn upload_headerless_compressed_rejected_by_extension() {
+    let env = build_env(Arc::new(FakeEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let boundary = "----cytracebr";
+    let (status, v) = upload_scan(
+        &env.app,
+        &cookie,
+        multipart_body(boundary, "site.tar.br", b"\x1b\xff\x27\x00brotli-ish", None),
+        boundary,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{v}");
+    assert_eq!(v["error"]["kind"], "unsupported_archive");
+    assert_eq!(v["error"]["detail"], "brotli", "{v}");
+}
+
+/// #77：單一檔案交給 Syft 前，檔名中會讓 Syft 自行解壓的字串（`.br`、`.tar`、`.xz`…）改成 `_`；
+/// 不含這些字串的檔名原樣保留（`package-lock.json` 靠完整檔名、`*.exe` 靠副檔名辨識）。
+#[tokio::test]
+async fn upload_single_file_is_handed_to_syft_under_a_safe_name() {
+    let engine = Arc::new(RecordingEngine::default());
+    let env = build_env(engine.clone(), true, 2);
+    let cookie = login(&env.app).await;
+    for (name, want) in [
+        ("weird.brand.exe", "weird_brand.exe"),
+        ("package-lock.json", "package-lock.json"),
+    ] {
+        let boundary = "----cytracesafe";
+        let (status, job) = upload_scan(
+            &env.app,
+            &cookie,
+            multipart_body(boundary, name, b"\x7fELF\x02\x01\x01\x00plain", None),
+            boundary,
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{name}：{job}");
+        assert_eq!(job["target"], format!("upload:{name}"), "工作描述保留原名");
+        wait_terminal(&env.app, &cookie, job["id"].as_str().unwrap()).await;
+        let targets = engine.targets.lock().unwrap().clone();
+        let last = targets.last().expect("引擎應收到目標");
+        assert_eq!(
+            std::path::Path::new(last).file_name().unwrap(),
+            want,
+            "{name} 交給 Syft 的檔名：{last}"
+        );
+    }
 }
 
 #[tokio::test]
