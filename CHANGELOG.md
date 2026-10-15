@@ -27,9 +27,19 @@
     目標不存在或為遠端參照時，提示「引擎在本機找不到可讀的掃描目標……請先以 docker save 匯出成 tar」；
     檔案存在但無法解析時，沿用既有的映像讀取提示。帶前綴與不帶前綴的既有目標（目錄、映像 tar、單一檔案）掃描結果不變。
   - **這會拿掉既有能力**：`docker:`、`podman:`、`containerd:`（直接掃本機 daemon 裡的映像）、`registry:`、
-    `oci-model:`，以及 `snap:`（掃 .snap 檔）不再支援。daemon 缺映像時會自行從 registry 拉取，snap 與 oci-model
-    來源本身會連網，違反零外連。映像請先以 `docker save` 匯出成 tar，再以 `docker-archive:<檔案>` 掃描；
-    .snap 檔目前沒有替代做法。
+    `oci-model:` 不再支援。daemon 缺映像時會自行從 registry 拉取，oci-model 來源本身會連網，違反零外連。
+    映像請先以 `docker save` 匯出成 tar，再以 `docker-archive:<檔案>` 掃描；`oci-model:` 沒有替代做法。
+    .snap 檔仍可掃描，但只限本機的檔案（見下一項）。
+
+- **.snap 檔只在本機讀取，不再向 api.snapcraft.io 查詢**（#79 後續）：
+  - Syft 的 snap 來源有本機、遠端兩個，名稱相同，無法只選其中一個。本機那個不接受目標時（檔案不存在、是目錄、
+    副檔名不是 `.snap`／`.squashfs`），就改由遠端那個以目標路徑向 api.snapcraft.io 查詢。以釘選版實測，
+    檔名為 `.bin` 或 `.SNAP` 的 squashfs 檔、名為 `x.snap` 的目錄，都會各有 2 次 443 連線。
+  - 現在只有符合下列條件的目標才以 snap 來源掃描（帶不帶 `snap:` 前綴皆可）：本機已存在的一般檔案、
+    副檔名為小寫 `.snap` 或 `.squashfs`、檔頭為 squashfs。CLI、Web 上傳、掛載目標都適用。
+    實測 DNS 與 443 連線皆為 0；snap 內容就地讀取，不解到暫存目錄（strace 實測：解開後 512 MiB 的 .snap，Syft 與 Grype 都沒有在暫存目錄建立任何檔案）；snap 內的套件照常列出（例如 dpkg 清單裡的 openssl）。
+  - 其他目標維持本機來源：不存在的 `.snap` 回「引擎在本機找不到可讀的掃描目標」；內容是 squashfs、
+    但檔名不符的檔案當一般檔案掃描，**得到 0 個元件且不報錯**。這類檔案請改名為 `.snap` 後再掃描。
 
 - **Web 上傳的單一檔案不再由 Syft 自行解壓；Syft 會自行解壓的壓縮格式改為當場拒收**（#77）。
   **這會拿掉既有能力**：RAR、7z、xz（含 tar.xz）、bzip2（含 tar.bz2）、zstd、lz4、lzip、minlz、snappy／s2、

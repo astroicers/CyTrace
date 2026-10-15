@@ -250,6 +250,10 @@ mod tests {
             ("pkg.rpm", "pkg.rpm"),
             ("app.min.js", "app.min.js"),
             ("ziti-edge-tunnel", "ziti-edge-tunnel"),
+            // Syft 的本機 snap 來源只認副檔名（engine::local_snap_file，#79 後續）
+            ("app.snap", "app.snap"),
+            ("img.squashfs", "img.squashfs"),
+            ("base.tar.snap", "base_tar.snap"),
         ] {
             assert_eq!(syft_safe_name(given), want, "{given}");
         }

@@ -128,6 +128,12 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   實測會連 Docker Hub 與 api.snapcraft.io 並送出目標字串。加了 `--from` 後 Syft 不解析目標前綴，
   故 `syft_source` 把已知的本機前綴轉成 `--from`，其餘整串當路徑、只允許全部本機來源；
   找不到時以 `server.err.engine_source_not_local` 提示。daemon 來源（`docker:` 等）一併不支援：daemon 缺映像時會自行 pull。
+- .snap 檔例外以 `--from snap` 單獨掃描（`engine::local_snap_file`，#79 後續）。Syft 的 snap 來源分本機、遠端兩個，
+  名稱與標籤相同、無法只選本機那個；本機那個只要「路徑存在、是一般檔案、可開啟、副檔名為 `.snap`／`.squashfs`
+  （區分大小寫，Syft 認不出 squashfs 的 MIME）」任一項不成立，就由遠端那個以目標字串查 api.snapcraft.io
+  （釘選版實測 `.bin`、`.SNAP`、目錄各 2 次 443 連線）。這些都成立後，內容損毀或缺 `meta/snap.yaml` 不會再換來源
+  （實測連線 0）。故 CyTrace 先逐項檢查，另要求檔頭為 `hsqs`，路徑先做與 Syft 相同的絕對化與字面消去 `..`
+  再檢查並交出；不符者留在本機來源清單。剩下的空窗都需要外力介入：檔案在檢查後、Syft 讀取前被移除、改名或換成目錄，或 Syft 為算摘要讀完整個檔案時發生 I/O 錯誤（CyTrace 只讀前 4 bytes）。路徑判斷與 Syft 相同：都跟隨 symlink、看連結本身的檔名（實測 `link.snap → image.bin` 以 snap 讀取，`link.bin → app.snap` 當一般檔案，連線皆 0）。
 - DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，
   不填假值（ADR-009 修訂節）。
 

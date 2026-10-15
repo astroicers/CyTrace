@@ -56,6 +56,7 @@ CyTrace 設計成在**完全斷網**的環境執行，執行期、報表與 CI �
 - **CBOM**：`--cbom` 只接受本地目錄、docker save 的 tar 或 OCI layout，不接受 registry 參照，所以不會為了拉映像而連網。
 - **掃描目標只取本機來源**：產品呼叫 Syft 時以 `--from` 限定本機的目錄、檔案與映像檔（#79）。目標不存在、打錯字，
   或寫成 `registry:`、`docker:` 等遠端來源時直接報錯，不會改去 docker daemon、Docker Hub 或 snapcraft 查詢。
+  .snap 檔只在本機讀取，副檔名須為小寫 `.snap` 或 `.squashfs`，其他檔名的 squashfs 檔會當一般檔案掃描（0 個元件）。
   **v0.6.1 及更早版本**會改去這些地方查詢，並把目標名稱送出。
 
 **需要準備的**：漏洞資料庫快照解開後約 3.0 GB（2026-10 實測 v6.1.10，會隨時間成長）。
