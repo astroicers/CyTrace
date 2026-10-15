@@ -117,6 +117,7 @@
 - `oci-archive:`、`singularity:` 目標屬本機來源、可使用，但尚未實測。
 - 內容是 snap（squashfs）、但副檔名不是小寫 `.snap`／`.squashfs` 的檔案，當一般檔案掃描，**得到 0 個元件且不報錯**
   （#79 後續）。這類檔案不能改走 snap 來源：Syft 會拿路徑向 api.snapcraft.io 查詢。請先改名為 `.snap`。
+  反過來，檔名是 `.snap` 但內容不是 squashfs 的檔案同樣當一般檔案掃描（實測 0 個元件、連線 0）。
 
 ## [0.6.1] - 2026-10-14
 
