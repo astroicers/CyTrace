@@ -1652,7 +1652,7 @@ milestones:
         adr: null
         spec: null
         srs_ref: null
-        depends_on: [T929, T932]
+        depends_on: [T929, T932, T933]
         status: pending
         estimated_complexity: medium
         source_type: manual
@@ -1758,6 +1758,28 @@ milestones:
             - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.1/`
             - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.1-windows\`
           - 剩下由人處理的事屬 T930：以 v0.6.1 交付物進行場域演練。
+
+      - id: T933
+        title: "發布 v0.6.2 與離線安裝包（#77、#79、rustls 0.23.46；Linux／Windows 重新打包並簽章）"
+        type: GENERAL
+        priority: 1
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T932]
+        status: in_progress
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "使用者 2026-10-15 同意發 v0.6.2，T930 演練改以 v0.6.2 執行"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-15"
+        description: |
+          v0.6.1 之後的安全修正要交到場域：Web 上傳不再由 Syft 自行解壓、Syft 能解的壓縮格式改為拒收（#77，
+          解壓炸彈）；Syft 一律只取本機來源，不再改連 docker daemon、Docker Hub、snapcraft（#79）；rustls 升級
+          修補 RUSTSEC-2026-0346～0349（PR #81）。#77、#79 皆拿掉既有能力（使用者 2026-10-15 裁定），CHANGELOG
+          升級須知已列出替代做法。流程同 T932：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.2` tag → 使用者簽 Release
+          `SHA256SUMS` → Linux 包（AI 打包、使用者簽章、斷網冒煙）→ Windows 包（使用者以 `-CytraceExe` 打包）。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"

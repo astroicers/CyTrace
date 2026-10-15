@@ -15,7 +15,7 @@ CyTrace 封裝 **Syft**（產 SBOM）、**Grype**（比對 CVE）與 **CBOMkit-t
 - **命令列**：單一靜態執行檔，跑完產出**離線單檔 HTML 報表**；以退出碼作為 CI 閘門。
 - **Web 服務模式**（`cytrace serve`）：場域內的集中掃描伺服器。使用者在瀏覽器登入控制台，上傳或指定掃描目標、查看與下載報表。以容器交付。
 
-目前版本：**v0.6.1**（2026-10-14；變更見 [CHANGELOG.md](CHANGELOG.md)）。
+目前版本：**v0.6.2**（2026-10-15；變更見 [CHANGELOG.md](CHANGELOG.md)）。
 
 ## 報表範例
 
@@ -348,7 +348,8 @@ CI 另外執行以下項目：
   - Release 的 `SHA256SUMS` 已簽章。
   - 容器映像已發布至 GHCR。
   - Linux 與 Windows 離線安裝包都已簽章，並完成冒煙驗收。
-- ⏳ 場域驗收演練（T930）：以 v0.6.1 在實體斷網機器上依 FIELD_ACCEPTANCE 走一輪，尚未執行。
+- ⏳ v0.6.2（T933）：版號與 CHANGELOG 定稿；待打 tag、簽章並重打 Linux 與 Windows 離線包。
+- ⏳ 場域驗收演練（T930）：以 v0.6.2 在實體斷網機器上依 FIELD_ACCEPTANCE 走一輪，尚未執行。
 - ⏸ M6 SaaS 監管：範圍外，延後。
 
 ## 授權
