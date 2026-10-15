@@ -121,6 +121,10 @@ fn engine_hint_key(msg: &str) -> &'static str {
         "server.err.engine_multi_image"
     } else if msg.contains("unexpected media type") && msg.contains("image.index") {
         "server.err.engine_nested_oci_index"
+    } else if msg.contains("no source providers were able to resolve the input") {
+        // 只允許本機來源（#79）：目標不存在，或是 registry、docker daemon 等非本機參照。檔案存在但無法解析時
+        // Syft 的字句不同（errors occurred attempting to resolve），落到下面的映像讀取提示或通用鍵
+        "server.err.engine_source_not_local"
     } else if msg.contains("unable to provide image from tarball") {
         // docker-archive 讀取失敗的泛用包裝：實測涵蓋 gzip 壓縮、不完整、缺 manifest.json、不是 tar 四種（#51 複審）
         "server.err.engine_image_unreadable"
@@ -152,6 +156,11 @@ mod tests {
         assert_eq!(
             key("syft exit Some(1): could not determine source: an error occurred attempting to resolve '/x/a.tar.gz': docker-archive: unable to provide image from tarball: archive/tar: invalid tar header"),
             "server.err.engine_image_unreadable"
+        );
+        // #79：限定本機來源後，目標不存在或是 registry 參照時 Syft 以此字句失敗（釘選版實測原文）
+        assert_eq!(
+            key("syft exit Some(1): could not determine source: no source providers were able to resolve the input \"registry:alpine:3.12\""),
+            "server.err.engine_source_not_local"
         );
         assert_eq!(key("syft exit Some(1): "), "server.err.engine");
         assert_eq!(key("syft: not found"), "server.err.engine");

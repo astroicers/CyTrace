@@ -13,6 +13,7 @@
 #![cfg(unix)]
 
 use cytrace_core::engine::{cbom_with_timeout, CbomTarget, RealEngine, ScanEngine};
+use cytrace_core::error::CytraceError;
 use cytrace_core::failon::{quantum_gate, QuantumGate};
 use cytrace_core::{collect_cbom, engine};
 use cytrace_types::{CbomStatus, CryptoInventory};
@@ -941,6 +942,50 @@ fn pinned_engines_ignore_external_config_files() {
     }
 }
 
+/// #79：Syft 在本機解析失敗時原本會改試 docker daemon、OCI registry 與 snap（實測會連 Docker Hub 與
+/// api.snapcraft.io 並送出目標字串）。產品以 `--from` 限定本機來源後，這些目標必須直接失敗，且錯誤是
+/// 「沒有任何（本機）來源能解析」——此字句只在允許的來源全部試過且皆找不到時出現，不含任何遠端來源的嘗試。
+#[test]
+#[ignore = "需要 syft 在 PATH（make test-real-engine）"]
+fn pinned_syft_never_falls_back_to_remote_sources() {
+    let present = Command::new("syft")
+        .arg("version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    require("syft", present);
+    let dir = workspace("remote-fallback");
+    let missing_abs = dir.join("does-not-exist.tar").display().to_string();
+    for target in [
+        "cytrace-does-not-exist.tar",
+        missing_abs.as_str(),
+        "registry:alpine:3.12",
+        "docker:alpine",
+    ] {
+        let err = engine::sbom(target).expect_err(target).to_string();
+        assert!(
+            err.contains("no source providers were able to resolve the input"),
+            "{target}：應以「本機找不到」失敗：{err}"
+        );
+        for remote in [
+            "oci-registry",
+            "oci-model",
+            "index.docker.io",
+            "snapcraft",
+            "docker daemon",
+            "containerd",
+            "podman",
+        ] {
+            assert!(!err.contains(remote), "{target}：不得嘗試 {remote}：{err}");
+        }
+        assert_eq!(
+            CytraceError::Engine(err.clone()).i18n_key(),
+            "server.err.engine_source_not_local",
+            "{target}"
+        );
+    }
+}
+
 /// #77：Syft 只在**檔名**符合壓縮格式時才自行解壓（而且沒有總量上限），Web 上傳因此以不含那些字串的檔名
 /// 交給 Syft（`cytrace-server::upload::syft_safe_name`）。同一份 tar：`v.tar` 會被解開、掃出 lodash（對照組，
 /// 證明本案例咬得到）；`v_tar` 不會。走產品實際的 `engine::sbom`（含 `-c` 空設定與離線變數）。
@@ -1226,6 +1271,13 @@ fn pinned_syft_reads_docker_archive_but_not_its_extracted_dir() {
         syft_libraries(format!("docker-archive:{}", tar_path.display())),
         [("musl".to_string(), "1.2.5-r0".to_string())],
         "docker-archive 應抓到映像層裡的套件"
+    );
+    // #79：產品對不帶前綴的目標以 `--from <本機來源清單>` 呼叫；映像 tar 仍須以映像掃描（與帶前綴相同），
+    // 不得被當成一般檔案而少掃（複審 N1 的疑慮，實測不成立，這裡釘住）
+    assert_eq!(
+        syft_libraries(tar_path.display().to_string()),
+        [("musl".to_string(), "1.2.5-r0".to_string())],
+        "不帶前綴的映像 tar 應與 docker-archive: 結果相同"
     );
     assert!(
         syft_libraries(format!("dir:{}", extracted.display())).is_empty(),

@@ -123,6 +123,11 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   會讓報表靜默少掉弱點或元件（#70）。釘選版實測：指定 `-c` 後不再查找上述位置，環境變數照常生效，
   空設定檔與無設定檔的設定等價。真引擎測試對工作目錄、家目錄、`~/.config` 三個位置各放哨兵，對照組讀得到、帶 `-c` 讀不到；
   單元測試另以結構檢查要求每個呼叫點都就地建立 `EngineConfig` 並傳入其路徑。
+- Syft 一律以 `--from` 限定本機來源（`engine::SYFT_LOCAL_SOURCES`：docker-archive、oci-archive、oci-dir、singularity、
+  file、dir，與 Syft 預設的嘗試順序一致；#79）。snap（會連 api.snapcraft.io）與 oci-model（會連 index.docker.io）不在其中。未限定時，本機解析失敗會改試 docker daemon、containerd、podman、OCI registry 與 snap，
+  實測會連 Docker Hub 與 api.snapcraft.io 並送出目標字串。加了 `--from` 後 Syft 不解析目標前綴，
+  故 `syft_source` 把已知的本機前綴轉成 `--from`，其餘整串當路徑、只允許全部本機來源；
+  找不到時以 `server.err.engine_source_not_local` 提示。daemon 來源（`docker:` 等）一併不支援：daemon 缺映像時會自行 pull。
 - DB 快照的真值取自 `grype db status`（`schemaVersion`／`built`）；取不到時填 sentinel `unavailable`，
   不填假值（ADR-009 修訂節）。
 
