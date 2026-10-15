@@ -6,7 +6,7 @@
 | **專案** | CyTrace |
 | **版本** | 0.4 |
 | **日期** | 2026-10-05 |
-| **狀態** | 現行，與 v0.6.1 程式碼對齊 |
+| **狀態** | 現行，與 v0.6.2 程式碼對齊 |
 | **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
 
 > **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
@@ -125,7 +125,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   單元測試另以結構檢查要求每個呼叫點都就地建立 `EngineConfig` 並傳入其路徑。
 - Syft 一律以 `--from` 限定本機來源（`engine::SYFT_LOCAL_SOURCES`：docker-archive、oci-archive、oci-dir、singularity、
   file、dir，與 Syft 預設的嘗試順序一致；#79）。snap（會連 api.snapcraft.io）與 oci-model（會連 index.docker.io）不在其中。未限定時，本機解析失敗會改試 docker daemon、containerd、podman、OCI registry 與 snap，
-  實測會連 Docker Hub 與 api.snapcraft.io 並送出目標字串。加了 `--from` 後 Syft 不解析目標前綴，
+  會嘗試連 OCI registry（預設為 Docker Hub）與 api.snapcraft.io；snapcraft 的查詢網址直接帶目標字串（實測錯誤原文與回覆）。Docker Hub 是否收到目標字串未在有網路的環境實測。加了 `--from` 後 Syft 不解析目標前綴，
   故 `syft_source` 把已知的本機前綴轉成 `--from`，其餘整串當路徑、只允許全部本機來源；
   找不到時以 `server.err.engine_source_not_local` 提示。daemon 來源（`docker:` 等）一併不支援：daemon 缺映像時會自行 pull。
 - .snap 檔例外以 `--from snap` 單獨掃描（`engine::local_snap_file`，#79 後續）。Syft 的 snap 來源分本機、遠端兩個，
