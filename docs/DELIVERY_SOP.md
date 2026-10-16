@@ -81,11 +81,18 @@ Release 的 `cytrace-x86_64-windows.exe` 由 release workflow 以相同條件編
    與 CI 相同），或在已裝 minisign 的交付工作站驗：
 
    ```powershell
+   $ErrorActionPreference = 'Stop'   # 檔案或指令不存在時立即中止，不往下比對
    minisign -Vm SHA256SUMS -P <§3 的公鑰字串>
+   if ($LASTEXITCODE -ne 0) { throw "驗章失敗" }
    $want = (Select-String -Path SHA256SUMS -Pattern 'cytrace-x86_64-windows\.exe$').Line.Split(' ')[0]
    $got  = (Get-FileHash cytrace-x86_64-windows.exe -Algorithm SHA256).Hash.ToLower()   # Get-FileHash 輸出為大寫
-   if ($got -ne $want) { throw "雜湊不符：$got ≠ $want" }
+   if (-not $want -or $got -ne $want) { throw "雜湊不符：$got ≠ $want" }
    ```
+
+   未設 `$ErrorActionPreference = 'Stop'` 時，檔案不存在只會印出錯誤：`$want`、`$got` 都是空值，
+   `$got -ne $want` 為假，比對因此靜默通過（v0.6.2 打包時實際發生：建置機沒有 `gh` 與 `minisign`，
+   三個檔案都沒下載到，雜湊比對卻沒有報錯）。建置機沒有 minisign 時，在已裝 minisign 的交付工作站驗章、比對雜湊後，
+   再把這三個檔案放到建置機。
 3. 以 `-CytraceExe` 指定該檔；腳本另核對其自報版本等於 `Cargo.toml`，不符即中止：
 
    ```powershell

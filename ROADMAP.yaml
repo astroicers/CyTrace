@@ -1661,7 +1661,8 @@ milestones:
         sla_hours: 336
         imported_at: "2026-10-07"
         description: |
-          完整離線安裝包從未在真正斷網的機器上走完驗章、安裝、掃描、報表這一輪，是交件前最大的未驗證項。演練前把 T927
+          完整離線安裝包從未在真正斷網的機器上走完驗章、安裝、掃描、報表這一輪，是交件前最大的未驗證項。
+          以 v0.6.2 交付物執行（T933）。演練前把 T927
           新增的映像掃描項目補進驗收清單；演練後依清單第 9 節的偏差紀錄開票。
 
       - id: T931
@@ -1767,7 +1768,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T932]
-        status: in_progress
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: "使用者 2026-10-15 同意發 v0.6.2，T930 演練改以 v0.6.2 執行"
@@ -1780,6 +1781,37 @@ milestones:
           不查 snapcraft（PR #83，發布複審 N1）；rustls 升級修補 RUSTSEC-2026-0346～0349（PR #81）。#77、#79 皆拿掉既有能力（使用者 2026-10-15 裁定），CHANGELOG
           升級須知已列出替代做法（`oci-model:` 沒有替代做法）。流程同 T932：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.2` tag → 使用者簽 Release
           `SHA256SUMS` → Linux 包（AI 打包、使用者簽章、斷網冒煙）→ Windows 包（使用者以 `-CytraceExe` 打包）。
+
+          **結案（2026-10-16）**：
+          - 發布準備 PR #84（合併點 7d0570d）。獨立唯讀發布複審三輪，第三輪 PASS，19 項正面證據、0 項反面證據：
+            - 第一輪揭露 N1：#79 之後不帶前綴的 .snap 靜默得到 0 個元件。使用者裁定安全地恢復，另以 PR #83 修正，
+              該 PR 自身經兩輪複審 PASS。
+            - 第二輪：README 有一處外送說法未隨 CHANGELOG 收斂。
+          - tag `v0.6.2` → 7d0570d；Release 與 GHCR 映像 workflow 皆成功。映像 digest：
+            `sha256:ed688bc5eaf57e2d5d34eba2b67ed5ba964edec7c9fcaf5f20e0ecd45b4df414`。
+          - Release：3 個執行檔與 `SHA256SUMS` 相符、映像 tar 與 `SHA256SUMS-image` 相符，Linux 執行檔 `--version` 為 0.6.2。
+            使用者以 CE187AD55AF18DB0 簽章；`.minisig` 上傳後，AI 自公開 Release 重新下載驗章通過。
+            使用者另簽映像 tar（`.minisig` 隨容器交付物搬運，未上傳 Release），AI 驗章通過。
+          - Linux 包：AI 以 `git archive v0.6.2` 取得原始碼打包，3.2 GB；11 個檔的 SHA256SUMS 相符；Syft 1.45.1、
+            Grype 0.114.0、DB 快照 v6.1.10。使用者簽章、AI 驗章通過。在無網路命名空間內以 `cytrace-offline` 冒煙，
+            三個目標的連線嘗試皆 0：
+            - 含 lodash 4.17.20 的 npm 目錄：5 個弱點比對，報表產出。
+            - `.snap`（測試 fixture）：讀出 openssl，報表產出。
+            - 不存在的 `.snap`：以「引擎在本機找不到可讀的掃描目標」失敗。
+          - Windows 包：使用者在 Windows 主機以 `package.ps1 -CytraceExe` 沿用 Release exe。
+            - 建置機沒有 `gh` 與 `minisign`：AI 在 WSL 驗章並比對雜湊後，把 exe、`SHA256SUMS`、`.minisig` 放到
+              `C:\cytrace-build\release-v0.6.2\`，在該處再驗一次。
+            - 過程中發現 DELIVERY_SOP §2 的 PowerShell 比對在檔案不存在時會靜默通過，本 PR 一併修正。
+            - AI 驗證：包內 exe 與 Release 逐位元組相同；Syft 1.45.1、Grype 0.114.0、DB 快照 v6.1.10；
+              11 個檔的 SHA256SUMS 相符（Windows 路徑格式，轉換後以 `sha256sum -c` 驗）。使用者簽章、AI 驗章通過。
+            - 冒煙報表（`C:\cytrace-build\smoke-0.6.2.html`）與 v0.6.1 相同：1 個元件、5 個弱點（High 1、Medium 4）、CBOM 6 項，
+              引擎與 DB 快照同上。
+          - 觀察（未驗證，不寫進文件）：fixture 的 .snap 讀出的 openssl 比對到 0 個弱點，推測是 fixture 沒有
+            `/etc/os-release`，Grype 判斷不出發行版。真實 snap 未驗證。
+          - 交付物位置（不進 repo）：
+            - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.2/`
+            - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.2-windows\`
+          - 剩下由人處理的事屬 T930：以 v0.6.2 交付物進行場域演練。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
