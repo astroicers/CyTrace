@@ -1,7 +1,8 @@
 //! 壓縮包安全解壓（ADR-011 §6）。在 `spawn_blocking` 內同步執行（job 管線的前置步驟）。
 //!
 //! 三道防護：
-//! 1. **zip-slip / 路徑穿越**：zip 用 `enclosed_name()`；tar 逐 component 檢查——
+//! 1. **zip-slip / 路徑穿越**：zip 用 `enclosed_name()`，另以原始名稱拒絕絕對路徑（zip 9 的 `enclosed_name()`
+//!    會把絕對路徑去根後放行）；tar 逐 component 檢查——
 //!    出現 `..`/絕對路徑/Prefix **整包拒收**（上傳者惡意即整件失敗，不是跳過）
 //! 2. **連結類 entry**：symlink/hardlink 一律跳過不解（掃描不需要，且是逃逸主要向量）
 //! 3. **zip-bomb**：entry 數上限 + 總解壓量上限——**只信實際解出的 bytes**
@@ -171,12 +172,23 @@ fn extract_zip(archive: &Path, dest: &Path, max_total: u64) -> Result<usize, Arc
         if entry.unix_mode().map(|m| m & 0o170000 == 0o120000) == Some(true) {
             continue;
         }
-        // zip-slip：enclosed_name 拒 ../ 與絕對路徑；None = 惡意 → 整包拒收
+        // zip-slip：enclosed_name 拒 ../ 與絕對路徑；None = 惡意 → 整包拒收。
+        // 錯誤訊息用的條目名稱：zip 9 起 `name()` 在名稱無法解碼時回錯誤，此時以錯誤內容代替
+        let name = || {
+            entry
+                .name()
+                .map_or_else(|e| e.to_string(), |n| n.into_owned())
+        };
+        // 絕對路徑另以原始名稱判定：zip 9 的 enclosed_name 會把 `/x`、`C:\x`、`\\?\C:\x` 去掉根後放行
+        // （2.x 回 None），不能只靠它維持「整包拒收」
+        if is_absolute_zip_name(entry.name_raw()) {
+            return Err(ArchiveError::PathViolation(name()));
+        }
         let rel = entry
             .enclosed_name()
-            .ok_or_else(|| ArchiveError::PathViolation(entry.name().to_string()))?;
+            .ok_or_else(|| ArchiveError::PathViolation(name()))?;
         if !lexical_ok(&rel) {
-            return Err(ArchiveError::PathViolation(entry.name().to_string()));
+            return Err(ArchiveError::PathViolation(name()));
         }
         let out = dest.join(rel);
         if entry.is_dir() {
@@ -190,6 +202,12 @@ fn extract_zip(archive: &Path, dest: &Path, max_total: u64) -> Result<usize, Arc
         count += 1;
     }
     Ok(count)
+}
+
+/// zip 條目的原始名稱是否為絕對路徑：開頭為 `/` 或 `\`（含 `\\?\`、`\\.\` 與 UNC），或以磁碟代號 `X:` 起頭。
+fn is_absolute_zip_name(raw: &[u8]) -> bool {
+    matches!(raw.first(), Some(b'/' | b'\\'))
+        || (raw.len() >= 2 && raw[0].is_ascii_alphabetic() && raw[1] == b':')
 }
 
 fn extract_tar<R: Read>(reader: R, dest: &Path, max_total: u64) -> Result<usize, ArchiveError> {
@@ -329,6 +347,57 @@ mod tests {
         d
     }
 
+    /// RUSTSEC-2026-0367～0369：zip 的 `extract()` 會保留 SUID／SGID、建立指向目的地外的 symlink、
+    /// 經 symlink 套用權限。CyTrace 不用 `extract()`，逐條目自行寫檔：不套用條目記載的權限位，symlink 條目一律略過。
+    #[cfg(unix)]
+    #[test]
+    fn zip_ignores_setuid_bits_and_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmp();
+        let path = dir.join("evil.zip");
+        let mut w = zip::ZipWriter::new(File::create(&path).unwrap());
+        let suid = zip::write::SimpleFileOptions::default().unix_permissions(0o6755);
+        w.start_file("bin/tool", suid).unwrap();
+        w.write_all(b"#!/bin/sh\n").unwrap();
+        w.add_symlink("escape", "/etc", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.finish().unwrap();
+        // 寫入端會把權限遮罩成 0o777，故直接改第一筆條目中央目錄標頭的外部屬性（標頭內偏移 38，
+        // 高 16 位元為 Unix mode）；標頭位置由解析器提供
+        let cd = zip::ZipArchive::new(File::open(&path).unwrap())
+            .unwrap()
+            .by_index(0)
+            .unwrap()
+            .central_header_start() as usize;
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[cd + 38..cd + 42].copy_from_slice(&(0o106_755u32 << 16).to_le_bytes());
+        std::fs::write(&path, &bytes).unwrap();
+        // 反空轉：經解析器確認樣本確實帶 SUID／SGID 與 symlink。`external_attributes()` 是原值；
+        // `unix_mode()` 讀取時已遮掉 SUID／SGID（zip 9 對 0367 的修補），故不用它
+        let mut z = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
+        assert_eq!(
+            (z.by_index(0).unwrap().external_attributes() >> 16) & 0o6000,
+            0o6000
+        );
+        assert_eq!(
+            z.by_index(1).unwrap().unix_mode().unwrap() & 0o170000,
+            0o120000
+        );
+
+        let dest = dir.join("out");
+        let n = extract(&path, UploadKind::Zip, &dest, 1024 * 1024).unwrap();
+        assert_eq!(n, 1);
+        let mode = std::fs::metadata(dest.join("bin/tool"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o7000, 0, "不得保留 SUID／SGID／sticky：{mode:o}");
+        assert!(
+            std::fs::symlink_metadata(dest.join("escape")).is_err(),
+            "symlink 條目不得建立"
+        );
+    }
+
     fn make_zip(entries: &[(&str, &[u8])]) -> PathBuf {
         let dir = tmp();
         let path = dir.join("t.zip");
@@ -382,6 +451,37 @@ mod tests {
         let n = extract(&zip, UploadKind::Zip, &dest, 1024 * 1024).unwrap();
         assert_eq!(n, 2);
         assert_eq!(std::fs::read(dest.join("dir/a.txt")).unwrap(), b"hello");
+    }
+
+    /// 絕對路徑條目整包拒收（ADR-011 §5）。zip 9 的 `enclosed_name()` 會把 `/etc/x`、`C:\x`、`\\?\C:\x`
+    /// 去掉根後放行（2.x 回 None），故 `extract_zip` 以原始名稱自行判定，維持 fail-closed。
+    #[test]
+    fn zip_absolute_entries_rejected_whole_archive() {
+        for name in ["/etc/x", "C:\\x", "c:x", "\\\\?\\C:\\x", "\\x"] {
+            let zip = make_zip(&[("ok.txt", b"x"), (name, b"pwn")]);
+            let dest = tmp();
+            let err = extract(&zip, UploadKind::Zip, &dest, 1024 * 1024).unwrap_err();
+            assert!(
+                matches!(err, ArchiveError::PathViolation(_)),
+                "{name}：{err:?}"
+            );
+            assert!(
+                !dest.join("etc/x").exists() && !dest.join("x").exists(),
+                "{name}"
+            );
+        }
+    }
+
+    /// zip 9 起反斜線視為路徑分隔（Windows 工具產生的 zip）：`a\b.txt` 解成 `a/b.txt`；`..\x` 屬穿越、整包拒收。
+    #[test]
+    fn zip_backslash_separators() {
+        let zip = make_zip(&[("a\\b.txt", b"x")]);
+        let dest = tmp();
+        extract(&zip, UploadKind::Zip, &dest, 1024 * 1024).unwrap();
+        assert!(dest.join("a/b.txt").is_file());
+        let zip = make_zip(&[("ok.txt", b"x"), ("..\\x", b"pwn")]);
+        let err = extract(&zip, UploadKind::Zip, &tmp(), 1024 * 1024).unwrap_err();
+        assert!(matches!(err, ArchiveError::PathViolation(_)));
     }
 
     #[test]
