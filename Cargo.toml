@@ -34,7 +34,7 @@ cytrace-server = { path = "crates/cytrace-server" }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "multipart"] }
 # 上傳壓縮包安全解壓（ADR-011 §6；純 Rust、features 最小化）
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 argon2 = "0.5"
