@@ -1,6 +1,6 @@
 //! 嚴重度分級與風險總評（ADR-006 / FR-004）。
 
-use cytrace_types::{Severity, Summary, Vulnerability};
+use cytrace_types::{Component, OverallRisk, Severity, Summary, Vulnerability};
 use std::collections::BTreeMap;
 
 /// 風險總評＝出現的最高嚴重度等級；無弱點時為 [`Severity::Unknown`] 之上的「無風險」用 `Negligible`？
@@ -23,11 +23,19 @@ pub fn counts_by_severity(findings: &[Vulnerability]) -> BTreeMap<Severity, u64>
     counts
 }
 
-/// 由弱點清單彙整 [`Summary`]。無弱點時 `overall_risk` 取 `Negligible`（代表掃到但無風險）。
-pub fn summarize(findings: &[Vulnerability]) -> Summary {
+/// 由元件與弱點清單彙整 [`Summary`]（#78）：
+/// - 有弱點：`overall_risk` 為最高嚴重度。
+/// - 有元件、沒有弱點：`Negligible`（掃到了、比對後沒有風險）。
+/// - 沒有元件也沒有弱點：`NotAssessed`——沒有可比對的對象，不能當成低風險（ADR-009 修訂：schema v4）。
+pub fn summarize(components: &[Component], findings: &[Vulnerability]) -> Summary {
+    let overall_risk = match overall_risk(findings) {
+        Some(s) => s.into(),
+        None if components.is_empty() => OverallRisk::NotAssessed,
+        None => OverallRisk::Negligible,
+    };
     Summary {
         counts_by_severity: counts_by_severity(findings),
-        overall_risk: overall_risk(findings).unwrap_or(Severity::Negligible),
+        overall_risk,
     }
 }
 
@@ -78,8 +86,27 @@ mod tests {
         assert_eq!(counts[&Severity::Critical], 0);
     }
 
+    fn component() -> Component {
+        serde_json::from_str(r#"{"name":"lib","version":"1.0","type":"library"}"#).unwrap()
+    }
+
+    /// #78：有元件、沒有弱點才是 Negligible；連元件都沒有時為 NotAssessed，不得呈現為低風險。
     #[test]
-    fn summarize_empty_is_negligible() {
-        assert_eq!(summarize(&[]).overall_risk, Severity::Negligible);
+    fn summarize_distinguishes_no_findings_from_no_components() {
+        assert_eq!(
+            summarize(&[component()], &[]).overall_risk,
+            OverallRisk::Negligible
+        );
+        assert_eq!(summarize(&[], &[]).overall_risk, OverallRisk::NotAssessed);
+        assert_eq!(
+            summarize(&[component()], &[vuln(Severity::High)]).overall_risk,
+            OverallRisk::High
+        );
+        // 沒有元件卻有弱點（不應發生，但弱點本身就是證據）：仍以最高嚴重度呈現，不蓋成「無法評估」
+        assert_eq!(
+            summarize(&[], &[vuln(Severity::Medium)]).overall_risk,
+            OverallRisk::Medium
+        );
+        assert_eq!(summarize(&[], &[]).counts_by_severity.len(), 6);
     }
 }

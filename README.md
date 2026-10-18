@@ -237,7 +237,7 @@ docker run -d --name cytrace --read-only \
 | 極低 | Negligible | `negligible` |
 | 未知 | Unknown | `unknown` |
 
-- 風險總評取出現的最高等級。
+- 風險總評取出現的最高等級。沒有辨識出任何元件時為「無法評估」，不是「極低」：沒有可比對的對象，不代表沒有風險。命令列另在 stderr 提示，退出碼不變。
 - `--fail-on` 的值不分大小寫；打錯時以退出碼 `1` 結束。
 - 嚴重度除了顏色也有文字標籤，色盲也能判讀。
 
@@ -263,7 +263,7 @@ docker run -d --name cytrace --read-only \
 | `sbom.spdx.json` | SPDX 2.3 SBOM（`scan --spdx`） |
 | `grype.json` | 弱點比對結果（Grype 原始輸出） |
 | `cbom.cdx.json` | CycloneDX CBOM（`--cbom`） |
-| ScanResult JSON | 報表的資料契約（schema v3，ADR-009），可用 `cytrace report` 重建報表 |
+| ScanResult JSON | 報表的資料契約（schema v4，ADR-009），可用 `cytrace report` 重建報表 |
 
 軟體產品文件表只列套件、執行檔與作業系統元件。
 Syft 的檔案紀錄（file 元件）以路徑為名，沒有版本也不參與比對，所以不列入，元件數也不計。

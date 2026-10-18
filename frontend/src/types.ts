@@ -25,6 +25,15 @@ export const SEVERITY_KEY: Record<Severity, string> = {
   Unknown: 'severity.unknown',
 }
 
+/**
+ * 風險總評（Rust `OverallRisk`，ADR-009「修訂：schema v4」，#78）：嚴重度之外另有 `NotAssessed`
+ * ——沒有任何元件、沒有可比對的對象，不代表沒有風險。
+ */
+export type OverallRisk = Severity | 'NotAssessed'
+
+export const RISK_NOT_ASSESSED_KEY = 'risk.not_assessed'
+export const RISK_NOT_ASSESSED_HINT_KEY = 'risk.not_assessed_hint'
+
 export interface Vulnerability {
   id: string
   severity: Severity
@@ -109,7 +118,7 @@ export interface ScanResult {
   findings: Vulnerability[]
   summary: {
     counts_by_severity: Partial<Record<Severity, number>>
-    overall_risk: Severity
+    overall_risk: OverallRisk
   }
   /** v1 報表無此欄位。 */
   crypto?: CryptoInventory | null

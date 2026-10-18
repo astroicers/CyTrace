@@ -1,8 +1,8 @@
 import { useTranslation } from 'react-i18next'
 import { useTheme } from 'next-themes'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import type { QuantumStatus, Severity } from '../types'
-import { QUANTUM_KEY, SEVERITY_KEY } from '../types'
+import type { OverallRisk, QuantumStatus, Severity } from '../types'
+import { QUANTUM_KEY, RISK_NOT_ASSESSED_KEY, SEVERITY_KEY } from '../types'
 import { SUPPORTED_LANGS } from '../i18n'
 import { effectiveLang } from '../langs'
 
@@ -24,6 +24,21 @@ export function SeverityBadge({ severity }: { severity: Severity }) {
     >
       <span aria-hidden="true">●</span>
       {t(SEVERITY_KEY[severity])}
+    </span>
+  )
+}
+
+/**
+ * 風險總評徽章（#78）。嚴重度沿用 SeverityBadge 的實心樣式；`NotAssessed` 改為空心虛線框與空心圓，
+ * 不用任何嚴重度色——實心代表「有量測結果」，空心代表「沒有可量測的對象」，不會被讀成「極低」。
+ */
+export function RiskBadge({ risk }: { risk: OverallRisk }) {
+  const { t } = useTranslation()
+  if (risk !== 'NotAssessed') return <SeverityBadge severity={risk} />
+  return (
+    <span className="inline-flex items-center gap-1 rounded border border-dashed border-gray-500 px-2 py-0.5 text-xs font-semibold text-gray-700 dark:border-gray-400 dark:text-gray-200">
+      <span aria-hidden="true">○</span>
+      {t(RISK_NOT_ASSESSED_KEY)}
     </span>
   )
 }

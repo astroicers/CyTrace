@@ -99,7 +99,7 @@ mod tests {
             }],
             summary: Summary {
                 counts_by_severity: BTreeMap::new(),
-                overall_risk: Severity::High,
+                overall_risk: Severity::High.into(),
             },
             crypto: None,
         }

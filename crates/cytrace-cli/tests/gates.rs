@@ -204,7 +204,7 @@ fn run_links_findings_to_component_locations() {
     assert_eq!(e.run(&["run", &e.target(), "--out", &out_html]), 0);
     let v = embedded_scanresult(&fs::read_to_string(&out_html).expect("讀報表"));
 
-    assert_eq!(v["schema_version"], 3);
+    assert_eq!(v["schema_version"], 4);
     let comps = v["components"].as_array().unwrap();
     assert_eq!(
         comps[1]["locations"],

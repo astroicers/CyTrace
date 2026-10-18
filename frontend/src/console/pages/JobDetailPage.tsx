@@ -5,8 +5,8 @@ import { api, artifactUrl } from '../api/client'
 import { ApiError, type ArtifactKind, type JobRecord } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
 import { StatusBadge } from '../components/StatusBadge'
-import { SeverityBadge } from '../../components/ui'
-import { SEVERITY_ORDER, SEVERITY_KEY } from '../../types'
+import { RiskBadge } from '../../components/ui'
+import { RISK_NOT_ASSESSED_HINT_KEY, SEVERITY_ORDER, SEVERITY_KEY } from '../../types'
 import { navigate } from '../router'
 import { fmtTime } from '../format'
 import { effectiveLang } from '../../langs'
@@ -94,10 +94,18 @@ export function JobDetailPage({ id }: { id: string }) {
         {job.summary && (
           <Row
             label={t('console.job.risk')}
-            value={<SeverityBadge severity={job.summary.overall_risk} />}
+            value={<RiskBadge risk={job.summary.overall_risk} />}
           />
         )}
       </dl>
+      {job.summary?.overall_risk === 'NotAssessed' && (
+        <p
+          role="note"
+          className="mt-3 max-w-prose border-l-2 border-dashed border-gray-500 pl-3 text-sm text-gray-700 dark:border-gray-400 dark:text-gray-300"
+        >
+          {t(RISK_NOT_ASSESSED_HINT_KEY)}
+        </p>
+      )}
 
       {!terminal && (
         <p className="mt-4 text-sm text-gray-500" aria-live="polite">

@@ -7,9 +7,14 @@
     "negligible": "極低",
     "unknown": "未知"
   },
+  "risk": {
+    "not_assessed": "無法評估",
+    "not_assessed_hint": "未辨識出任何套件，沒有可比對弱點的對象，因此無法評估風險。這不代表沒有風險：目標可能是 C／C++ 執行檔、打包後的網站，或不支援的映像形態。"
+  },
   "cli": {
     "scanning": "掃描中：{{target}}",
     "done": "完成：{{count}} 個弱點，風險總評 {{risk}}",
+    "not_assessed": "注意：未辨識出任何套件，風險總評為「無法評估」——這不代表沒有風險，詳見報表說明。",
     "fail_on_triggered": "已達 --fail-on 門檻（{{threshold}}），以退出碼 2 結束",
     "engine_missing": "找不到引擎執行檔：{{engine}}（請確認安裝包內路徑）",
     "report_written": "報表已輸出：{{path}}",

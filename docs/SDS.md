@@ -10,7 +10,7 @@
 | **對應** | SRS（FR-001…010、NFR-01…09）、ADR-001～013 |
 
 > **v0.4 改寫（T910）**：本版取代 0.1 草案與 v0.3.0 的檔頭增補。原稿寫於只有 Syft／Grype 兩個引擎的時期，
-> 現已對齊三引擎（加入 CBOM 引擎 cbomkit-theia，ADR-013）、`ScanResult` schema v3（ADR-009 修訂節）、
+> 現已對齊三引擎（加入 CBOM 引擎 cbomkit-theia，ADR-013）、`ScanResult` schema v4（ADR-009 修訂節）、
 > Web 服務模式（ADR-011／012）與操作者終端 i18n（T912）。
 > 本文描述**設計與契約**；細部行為以程式碼的文件註解為準，各節會指出位置。
 
@@ -40,7 +40,7 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
  │        → fail-on／量子閘門                                 │
  └───────────────────────────┬─────────────────────────────┘
                              ▼
-                 ScanResult（schema v3，ADR-009）
+                 ScanResult（schema v4，ADR-009）
                              ▼
  cytrace-report（內嵌單檔樣板 → 注入資料 → *.report.html）
 ```
@@ -168,11 +168,11 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
 
 子程序找不到、非零退出、輸出不合法，一律回 `CytraceError`（§5）。CLI 對應退出碼 1，與門檻觸發的 2 區隔。
 
-## 4. 資料模型（`ScanResult` schema v3）
+## 4. 資料模型（`ScanResult` schema v4）
 
 ```
 ScanResult {
-  schema_version: u32                       // 目前為 3（cytrace_types::SCHEMA_VERSION）
+  schema_version: u32                       // 目前為 4（cytrace_types::SCHEMA_VERSION）
   meta: {
     target, generated_at,                   // target：CLI 為使用者輸入；Web 為 job 描述（T931）
     tool_versions { syft, grype, theia? },  // theia 僅在 CBOM 完成時填
@@ -184,7 +184,7 @@ ScanResult {
                                                                  // 不含 Syft 的 type:"file" 元件（T928）
   findings:   [ Vulnerability { id, severity, cvss?, component, fixed_version?, source,
                                 component_version?, component_purl?, locations[] } ]
-  summary:    { counts_by_severity, overall_risk }                // overall_risk = 最高等級
+  summary:    { counts_by_severity, overall_risk }                // overall_risk：見下方「風險總評」
   crypto?: CryptoInventory {                                     // v1 檔無此欄位 → None
     status: NotRequested | EngineAbsent | Completed
           | { Failed: { reason_key, reason_detail? } },
@@ -208,6 +208,10 @@ ScanResult {
   - 新版 `cytrace report` 必須能重建舊版 JSON（v1 缺 `crypto` → `None`；v1、v2 缺 v3 的來源欄位 → 視為空，
     軟體產品文件表的位置欄以「—」呈現、弱點列不顯示位置行；皆由回歸測試釘住）；
   - 讀到比本版新的 `schema_version` 時會警告（`cli.schema_ahead`），因為 serde 會略過未知欄位。
+  - v4 的 `overall_risk` 可能是 `NotAssessed`：≤ 0.6.2 的 CyTrace 無法解析這個值，`cytrace report` 以錯誤結束（ADR-009 修訂：schema v4）。
+- **風險總評**（`OverallRisk`，v4，ADR-009 修訂；#78）：有弱點時為最高嚴重度；有元件、沒有弱點時為 `Negligible`；
+  **沒有任何元件**時為 `NotAssessed`（「無法評估」）——沒有可比對的對象，不代表沒有風險。序列化字串與 `Severity` 相同，
+  另加 `"NotAssessed"`。報表與控制台以空心虛線徽章呈現、附說明；命令列在 stderr 提示，退出碼不變。
 - **來源欄位**（v3，ADR-009 修訂）：
   - `Component.locations` 取自 Syft 的 `syft:location:N:path`，依 N 排序，路徑相對於掃描根目錄。
   - `Vulnerability.locations` 依序取：Grype `artifact.locations` → `artifact.id` 等於元件的 `bom_ref`（命中即停）
