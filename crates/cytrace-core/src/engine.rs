@@ -243,14 +243,15 @@ pub fn sbom_with_spdx(target: &str) -> Result<(String, String)> {
 }
 
 fn syft_cdx_and_spdx(target: &str, source_name: Option<&str>) -> Result<(String, String)> {
-    let spdx_path = spdx_temp_path();
+    // SPDX 由 syft 寫入私有暫存目錄（#73）；目錄離開作用域即刪，成功與失敗都不留檔
+    let spdx_dir = TempDir::new("cytrace-spdx")?;
+    let spdx_path = spdx_dir.path().join("sbom.spdx.json");
     let config = EngineConfig::new()?;
     let out = syft_scan(target, source_name, &config.path())
         .args(["-o", "cyclonedx-json", "-o"])
         .arg(format!("spdx-json={}", spdx_path.display()))
         .output();
     let spdx = std::fs::read_to_string(&spdx_path);
-    let _ = std::fs::remove_file(&spdx_path);
     let cdx = check_syft(out.map_err(|e| CytraceError::Engine(format!("syft: {e}")))?)?;
     let spdx = spdx.map_err(|e| CytraceError::Engine(format!("syft spdx-json: {e}")))?;
     validate_spdx(&spdx)?;
@@ -292,7 +293,7 @@ struct EngineConfig(TempDir);
 impl EngineConfig {
     fn new() -> std::io::Result<Self> {
         let dir = TempDir::new("cytrace-engine-config")?;
-        std::fs::write(dir.path().join("config.yaml"), "")?;
+        write_new(&dir.path().join("config.yaml"), b"")?;
         Ok(Self(dir))
     }
     fn path(&self) -> std::path::PathBuf {
@@ -303,22 +304,18 @@ impl EngineConfig {
 /// 以 Grype 對 SBOM（CycloneDX JSON）比對 CVE，回傳 grype JSON。離線設定已內建。
 ///
 /// 注意：grype 的 `sbom:-`（stdin）在部分版本不穩，故將 SBOM 寫入暫存檔以 `sbom:<path>` 餵入，
-/// 亦避免 stdin/stdout pipe 滿載 deadlock。暫存檔用後即刪。
+/// 亦避免 stdin/stdout pipe 滿載 deadlock。暫存檔放在每次呼叫一份的私有目錄（[`TempDir`]，#73），用後即刪；
+/// server 併發的 job 因此不會互寫互刪——共用路徑時 A 的元件會配到 B 的 CVE，grype 退出碼 0、輸出合法 JSON，
+/// `check()` 攔不到。
 pub fn vuln(sbom_cyclonedx_json: &str) -> Result<String> {
-    let tmp = sbom_temp_path();
-    std::fs::write(&tmp, sbom_cyclonedx_json)?;
-    let config = match EngineConfig::new() {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e.into());
-        }
-    };
+    let dir = TempDir::new("cytrace-sbom")?;
+    let tmp = dir.path().join("sbom.cdx.json");
+    write_new(&tmp, sbom_cyclonedx_json.as_bytes())?;
+    let config = EngineConfig::new()?;
     let out = grype_cmd(&config.path())
         .arg(format!("sbom:{}", tmp.display()))
         .args(["-o", "json", "-q"])
         .output();
-    let _ = std::fs::remove_file(&tmp);
     let out = out.map_err(|e| CytraceError::Engine(format!("grype: {e}")))?;
     check(out, "grype")
 }
@@ -354,18 +351,46 @@ pub fn tool_versions(cbom: &cytrace_types::CbomStatus) -> cytrace_types::ToolVer
     }
 }
 
-/// 離開作用域即刪除的暫存目錄。
+/// 離開作用域即刪除的私有暫存目錄（#73）。CyTrace 的暫存檔一律放在這種目錄裡：交給引擎的設定檔、SBOM、
+/// SPDX、theia 的 HOME，不直接放在共用的暫存目錄。
 ///
-/// theia 的 HOME 需在**所有**離開路徑上清理——手動 `remove_dir_all` 只會蓋到成功路徑，
-/// 引擎缺席或 spawn 失敗的 early return 會各洩一個空目錄；在 server 上這是每次呼叫累積、無上界。
+/// - 名稱 `<prefix>-<pid>-<序號>-<隨機>`：pid 與序號讓同一行程內的併發呼叫互不相干（複審實測共用 theia HOME
+///   會讓 26/80 的 job 失敗），隨機成分讓其他本機帳號猜不到。
+/// - 以 `create_dir` 建立：路徑已存在就換名重試，絕不沿用別人預先建好的目錄（原本的 `create_dir_all` 會沿用）。
+///   Unix 上權限 0700。在共用 `/tmp` 的多使用者主機上，可預測、可沿用的路徑能被另一個帳號預先佔用，
+///   偷換引擎讀到的設定檔（等於繞過 #70）或 SBOM。
+/// - theia 的 HOME 需在**所有**離開路徑上清理——手動 `remove_dir_all` 只會蓋到成功路徑，引擎缺席或 spawn 失敗的
+///   early return 會各洩一個空目錄；在 server 上這是每次呼叫累積、無上界。故以 `Drop` 清理。
 struct TempDir(std::path::PathBuf);
 
 impl TempDir {
     fn new(prefix: &str) -> std::io::Result<Self> {
-        let p = unique_temp_path(prefix);
-        std::fs::create_dir_all(&p)?;
-        Ok(Self(p))
+        Self::new_in(&std::env::temp_dir(), || temp_dir_name(prefix))
     }
+
+    /// 在 `base` 下以 `name()` 產生的名稱建立私有目錄；名稱已被佔用就再取一次，最多 16 次。
+    fn new_in(base: &std::path::Path, mut name: impl FnMut() -> String) -> std::io::Result<Self> {
+        #[cfg_attr(not(unix), allow(unused_mut))] // Windows 不設權限位，依使用者暫存目錄的預設 ACL
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        for _ in 0..16 {
+            let p = base.join(name());
+            match builder.create(&p) {
+                Ok(()) => return Ok(Self(p)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "cannot create a fresh temporary directory",
+        ))
+    }
+
     fn path(&self) -> &std::path::Path {
         &self.0
     }
@@ -377,30 +402,32 @@ impl Drop for TempDir {
     }
 }
 
-/// 供 [`vuln`] 使用的暫存 SBOM 路徑（**每次呼叫唯一**）。
+/// [`TempDir`] 的名稱：`<prefix>-<pid>-<序號>-<16 位十六進位隨機值>`。
 ///
-/// server 的 job 跑在同一行程（`spawn_blocking`，預設併發 2）。若是每行程一個固定路徑，
-/// 兩個 job 會互寫互刪——最糟的情形是 A 的元件配到 B 的 CVE，
-/// 而 grype 退出碼 0、輸出合法 JSON，`check()` 完全攔不到，報表安靜地描述錯的目標。
-pub fn sbom_temp_path() -> std::path::PathBuf {
-    unique_temp_path("cytrace-sbom").with_extension("cdx.json")
-}
-
-/// syft 寫 SPDX 的暫存檔（[`sbom_with_spdx`] 用完即刪）。行程內每次呼叫皆不同：
-/// web 模式可並發多個 job，共用路徑會讓兩個 job 讀到對方的 SPDX。
-pub fn spdx_temp_path() -> std::path::PathBuf {
-    unique_temp_path("cytrace-spdx").with_extension("spdx.json")
-}
-
-/// 行程內唯一的暫存路徑（`<prefix>-<pid>-<seq>`）。
-///
-/// 只用 pid 的話，**同一行程內的併發呼叫會共用同一個目錄**——server 預設可並發兩個 job，
-/// 複審實測共用 theia HOME 會讓 26/80 的 job 失敗。序號使兩者互不相干。
-fn unique_temp_path(prefix: &str) -> std::path::PathBuf {
+/// 隨機值取自標準函式庫的 `RandomState`（雜湊金鑰由作業系統亂數初始化），不另加相依。
+fn temp_dir_name(prefix: &str) -> String {
+    use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()))
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u64(n);
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    format!("{prefix}-{}-{n}-{:016x}", std::process::id(), h.finish())
+}
+
+/// 建立新檔並寫入；檔案已存在就失敗（不跟著預先放好的 symlink 寫到別處；#73）。
+fn write_new(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?
+        .write_all(data)
 }
 
 /// 漏洞 DB 快照的版本與建置時間（NFR-03 / ADR-003 稽核欄位）。
@@ -460,17 +487,16 @@ pub fn parse_db_status(stdout: Option<&str>) -> cytrace_types::DbSnapshot {
 /// 執行掃描的身分（ADR-013 決策 10）。
 ///
 /// `dir` 模式的偵測完整度取決於權限，故報表須標示當時是誰在跑。
-/// 以「建立暫存檔後讀其 owner」取得 effective uid——零額外相依。
+/// 以「建立私有暫存目錄後讀其 owner」取得 effective uid——零額外相依。
 pub fn scan_identity() -> String {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        let probe = unique_temp_path("cytrace-uid-probe");
-        let uid = std::fs::write(&probe, b"")
+        // 新建目錄的擁有者即 effective uid；用私有暫存目錄，不在共用暫存目錄寫可預測的檔名（#73）
+        let uid = TempDir::new("cytrace-uid-probe")
             .ok()
-            .and_then(|_| std::fs::metadata(&probe).ok())
+            .and_then(|d| std::fs::metadata(d.path()).ok())
             .map(|m| m.uid());
-        let _ = std::fs::remove_file(&probe);
         match uid {
             Some(u) => format!("uid={u}"),
             None => "uid=unknown".into(),
@@ -1424,18 +1450,104 @@ mod tests {
         assert!(scanned >= 20, "只掃到 {scanned} 個 .rs，走訪可能失效");
     }
 
+    /// #73：暫存目錄的名稱含隨機成分、Unix 上權限 0700，離開作用域即刪。
     #[test]
-    fn spdx_temp_paths_are_unique_per_call() {
-        let a = spdx_temp_path();
-        let b = spdx_temp_path();
-        assert_ne!(a, b, "並發 job 不得共用 SPDX 暫存檔");
-        for p in [&a, &b] {
-            let name = p.file_name().unwrap().to_string_lossy();
+    fn temp_dirs_are_private_and_unpredictable() {
+        let a = TempDir::new("cytrace-t73").unwrap();
+        let b = TempDir::new("cytrace-t73").unwrap();
+        let parts = |d: &TempDir| -> Vec<String> {
+            let name = d.path().file_name().unwrap().to_string_lossy().into_owned();
+            let rest = name.strip_prefix("cytrace-t73-").expect("前綴").to_string();
+            rest.split('-').map(str::to_string).collect()
+        };
+        let (pa, pb) = (parts(&a), parts(&b));
+        for p in [&pa, &pb] {
+            assert_eq!(p.len(), 3, "<pid>-<序號>-<隨機>：{p:?}");
+            assert_eq!(p[0], std::process::id().to_string());
             assert!(
-                name.starts_with("cytrace-spdx-") && name.ends_with(".spdx.json"),
-                "{name}"
+                p[2].len() == 16 && p[2].chars().all(|c| c.is_ascii_hexdigit()),
+                "{p:?}"
             );
         }
+        assert_ne!(pa[2], pb[2], "隨機成分每次不同");
+        // 絆線：隨機成分不得由 pid 與序號推得（換成序號本身時兩次照樣不同，上一條擋不住）
+        let names: Vec<Vec<String>> = (0..16)
+            .map(|_| parts(&TempDir::new("cytrace-t73").unwrap()))
+            .collect();
+        for p in names.iter().chain([&pa, &pb]) {
+            let seq: u64 = p[1].parse().unwrap();
+            let pid: u64 = p[0].parse().unwrap();
+            for derived in [seq, pid, seq ^ pid, seq.wrapping_add(pid)] {
+                assert_ne!(p[2], format!("{derived:016x}"), "{p:?}");
+            }
+        }
+        let rand: Vec<u64> = names
+            .iter()
+            .map(|p| u64::from_str_radix(&p[2], 16).unwrap())
+            .collect();
+        assert!(
+            rand.windows(2).any(|w| w[1] < w[0]) && rand.windows(2).any(|w| w[1] > w[0]),
+            "隨機成分不得隨序號單調變化：{rand:x?}"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(a.path()).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "群組與其他人不得有任何權限：{mode:o}");
+        }
+        let gone = a.path().to_path_buf();
+        drop(a);
+        assert!(!gone.exists(), "離開作用域即刪");
+    }
+
+    /// #73：名稱已被佔用時換名重試，絕不沿用別人預先建好的目錄（`create_dir_all` 會沿用，內容可被偷換）。
+    #[test]
+    fn temp_dir_never_reuses_an_existing_path() {
+        let base = std::env::temp_dir().join(format!("cytrace-t73-base-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("taken")).unwrap();
+        std::fs::write(base.join("taken/config.yaml"), "ignore: [x]").unwrap();
+        let mut names = ["taken", "fresh"].into_iter();
+        let d = TempDir::new_in(&base, || names.next().unwrap().to_string()).unwrap();
+        assert_eq!(d.path(), base.join("fresh"));
+        // 一直撞名：有限次數後失敗，不無限迴圈、不退回沿用
+        assert!(TempDir::new_in(&base, || "taken".to_string()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(base.join("taken/config.yaml")).unwrap(),
+            "ignore: [x]",
+            "預先存在的目錄原封不動"
+        );
+        drop(d);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// #73：預先放在私有目錄裡的檔案（例如指向別處的 symlink）不會被覆寫。
+    #[test]
+    fn write_new_refuses_existing_files() {
+        let d = TempDir::new("cytrace-t73-file").unwrap();
+        let p = d.path().join("sbom.cdx.json");
+        write_new(&p, b"first").unwrap();
+        let err = write_new(&p, b"second").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read(&p).unwrap(), b"first");
+    }
+
+    /// server 的 job 跑在同一行程（`spawn_blocking`，預設併發 2）：併發建立的暫存目錄不得重複。
+    #[test]
+    fn temp_dirs_are_unique_across_threads() {
+        let hs: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..50)
+                        .map(|_| TempDir::new("cytrace-t73-mt").unwrap())
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let all: Vec<TempDir> = hs.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        let uniq: std::collections::HashSet<_> =
+            all.iter().map(|d| d.path().to_path_buf()).collect();
+        assert_eq!(uniq.len(), 400);
     }
 
     #[test]
