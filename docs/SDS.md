@@ -99,11 +99,19 @@ CyTrace 是 **Rust Cargo workspace 單體**：以子程序呼叫三個外部引�
   `SYFT_FILE_METADATA_SELECTION=none`，不輸出 file 元件；Web 模式另加 `--source-name <job 描述>`，
   讓原始產物不帶伺服器主機路徑（ADR-009 修訂：Web 模式不外露伺服器主機路徑，T931）。
 - 需要 SPDX 時（CLI `scan --spdx`；Web 服務模式一律）改為同一次執行多重輸出：
-  `-o cyclonedx-json -o spdx-json=<暫存檔>`，兩種格式出自同一次編目（T919）。暫存檔名行程內唯一、
-  用完即刪；SPDX 缺檔、不是 JSON 或缺 `spdxVersion` 時整次掃描失敗（fail-closed，取捨見 ADR-002 修訂節）。
+  `-o cyclonedx-json -o spdx-json=<暫存檔>`，兩種格式出自同一次編目（T919）。暫存檔放在私有暫存目錄、
+  用完即刪（見下方「暫存檔」）；SPDX 缺檔、不是 JSON 或缺 `spdxVersion` 時整次掃描失敗（fail-closed，取捨見 ADR-002 修訂節）。
 - Grype 一律離線執行：`GRYPE_DB_AUTO_UPDATE=false`、`GRYPE_DB_VALIDATE_AGE=false`，
   DB 位置由 `GRYPE_DB_CACHE_DIR` 指定（ADR-003）。SBOM 先寫入暫存檔，再以 `sbom:<path>` 餵入，
   不走 stdin。
+- **暫存檔**（#73）：交給引擎的設定檔、SBOM、SPDX、theia 的 HOME，一律放在每次呼叫一份的私有目錄
+  （`engine::TempDir`），不直接放在共用的暫存目錄。目錄名稱 `<前綴>-<pid>-<序號>-<隨機>`，以 `create_dir` 建立：
+  名稱已被佔用就換名重試，不沿用既有目錄；Unix 上權限 0700。CyTrace 自己寫入的檔案（設定檔、SBOM）以
+  `create_new` 建立；引擎寫的檔案（Syft 的 SPDX、theia 的設定）以截斷方式寫入，但位於同一個私有目錄內。
+  原本的名稱只有 pid 與序號、以 `create_dir_all` 建立，在共用 `/tmp` 的多使用者主機上，另一個本機帳號可以預先建好
+  同名目錄，偷換引擎讀到的設定檔（等於繞過 #70）或 SBOM。前提是暫存目錄有 sticky bit（系統預設的 `/tmp`）
+  或專屬於執行帳號；否則別人仍可把整個私有目錄改名後換掉。Windows 未實測：互動帳號的 `%TEMP%` 位於使用者設定檔之下，
+  以服務帳號執行 `serve` 時可能是共用位置，權限依 ACL 繼承。
 - Syft、Grype 會連網的功能一律明確關閉，清單為 `engine::SYFT_OFFLINE_ENV`、`GRYPE_OFFLINE_ENV`：
   - app update-check：掃描時會連網檢查新版本，`-q` 也關不掉（#64）。
   - 資料補強與各生態系的遠端查詢（`SYFT_ENRICH`、Maven、Go proxy、npm、PyPI）、Grype 外部資料來源（#67）。
