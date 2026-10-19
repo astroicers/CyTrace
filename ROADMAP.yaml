@@ -1652,7 +1652,7 @@ milestones:
         adr: null
         spec: null
         srs_ref: null
-        depends_on: [T929, T932, T933]
+        depends_on: [T929, T932, T933, T934]
         status: pending
         estimated_complexity: medium
         source_type: manual
@@ -1662,7 +1662,7 @@ milestones:
         imported_at: "2026-10-07"
         description: |
           完整離線安裝包從未在真正斷網的機器上走完驗章、安裝、掃描、報表這一輪，是交件前最大的未驗證項。
-          以 v0.6.2 交付物執行（T933）。演練前把 T927
+          以 v0.6.3 交付物執行（T934；使用者 2026-10-19 裁定改用 v0.6.3）。演練前把 T927
           新增的映像掃描項目補進驗收清單；演練後依清單第 9 節的偏差紀錄開票。
 
       - id: T931
@@ -1812,6 +1812,28 @@ milestones:
             - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.2/`
             - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.2-windows\`
           - 剩下由人處理的事屬 T930：以 v0.6.2 交付物進行場域演練。
+
+      - id: T934
+        title: "發布 v0.6.3 與離線安裝包（#73、#78、zip 9.0.5；Linux／Windows 重新打包並簽章）"
+        type: GENERAL
+        priority: 1
+        adr: ADR-007
+        spec: null
+        srs_ref: FR-008
+        depends_on: [T933]
+        status: in_progress
+        estimated_complexity: medium
+        source_type: manual
+        source_ref: "使用者 2026-10-19 同意發 v0.6.3，T930 演練改以 v0.6.3 執行"
+        triggered_by: manual
+        sla_hours: 168
+        imported_at: "2026-10-19"
+        description: |
+          交件前的修正要交到場域（使用者 2026-10-19 裁定交件前修）：0 個元件時風險總評改為「無法評估」
+          （#78，PR #89；ScanResult schema v4）；暫存檔改放在私有暫存目錄、名稱不可預測（#73，PR #87）；
+          zip 升級至 9.0.5 修補 RUSTSEC-2026-0367～0369（PR #88）；驗收清單補上元件數檢查（PR #86）。
+          流程同 T933：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.3` tag → 使用者簽 Release `SHA256SUMS`
+          → Linux 包（AI 打包、使用者簽章、斷網冒煙）→ Windows 包（AI 自 WSL 驗章後放檔，使用者以 `-CytraceExe` 打包）。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
