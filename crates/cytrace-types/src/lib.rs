@@ -136,7 +136,51 @@ pub struct Meta {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Summary {
     pub counts_by_severity: BTreeMap<Severity, u64>,
-    pub overall_risk: Severity,
+    pub overall_risk: OverallRisk,
+}
+
+/// 風險總評（ADR-009「修訂：schema v4」，#78）。
+///
+/// 有弱點時為出現的最高嚴重度；有元件、沒有弱點時為 `Negligible`；**沒有任何元件**時為 `NotAssessed`
+/// ——沒有可比對的對象，不代表沒有風險（C／C++ 執行檔、打包後的網站、不支援的映像形態等，Syft 認不出套件）。
+/// 序列化字串與 [`Severity`] 相同，另加 `"NotAssessed"`；v1～v3 的 JSON 照常讀入。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OverallRisk {
+    Unknown,
+    Negligible,
+    Low,
+    Medium,
+    High,
+    Critical,
+    NotAssessed,
+}
+
+impl From<Severity> for OverallRisk {
+    fn from(s: Severity) -> Self {
+        match s {
+            Severity::Unknown => OverallRisk::Unknown,
+            Severity::Negligible => OverallRisk::Negligible,
+            Severity::Low => OverallRisk::Low,
+            Severity::Medium => OverallRisk::Medium,
+            Severity::High => OverallRisk::High,
+            Severity::Critical => OverallRisk::Critical,
+        }
+    }
+}
+
+impl OverallRisk {
+    /// i18n 訊息鍵：嚴重度沿用 [`Severity::i18n_key`]，`NotAssessed` 為 `risk.not_assessed`。
+    pub fn i18n_key(&self) -> &'static str {
+        match self {
+            OverallRisk::Unknown => Severity::Unknown.i18n_key(),
+            OverallRisk::Negligible => Severity::Negligible.i18n_key(),
+            OverallRisk::Low => Severity::Low.i18n_key(),
+            OverallRisk::Medium => Severity::Medium.i18n_key(),
+            OverallRisk::High => Severity::High.i18n_key(),
+            OverallRisk::Critical => Severity::Critical.i18n_key(),
+            OverallRisk::NotAssessed => "risk.not_assessed",
+        }
+    }
 }
 
 /// 量子脆弱判定結果（ADR-013 決策 6）。
@@ -268,8 +312,9 @@ pub struct ScanResult {
 }
 
 /// 目前的 ScanResult schema 版本（ADR-009 相容政策；v2 起含 `crypto`，見 ADR-013；
-/// v3 起元件與弱點帶來源欄位，見 ADR-009「修訂：schema v3」）。
-pub const SCHEMA_VERSION: u32 = 3;
+/// v3 起元件與弱點帶來源欄位，見 ADR-009「修訂：schema v3」；v4 起 `overall_risk` 可為 `NotAssessed`，
+/// 見「修訂：schema v4」）。
+pub const SCHEMA_VERSION: u32 = 4;
 
 #[cfg(test)]
 mod tests {
@@ -329,8 +374,29 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_3() {
-        assert_eq!(SCHEMA_VERSION, 3);
+    fn schema_version_is_4() {
+        assert_eq!(SCHEMA_VERSION, 4);
+    }
+
+    // ── #78：schema v4 風險總評（ADR-009 修訂：schema v4）──
+
+    /// 序列化字串與 Severity 相同（v1～v3 的 JSON 照常讀入），另加 NotAssessed。
+    #[test]
+    fn overall_risk_serializes_like_severity_plus_not_assessed() {
+        for s in Severity::all_high_to_low() {
+            let sev = serde_json::to_string(&s).unwrap();
+            assert_eq!(serde_json::to_string(&OverallRisk::from(s)).unwrap(), sev);
+            assert_eq!(
+                serde_json::from_str::<OverallRisk>(&sev).unwrap(),
+                OverallRisk::from(s)
+            );
+            assert_eq!(OverallRisk::from(s).i18n_key(), s.i18n_key());
+        }
+        assert_eq!(
+            serde_json::to_string(&OverallRisk::NotAssessed).unwrap(),
+            r#""NotAssessed""#
+        );
+        assert_eq!(OverallRisk::NotAssessed.i18n_key(), "risk.not_assessed");
     }
 
     // ── T925：schema v3 來源欄位（ADR-009 修訂：schema v3）──

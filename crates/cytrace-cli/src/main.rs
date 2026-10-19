@@ -11,7 +11,7 @@ mod help;
 use cytrace_core::timefmt::{epoch_secs, epoch_to_iso};
 use cytrace_core::{engine, failon, parse, CytraceError};
 use cytrace_i18n::{Catalog, Localized};
-use cytrace_types::{Meta, Severity};
+use cytrace_types::{Meta, OverallRisk, Severity};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -506,6 +506,11 @@ fn run_one(
             &[("path", &path.display().to_string())]
         )
     );
+    // #78：沒有任何元件時總評為「無法評估」。退出碼不變（使用者 2026-10-19 裁定），只在 stderr 提示，
+    // 免得把「沒有可比對的對象」讀成「沒有風險」
+    if risk == OverallRisk::NotAssessed {
+        eprintln!("{}", cat.t("cli.not_assessed", &[]));
+    }
     // 兩個閘門各自判定後再合併——不可提前 return，否則 fail-on 的 2 會遮蔽量子的 1
     let failon_triggered = fail_on.is_some_and(|threshold| {
         let th = Severity::from_grype_str(threshold);

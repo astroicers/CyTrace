@@ -264,3 +264,33 @@ major #25：稽核契約停在 v1 而程式已 v2，稽核者拿本檔對 JSON �
   - 檢查範圍：ScanResult、報表、`sbom`／`spdx`／`grype`／`cbom` 四種原始產物、job API。
   - 主機路徑外露合計 0。
   - 元件、弱點、CBOM 數字與修正前相同。
+
+## 修訂：schema v4——沒有元件時的風險總評為「無法評估」（2026-10-19，#78）
+
+**裁定來源**：使用者 2026-10-19 裁定三項：
+- 0 個元件時，總評等級本身改為「無法評估」，不採「維持『極低』再加警示」；
+- `overall_risk` 新增值 `NotAssessed`、schema 升為 v4，不採「保留 `Negligible`、另加欄位」；
+- 命令列退出碼不變，只印警示。
+
+**起因**：Syft 認不出任何套件時（C／C++ 執行檔、打包後的網站、不支援的映像形態等），ScanResult 的元件與弱點都是 0，
+`overall_risk` 為 `Negligible`，報表顯示「風險總評：極低」，沒有任何提示。v0.6.1 的 Web 控制台實際使用時，上傳 5 個檔案中有 4 個如此
+（#78）。「極低」加「0 個弱點」容易被當成「這個軟體安全」寫進交件文件；實際上是沒有可比對的對象。
+
+- `schema_version`: **3 → 4**。
+- `summary.overall_risk` 的型別由 `Severity` 改為 `OverallRisk`：六個嚴重度值（序列化字串不變）加上 `NotAssessed`。
+- 判定規則（`severity::summarize`）：
+  - 有弱點：最高嚴重度（不變）。
+  - 有元件、沒有弱點：`Negligible`（不變）。
+  - **沒有元件、也沒有弱點**：`NotAssessed`。
+  - 沒有元件卻有弱點（不應發生）：仍取最高嚴重度——弱點本身就是證據，不蓋成「無法評估」。
+- `counts_by_severity` 不變，六級照常列出（全為 0）。
+- 呈現：報表、控制台（工作詳情、報表列表、儀表板）以空心虛線徽章顯示「無法評估」，不用任何嚴重度色；
+  報表的風險總評區塊與控制台的工作詳情另附說明（`risk.not_assessed_hint`）。命令列的完成訊息顯示「無法評估」，
+  stderr 另印 `cli.not_assessed`。退出碼與 `--fail-on` 的判定不變：門檻依弱點判定，沒有弱點即不觸發。
+- **向後相容**：
+  - v4 的 `cytrace report` 讀 v1～v3 JSON 照常重建；這些檔案的 `overall_risk` 不含 `NotAssessed`，依原值呈現，
+    不重新判定、不改寫既有檔案（重現契約）。v0.6.1、v0.6.2 產生的 0 元件 JSON 因此仍顯示「極低」。
+  - **讀到 v4 JSON 的舊版 CyTrace（≤ 0.6.2）**：`overall_risk` 不是 `NotAssessed` 時，照既有機制略過未知內容並警告
+    `cli.schema_ahead`；是 `NotAssessed` 時，舊版無法解析這個值，`cytrace report` 以錯誤結束、不產出報表。使用者明知此代價而裁定，
+    理由是讀 JSON 的程式不該只看到 `Negligible`。
+  - Web 控制台既有的 job 紀錄（`job.json` 的 summary）不改寫，舊值照常讀入。

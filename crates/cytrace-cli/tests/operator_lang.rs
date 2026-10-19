@@ -527,6 +527,44 @@ fn successful_run_reports_in_operator_language() {
             o.stdout
         );
     }
+    // 對照組：有元件時不得出現 #78 的「無法評估」提示
+    for o in [&en, &zh] {
+        for warn in ["no packages were identified", "未辨識出任何套件"] {
+            assert!(!o.all().contains(warn), "{}", o.stderr);
+        }
+    }
+}
+
+/// #78：沒有任何元件時，風險總評為「無法評估」，stderr 另提示這不代表沒有風險。
+/// 退出碼不變（使用者 2026-10-19 裁定）：帶 `--fail-on low` 仍為 0。報表內嵌資料的總評為 `NotAssessed`。
+#[test]
+fn run_without_components_is_not_assessed() {
+    let sb = Sandbox::new("no-components");
+    sb.shim_script(
+        "syft",
+        "echo '{\"bomFormat\":\"CycloneDX\",\"specVersion\":\"1.6\",\"components\":[]}'\n",
+    );
+    sb.shim_script("grype", "echo '{\"matches\":[]}'\n");
+    let report = sb.path("r.html");
+    let (en, zh) = both_langs(
+        &sb,
+        &["run", &sb.path("target"), "--fail-on", "low", "-o", &report],
+        &[],
+        0,
+        "Done: 0 vulnerabilities, overall risk Not assessed",
+        "完成：0 個弱點，風險總評 無法評估",
+    );
+    for (o, warn) in [
+        (&en, "no packages were identified"),
+        (&zh, "未辨識出任何套件"),
+    ] {
+        assert!(o.stderr.contains(warn), "{}", o.stderr);
+    }
+    let html = fs::read_to_string(&report).unwrap();
+    assert!(
+        html.contains(r#""overall_risk":"NotAssessed""#),
+        "報表內嵌資料"
+    );
 }
 
 /// `report` 讀到較新 schema 的檔案：警告要列出兩個版本號（鍵不是字面值，插值對帳比不到——

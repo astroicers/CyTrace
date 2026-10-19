@@ -3,7 +3,7 @@ import { api } from '../api/client'
 import type { JobList } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
 import { StatusBadge } from '../components/StatusBadge'
-import { SeverityBadge } from '../../components/ui'
+import { RiskBadge } from '../../components/ui'
 import { hrefFor, navigate } from '../router'
 import { fmtTime } from '../format'
 
@@ -76,7 +76,7 @@ export function DashboardPage() {
                   </td>
                   <td className="py-2 pr-4">
                     {job.summary ? (
-                      <SeverityBadge severity={job.summary.overall_risk} />
+                      <RiskBadge risk={job.summary.overall_risk} />
                     ) : (
                       <span className="text-gray-400">-</span>
                     )}

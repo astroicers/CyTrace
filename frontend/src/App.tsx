@@ -2,10 +2,15 @@ import { useMemo, useState } from 'react'
 import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { loadScanResult } from './data'
-import { SEVERITY_ORDER, type CryptoInventory, type Severity } from './types'
+import {
+  RISK_NOT_ASSESSED_HINT_KEY,
+  SEVERITY_ORDER,
+  type CryptoInventory,
+  type Severity,
+} from './types'
 import { renderCbomFailure } from './cbom'
 import { effectiveLang } from './langs'
-import { QuantumBadge, SeverityBadge, Toolbar } from './components/ui'
+import { QuantumBadge, RiskBadge, SeverityBadge, Toolbar } from './components/ui'
 
 const result = loadScanResult()
 
@@ -119,7 +124,7 @@ function RiskSummary({
         <span className="text-gray-500">
           {t('ui.labeled', { label: t('report.summary') })}
         </span>
-        <SeverityBadge severity={result.summary.overall_risk} />
+        <RiskBadge risk={result.summary.overall_risk} />
         <span className="text-gray-500">
           {t('report.counts', {
             components: result.components.length,
@@ -127,6 +132,14 @@ function RiskSummary({
           })}
         </span>
       </div>
+      {result.summary.overall_risk === 'NotAssessed' && (
+        <p
+          role="note"
+          className="mb-3 max-w-prose border-l-2 border-dashed border-gray-500 pl-3 text-sm text-gray-700 dark:border-gray-400 dark:text-gray-300"
+        >
+          {t(RISK_NOT_ASSESSED_HINT_KEY)}
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         {SEVERITY_ORDER.map((s) => (
           <button

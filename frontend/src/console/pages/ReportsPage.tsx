@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { api, artifactUrl } from '../api/client'
 import type { JobList } from '../api/types'
 import { usePolling } from '../hooks/usePolling'
-import { SeverityBadge } from '../../components/ui'
+import { RiskBadge } from '../../components/ui'
 import { navigate } from '../router'
 import { fmtTime } from '../format'
 
@@ -51,7 +51,7 @@ export function ReportsPage() {
                 <tr key={job.id} className="border-b border-gray-100 dark:border-gray-900">
                   <td className="py-2 pr-4 font-mono text-xs">{job.target}</td>
                   <td className="py-2 pr-4">
-                    {job.summary && <SeverityBadge severity={job.summary.overall_risk} />}
+                    {job.summary && <RiskBadge risk={job.summary.overall_risk} />}
                   </td>
                   <td className="py-2 pr-4 whitespace-nowrap text-gray-500">
                     {fmtTime(job.finished_at)}

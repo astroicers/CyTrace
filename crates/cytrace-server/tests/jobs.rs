@@ -51,6 +51,24 @@ impl ScanEngine for FakeEngine {
     }
 }
 
+/// Syft 認不出任何套件（#78）：SBOM 沒有元件、Grype 沒有比對結果。
+struct NoComponentsEngine;
+const EMPTY_CDX: &str = r#"{"bomFormat":"CycloneDX","specVersion":"1.6","components":[]}"#;
+impl ScanEngine for NoComponentsEngine {
+    fn sbom(&self, _target: &str) -> CoreResult<String> {
+        Ok(EMPTY_CDX.into())
+    }
+    fn sbom_with_spdx(&self, _target: &str) -> CoreResult<(String, Option<String>)> {
+        Ok((EMPTY_CDX.into(), Some(SPDX.into())))
+    }
+    fn vuln(&self, _sbom: &str) -> CoreResult<String> {
+        Ok(r#"{"matches":[]}"#.into())
+    }
+    fn cbom(&self, _target: &str) -> CoreResult<Option<cytrace_core::engine::CbomOutput>> {
+        Ok(None)
+    }
+}
+
 /// CBOM 引擎壞掉：驗證主流程（SBOM/CVE/報表）不受影響（ADR-013 決策 4）。
 struct BrokenCbomEngine;
 impl ScanEngine for BrokenCbomEngine {
@@ -413,6 +431,33 @@ async fn full_job_lifecycle_with_fake_engine() {
     assert!(!job_dir.exists());
     let v = get_job(&env.app, &cookie, &id).await;
     assert_eq!(v["error"]["kind"], "not_found");
+}
+
+/// #78：沒有任何元件時，job 的總評為 NotAssessed（API 與落盤的 scan-result.json 一致），
+/// fail_on 不因此觸發（使用者 2026-10-19 裁定退出碼／門檻不變）。
+#[tokio::test]
+async fn job_without_components_is_not_assessed() {
+    let env = build_env(Arc::new(NoComponentsEngine), true, 2);
+    let cookie = login(&env.app).await;
+    let (status, v) = create_job(&env.app, &cookie, "app", Some("low")).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let id = v["id"].as_str().unwrap().to_string();
+    let done = wait_terminal(&env.app, &cookie, &id).await;
+    assert_eq!(done["status"], "done", "{done}");
+    assert_eq!(done["summary"]["overall_risk"], "NotAssessed");
+    assert_eq!(done["failon_triggered"], false);
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            env.base
+                .join("data/jobs")
+                .join(&id)
+                .join("scan-result.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["summary"]["overall_risk"], "NotAssessed");
+    assert_eq!(saved["schema_version"], 4);
 }
 
 #[tokio::test]
@@ -990,7 +1035,7 @@ async fn scan_result_links_findings_to_component_locations() {
         .unwrap();
     let (status, v) = send_json(&env.app, req).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(v["schema_version"], 3);
+    assert_eq!(v["schema_version"], 4);
     let loc = |cve: &str| {
         v["findings"]
             .as_array()

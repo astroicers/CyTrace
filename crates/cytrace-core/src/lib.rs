@@ -209,7 +209,7 @@ pub fn assemble_with_crypto(
     findings: Vec<cytrace_types::Vulnerability>,
     crypto: Option<cytrace_types::CryptoInventory>,
 ) -> ScanResult {
-    let summary = severity::summarize(&findings);
+    let summary = severity::summarize(&components, &findings);
     ScanResult {
         schema_version: SCHEMA_VERSION,
         meta,

@@ -1,5 +1,5 @@
 // Console API 型別（對應 cytrace-server JSON）。
-import type { Severity } from '../../types'
+import type { OverallRisk, Severity } from '../../types'
 
 export type JobStatus =
   | 'queued'
@@ -16,7 +16,7 @@ export interface JobError {
 }
 
 export interface JobSummary {
-  overall_risk: Severity
+  overall_risk: OverallRisk
   counts_by_severity: Partial<Record<Severity, number>>
 }
 
