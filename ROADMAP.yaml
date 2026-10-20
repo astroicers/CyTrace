@@ -1821,7 +1821,7 @@ milestones:
         spec: null
         srs_ref: FR-008
         depends_on: [T933]
-        status: in_progress
+        status: completed
         estimated_complexity: medium
         source_type: manual
         source_ref: "使用者 2026-10-19 同意發 v0.6.3，T930 演練改以 v0.6.3 執行"
@@ -1834,6 +1834,32 @@ milestones:
           zip 升級至 9.0.5 修補 RUSTSEC-2026-0367～0369（PR #88）；驗收清單補上元件數檢查（PR #86）。
           流程同 T933：版號與 CHANGELOG 定稿（本 PR）→ 推 `v0.6.3` tag → 使用者簽 Release `SHA256SUMS`
           → Linux 包（AI 打包、使用者簽章、斷網冒煙）→ Windows 包（AI 自 WSL 驗章後放檔，使用者以 `-CytraceExe` 打包）。
+
+          **結案（2026-10-20）**：
+          - 發布準備 PR #90（合併點 ffa0d17）。獨立唯讀發布複審兩輪，第二輪 PASS，23 項正面證據、0 項反面證據；
+            第一輪三項皆為低度措辭問題（SPDX 說法超過證據、README 殘留「靜默」、驗收清單未寫進 CHANGELOG）。
+          - tag `v0.6.3` → ffa0d17；Release 與 GHCR 映像 workflow 皆成功（Release 發布於 2026-10-19T12:33:18Z）。映像 digest：
+            `sha256:91e0e459ebb00dc48308e8c895a1263c18f1706b2e432b9fe7f251292c33ddbc`。
+          - Release：3 個執行檔與 `SHA256SUMS` 相符、映像 tar 與 `SHA256SUMS-image` 相符，Linux 執行檔 `--version` 為 0.6.3。
+            使用者以 CE187AD55AF18DB0 簽章；`.minisig` 上傳後，AI 自公開 Release 重新下載驗章通過。
+            使用者另簽映像 tar，AI 驗章通過；映像交付物保存於 `~/cytrace-delivery/out/image-v0.6.3/`。
+          - Linux 包：AI 以 `git archive v0.6.3` 取得原始碼打包，3.2 GB；11 個檔的 SHA256SUMS 相符；Syft 1.45.1、
+            Grype 0.114.0、DB 快照 v6.1.10。使用者簽章、AI 驗章通過。在無網路命名空間內以 `cytrace-offline` 冒煙，
+            四個目標的連線嘗試皆 0：
+            - 含 lodash 4.17.20 的 npm 目錄：5 個弱點、總評「高」；`--fail-on low` 退出碼 2。
+            - `.snap`（測試 fixture）：讀出 openssl、總評「極低」。
+            - 沒有可辨識套件的目錄：總評「無法評估」、stderr 提示，`--fail-on low` 退出碼 0（#78 在交付包上生效）。
+            - 不存在的 `.snap`：以「本機找不到」失敗。
+          - Windows 包：AI 在 WSL 驗章並比對雜湊後，把 exe、`SHA256SUMS`、`.minisig` 放到 `C:\cytrace-build\release-v0.6.3\`
+            並在該處再驗一次；使用者以 `package.ps1 -CytraceExe` 打包。
+            - AI 驗證：包內 exe 與 Release 逐位元組相同；Syft 1.45.1、Grype 0.114.0、DB 快照 v6.1.10；
+              11 個檔的 SHA256SUMS 相符。使用者簽章、AI 驗章通過。
+            - 冒煙報表（`C:\cytrace-build\smoke-0.6.3.html`）：schema 4；1 個元件、5 個弱點（總評 High）、CBOM 6 項，與 v0.6.2 相同。
+          - 交付物位置（不進 repo）：
+            - Linux 包：`~/cytrace-delivery/out/cytrace-0.6.3/`
+            - Windows 包：`C:\cytrace-build\CyTrace\delivery\cytrace-0.6.3-windows\`
+            - 容器映像：`~/cytrace-delivery/out/image-v0.6.3/`
+          - 剩下由人處理的事屬 T930：以 v0.6.3 交付物進行場域演練。
 
   - id: M6
     title: "SaaS 監管（DEFERRED / 範圍外，不進 autopilot 佇列）"
